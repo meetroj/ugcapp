@@ -1,0 +1,48 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Creator uploads need NO media permissions.
+
+      Every upload path goes through react-native-image-picker's
+      launchImageLibrary, which hands off to the system photo picker. The picker
+      runs in its own process and returns a content:// URI carrying a temporary
+      read grant, so the app never touches the media store directly. That holds
+      all the way down to minSdk 24: Android 13+ uses ACTION_PICK_IMAGES, older
+      versions ACTION_GET_CONTENT, and neither requires a permission.
+
+      CAMERA and RECORD_AUDIO were declared for launchCamera, which this app
+      never calls — nothing records; users only pick media they already have.
+
+      Declaring them anyway forced the Play Console "photo and video
+      permissions" declaration, and asked users to grant access the app has no
+      use for.
+    -->
+
+    <application
+      android:name=".MainApplication"
+      android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round"
+      android:allowBackup="false"
+      android:theme="@style/AppTheme"
+      android:usesCleartextTraffic="${usesCleartextTraffic}"
+      android:supportsRtl="true"
+      android:hardwareAccelerated="true"
+      android:requestLegacyExternalStorage="true">
+      <activity
+        android:name=".MainActivity"
+        android:label="@string/app_name"
+        android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+        android:launchMode="singleTask"
+        android:windowSoftInputMode="adjustResize"
+        android:theme="@style/SplashTheme"
+        android:exported="true">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+      </activity>
+    </application>
+</manifest>

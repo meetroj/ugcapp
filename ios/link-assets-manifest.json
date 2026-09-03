@@ -1,0 +1,33 @@
+{
+  "migIndex": 1,
+  "data": [
+    {
+      "path": "assests/fonts/Inter-Bold.ttf",
+      "sha1": "b7ab5dc5e8d605338223de7a8ffe3ebea409d3bc"
+    },
+    {
+      "path": "assests/fonts/Inter-ExtraBold.ttf",
+      "sha1": "3744a05c5f284a039db6f64dc36185293ad16952"
+    },
+    {
+      "path": "assests/fonts/Inter-Medium.ttf",
+      "sha1": "78f01e4f13a7da5c283f4d0b5d36dc489eb5ab73"
+    },
+    {
+      "path": "assests/fonts/Inter-Regular.ttf",
+      "sha1": "78eae8a823f461192b4df2d67d7eaa818cf09b5a"
+    },
+    {
+      "path": "assests/fonts/Inter-SemiBold.ttf",
+      "sha1": "1048573ec372a0c4a60bd3d5b3ab3b82bc3973da"
+    },
+    {
+      "path": "assests/fonts/ReadexPro-Medium.ttf",
+      "sha1": "46126da5c9b28714302b9681be3656d3a8eac7c3"
+    },
+    {
+      "path": "assests/fonts/ReadexPro-SemiBold.ttf",
+      "sha1": "54ca6fc32262a40bd44d71ae0d190034ffc0d461"
+    }
+  ]
+}

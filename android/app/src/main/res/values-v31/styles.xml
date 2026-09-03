@@ -1,0 +1,14 @@
+<resources>
+
+    <!--
+      Android 12+ draws its own launch window and ignores windowBackground, so
+      the artwork cannot be shown full-bleed here. Only the sampled colour is
+      set: the system splash is a plain navy field that the React splash then
+      paints the artwork over, with no icon or text in between.
+    -->
+    <style name="SplashTheme" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="postSplashScreenTheme">@style/AppTheme</item>
+    </style>
+
+</resources>

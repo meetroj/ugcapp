@@ -1,0 +1,501 @@
+<title>UGCad Play Console Answers</title>
+
+<style>
+  /* Light palette. Neutrals carry a slight indigo bias, pulled from the app's
+     own #3D4FD8 brand, so greys read as chosen rather than inherited. */
+  :root {
+    --ground: #fbfbfe;
+    --surface: #ffffff;
+    --sunken: #f2f3f9;
+    --line: #e2e4f0;
+    --ink: #15163f;
+    --ink-soft: #565b80;
+    --ink-faint: #878cab;
+    --brand: #3d4fd8;
+    --brand-wash: #eef0fe;
+    --yes: #17734a;
+    --yes-wash: #e6f5ed;
+    --no: #8a3040;
+    --no-wash: #fceaee;
+    --todo: #8a5a12;
+    --todo-wash: #fdf2e0;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --ground: #0d1030;
+      --surface: #151a3d;
+      --sunken: #1c2249;
+      --line: #2b3160;
+      --ink: #f0f1fa;
+      --ink-soft: #a9aecd;
+      --ink-faint: #7b81a4;
+      --brand: #8f9bff;
+      --brand-wash: #1e2554;
+      --yes: #62d3a0;
+      --yes-wash: #10331f;
+      --no: #ff9aab;
+      --no-wash: #3a1520;
+      --todo: #e8b866;
+      --todo-wash: #3a2c11;
+    }
+  }
+
+  :root[data-theme='dark'] {
+    --ground: #0d1030;
+    --surface: #151a3d;
+    --sunken: #1c2249;
+    --line: #2b3160;
+    --ink: #f0f1fa;
+    --ink-soft: #a9aecd;
+    --ink-faint: #7b81a4;
+    --brand: #8f9bff;
+    --brand-wash: #1e2554;
+    --yes: #62d3a0;
+    --yes-wash: #10331f;
+    --no: #ff9aab;
+    --no-wash: #3a1520;
+    --todo: #e8b866;
+    --todo-wash: #3a2c11;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 0 20px 80px;
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+      Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  main { max-width: 780px; margin: 0 auto; }
+
+  /* ---- header ---- */
+  header { padding: 52px 0 26px; }
+
+  h1 {
+    font-size: clamp(1.7rem, 4.4vw, 2.15rem);
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+
+  .sub { color: var(--ink-soft); margin: 0; max-width: 60ch; }
+
+  /* ---- section ---- */
+  section { margin-top: 40px; }
+
+  h2 {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: var(--ink-faint);
+    margin: 0 0 12px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 650;
+  }
+
+  /* ---- Q/A rows. The answer sits in mono so the literal value to select
+         reads as data, distinct from the question prose beside it. ---- */
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px 18px;
+    align-items: baseline;
+    padding: 13px 16px;
+    background: var(--surface);
+  }
+
+  .q { color: var(--ink-soft); }
+
+  .a {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: right;
+  }
+
+  .a.yes { color: var(--yes); }
+  .a.no { color: var(--no); }
+
+  .note {
+    grid-column: 1 / -1;
+    font-size: 0.83rem;
+    color: var(--ink-faint);
+    margin: 2px 0 0;
+  }
+
+  /* ---- URL callouts ---- */
+  .url {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--brand);
+    background: var(--brand-wash);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 13px 16px;
+    text-decoration: none;
+    word-break: break-all;
+  }
+  .url + .url { margin-top: 8px; }
+  .url span { display: block; font-family: inherit; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-faint); font-weight: 650; margin-bottom: 3px; }
+
+  /* ---- data-types table ---- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.87rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  thead th {
+    background: var(--sunken);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-faint);
+    font-weight: 650;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; }
+
+  .pill {
+    display: inline-block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    font-weight: 650;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+  .pill.req { background: var(--brand-wash); color: var(--brand); }
+  .pill.opt { background: var(--sunken); color: var(--ink-soft); }
+
+  /* ---- blocks ---- */
+  .block {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--todo);
+    background: var(--todo-wash);
+    border-radius: 9px;
+    padding: 15px 17px;
+    margin-top: 14px;
+  }
+  .block h3 { margin: 0 0 6px; font-size: 0.95rem; }
+  .block p { margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
+  .block p + p { margin-top: 7px; }
+
+  .never {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--no);
+    background: var(--no-wash);
+    border-radius: 9px;
+    padding: 15px 17px;
+    margin-top: 14px;
+  }
+  .never h3 { margin: 0 0 6px; font-size: 0.95rem; color: var(--no); }
+  .never p { margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--sunken);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  ul { padding-left: 20px; margin: 8px 0 0; }
+  li { margin-bottom: 5px; color: var(--ink-soft); font-size: 0.9rem; }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-faint);
+    font-size: 0.84rem;
+  }
+
+  a { color: var(--brand); }
+</style>
+
+<main>
+  <header>
+    <h1>Play Console answers</h1>
+    <p class="sub">
+      Every declaration for <code>com.ugcapp</code>, verified against the app's
+      manifest, dependencies and backend. Work down the list as each form
+      appears.
+    </p>
+  </header>
+
+  <section>
+    <h2>URLs — both live now</h2>
+    <a class="url" href="https://www.ugcad.io/privacy">
+      <span>Privacy policy</span>https://www.ugcad.io/privacy
+    </a>
+    <a class="url" href="https://www.ugcad.io/delete-account">
+      <span>Delete account</span>https://www.ugcad.io/delete-account
+    </a>
+  </section>
+
+  <section>
+    <h2>Ads &amp; advertising ID</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="q">Does your app contain ads?</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Does your app use advertising ID?</span>
+        <span class="a no">No</span>
+        <p class="note">
+          Verified in the merged manifest: <code>AD_ID</code> count is 0. Google
+          Sign-In pulls <code>play-services-auth</code>, not
+          <code>play-services-ads</code>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Content rating — social &amp; interaction</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="q">Best describes the app</span>
+        <span class="a">Social</span>
+        <p class="note">
+          Brands browse a public directory and message people they don't know —
+          that is "meeting new people", not Communication.
+        </p>
+      </div>
+      <div class="row">
+        <span class="q">Shares current &amp; precise location with other users</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Allows purchase of digital goods</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Ability to block users or content</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Ability to report users or content</span>
+        <span class="a yes">Yes</span>
+        <p class="note">
+          <code>POST /api/chat/report</code> exists on the backend — confirm it
+          is reachable in the app before answering Yes.
+        </p>
+      </div>
+      <div class="row">
+        <span class="q">Chat moderation</span>
+        <span class="a yes">Yes</span>
+        <p class="note">
+          Contact filtering with strikes, admin thread oversight, user pause and
+          downgrade, filter and audit logs.
+        </p>
+      </div>
+      <div class="row">
+        <span class="q">Interactions limited to invited people only</span>
+        <span class="a yes">Yes</span>
+      </div>
+      <div class="row">
+        <span class="q">Permits public sharing of nudity</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Permits real-world graphic violence</span>
+        <span class="a no">No</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Audience, government, health, financial</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="q">Target age group</span>
+        <span class="a">18 and over</span>
+        <p class="note">Tick only this. KYC, banking and binding contracts rule out minors.</p>
+      </div>
+      <div class="row">
+        <span class="q">Developed by or for a government?</span>
+        <span class="a no">No</span>
+      </div>
+      <div class="row">
+        <span class="q">Health features</span>
+        <span class="a">None</span>
+      </div>
+      <div class="row">
+        <span class="q">Financial features</span>
+        <span class="a">Mobile payments &amp; digital wallets</span>
+        <p class="note">
+          That one box only. Not money transfer, not rewards, not BNPL — the
+          <code>recharge_bonus</code> field is hardcoded empty on the backend.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Data safety — top level</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="q">Collects or shares required data types?</span>
+        <span class="a yes">Yes</span>
+      </div>
+      <div class="row">
+        <span class="q">All data encrypted in transit?</span>
+        <span class="a yes">Yes</span>
+        <p class="note">
+          Production is HTTPS and the release build sets
+          <code>usesCleartextTraffic=false</code>.
+        </p>
+      </div>
+      <div class="row">
+        <span class="q">Account creation methods</span>
+        <span class="a">Username and password</span>
+        <p class="note">
+          Only this. Google sign-in ships in the app but stays inert until the
+          Cloud Console client is registered.
+        </p>
+      </div>
+      <div class="row">
+        <span class="q">Users can request account deletion?</span>
+        <span class="a yes">Yes</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Data types — every screen repeats three questions</h2>
+    <p class="sub" style="margin-bottom:14px">
+      For all 19 types: tick <strong>Collected</strong>, leave
+      <strong>Shared</strong> unticked, and answer <strong>No</strong> to
+      ephemeral. Only the last two columns change.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Data type</th><th>Collection</th><th>Purposes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Approximate location</td><td><span class="pill opt">Optional</span></td><td>App functionality</td></tr>
+          <tr><td>Name</td><td><span class="pill req">Required</span></td><td>App functionality, Account management</td></tr>
+          <tr><td>Email address</td><td><span class="pill req">Required</span></td><td>App functionality, Account management</td></tr>
+          <tr><td>User IDs</td><td><span class="pill req">Required</span></td><td>App functionality, Account management</td></tr>
+          <tr><td>Phone number</td><td><span class="pill opt">Optional</span></td><td>App functionality, Account management</td></tr>
+          <tr><td>Address</td><td><span class="pill req">Required</span></td><td>App functionality, Fraud prevention</td></tr>
+          <tr><td>Other info <span style="color:var(--ink-faint);font-weight:400">(bio, PAN, Aadhaar)</span></td><td><span class="pill opt">Optional</span></td><td>App functionality, Fraud prevention</td></tr>
+          <tr><td>User payment info</td><td><span class="pill opt">Optional</span></td><td>App functionality, Fraud prevention</td></tr>
+          <tr><td>Purchase history</td><td><span class="pill req">Required</span></td><td>App functionality, Fraud prevention</td></tr>
+          <tr><td>Other financial info</td><td><span class="pill req">Required</span></td><td>App functionality, Fraud prevention</td></tr>
+          <tr><td>Other in-app messages</td><td><span class="pill req">Required</span></td><td>App functionality</td></tr>
+          <tr><td>Photos</td><td><span class="pill opt">Optional</span></td><td>App functionality</td></tr>
+          <tr><td>Videos</td><td><span class="pill opt">Optional</span></td><td>App functionality</td></tr>
+          <tr><td>Files and docs</td><td><span class="pill opt">Optional</span></td><td>App functionality</td></tr>
+          <tr><td>App interactions</td><td><span class="pill req">Required</span></td><td>Analytics</td></tr>
+          <tr><td>Other user-generated content</td><td><span class="pill req">Required</span></td><td>App functionality</td></tr>
+          <tr><td>Crash logs</td><td><span class="pill req">Required</span></td><td>Analytics</td></tr>
+          <tr><td>Diagnostics</td><td><span class="pill req">Required</span></td><td>Analytics</td></tr>
+          <tr><td>Device or other IDs</td><td><span class="pill req">Required</span></td><td>Analytics, Fraud prevention</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="never">
+      <h3>Never tick, on any screen</h3>
+      <p>
+        Advertising or marketing &middot; Personalization &middot; Developer
+        communications. Your notifications are deal and campaign alerts, which
+        is App functionality — not news about the app.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Store listing tags — pick up to 5</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="q">Strongest fits, in order</span>
+        <span class="a">Business, Marketing</span>
+        <p class="note">
+          Then search for Jobs / Freelance, Social, and Video. Skip Finance — it
+          would benchmark you against banking apps; the wallet is a means to
+          hire creators, not the product.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Still needs you</h2>
+
+    <div class="block">
+      <h3>1. Reviewer test account — blocks submission</h3>
+      <p>
+        Create a <strong>brand</strong> account and finish the profile
+        onboarding. The app gates its dashboard behind
+        <code>profile_completed</code>, so a half-set-up account looks broken to
+        a reviewer.
+      </p>
+      <p>
+        Name it "Brand account", then paste the email and password into the App
+        access form.
+      </p>
+    </div>
+
+    <div class="block">
+      <h3>2. Upload the AAB, not the APK</h3>
+      <p>
+        New apps must ship as an Android App Bundle. Use
+        <code>ugcad-release.aab</code> (53.3&nbsp;MB). The APK is for testing on
+        a device only.
+      </p>
+    </div>
+
+    <div class="block">
+      <h3>3. Bump versionCode before uploading</h3>
+      <p>
+        It is still <code>1</code>. Play rejects duplicate version codes on every
+        later update.
+      </p>
+    </div>
+
+    <div class="block">
+      <h3>4. Google Cloud Console — only if you want OAuth live</h3>
+      <p>
+        Register an Android OAuth client on package <code>com.ugcapp</code> with
+        the debug SHA-1
+        <code>5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25</code>,
+        plus your release and Play App Signing SHA-1s.
+      </p>
+      <p>
+        Until then the Google button fails with <code>DEVELOPER_ERROR</code> —
+        which is why the account-creation answer stays "Username and password".
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Answers derived from the app's manifest, dependency tree, merged release
+      manifest and backend routes. Re-check the ads and advertising-ID answers if
+      an analytics or attribution SDK is ever added.
+    </p>
+  </footer>
+</main>

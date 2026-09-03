@@ -1,0 +1,14 @@
+<resources>
+    <!--
+      Sampled from the top edge of splash_image.png so the native launch
+      background and the artwork meet without a visible seam.
+    -->
+    <color name="splash_background">#0A0A47</color>
+
+    <!--
+      Behind the adaptive launcher icon. Sampled from the plate of
+      assests/logo/fianl.png so the background layer and the foreground glyph
+      meet invisibly under any mask shape (circle, squircle, teardrop).
+    -->
+    <color name="ic_launcher_background">#05054C</color>
+</resources>
