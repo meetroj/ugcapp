@@ -22,8 +22,21 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.193113275370-rnctnc7p6bma4kve8p0hrqbc0b1c9al2</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -33,8 +46,26 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>UGCad uses the camera so you can record and upload content for your campaigns and profile.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>UGCad uses your location to show nearby campaigns and creators when a page requests it.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>UGCad uses the microphone when you record videos for your campaigns and profile.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>UGCad needs access to your photo library so you can upload photos and videos for your profile, KYC and campaign work.</string>
+	<key>RCTNewArchEnabled</key>
+	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Inter-Bold.ttf</string>
+		<string>Inter-ExtraBold.ttf</string>
+		<string>Inter-Medium.ttf</string>
+		<string>Inter-Regular.ttf</string>
+		<string>Inter-SemiBold.ttf</string>
+		<string>ReadexPro-Medium.ttf</string>
+		<string>ReadexPro-SemiBold.ttf</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -54,36 +85,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Inter-Bold.ttf</string>
-		<string>Inter-ExtraBold.ttf</string>
-		<string>Inter-Medium.ttf</string>
-		<string>Inter-Regular.ttf</string>
-		<string>Inter-SemiBold.ttf</string>
-		<string>ReadexPro-Medium.ttf</string>
-		<string>ReadexPro-SemiBold.ttf</string>
-	</array>
-	<!--
-	  Google Sign-In redirects back into the app through this scheme. It is the
-	  iOS OAuth client id with its dot-separated parts REVERSED, e.g. client
-	  123-abc.apps.googleusercontent.com becomes
-	  com.googleusercontent.apps.123-abc.
-
-	  Fill this in from the iOS client created in Google Cloud Console, and paste
-	  the plain (unreversed) id into GOOGLE_IOS_CLIENT_ID in src/googleSignIn.ts.
-	  Without both, sign-in fails with "failed to determine clientID".
-	-->
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.193113275370-rnctnc7p6bma4kve8p0hrqbc0b1c9al2</string>
-			</array>
-		</dict>
-	</array>
 </dict>
 </plist>
