@@ -6,6 +6,7 @@
  * own GOOGLE_CLIENT_ID and returns a normal UGCad session — so from the app's
  * point of view this is just another way to obtain the same AuthUser.
  */
+import { Platform } from 'react-native';
 import {
   GoogleSignin,
   statusCodes,
@@ -26,17 +27,50 @@ export const GOOGLE_WEB_CLIENT_ID =
 
 let configured = false;
 
+/**
+ * The iOS OAuth client id.
+ *
+ * iOS cannot infer its client the way Android does. Android matches the app by
+ * package name + signing SHA-1, so the SDK finds its client without being told;
+ * iOS has no equivalent lookup, so the id has to be passed in or read from a
+ * GoogleService-Info.plist. Without it the SDK throws
+ * "failed to determine clientID" before the account picker ever opens.
+ *
+ * This is a THIRD client, distinct from the web and Android ones: create an
+ * "iOS" OAuth client in the same Google Cloud project, with the app's bundle
+ * identifier. The backend still verifies against GOOGLE_WEB_CLIENT_ID, which is
+ * why that stays the audience below.
+ */
+export const GOOGLE_IOS_CLIENT_ID = '';
+
 /** Configures the SDK once. Safe to call repeatedly. */
 export function configureGoogleSignIn() {
   if (configured) return;
   GoogleSignin.configure({
     webClientId: GOOGLE_WEB_CLIENT_ID,
+    // Passed only when set: handing the SDK an empty string reads as a real
+    // (invalid) id, which fails later and less clearly than not setting it.
+    ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : null),
     // We only need identity, so no Drive/Calendar scopes are requested. The
     // backend reads email, name and picture off the verified token.
     scopes: ['profile', 'email'],
     offlineAccess: false,
   });
   configured = true;
+}
+
+/**
+ * True when Google sign-in can actually run on this platform.
+ *
+ * On iOS that needs GOOGLE_IOS_CLIENT_ID; Android only needs the OAuth client
+ * registered in Cloud Console, which the app cannot see from here.
+ *
+ * A function rather than a constant: evaluated at module load it would freeze
+ * whatever Platform.OS said at import time, which import hoisting makes
+ * impossible to control from a test.
+ */
+export function googleSignInAvailable() {
+  return Platform.OS !== 'ios' || !!GOOGLE_IOS_CLIENT_ID;
 }
 
 /** Raised when the user backs out of the Google sheet — not a real failure. */

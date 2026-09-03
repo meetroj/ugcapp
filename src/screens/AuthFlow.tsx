@@ -18,7 +18,11 @@ import { SignUpForm } from './SignUpScreen';
 import AuthLayout from '../components/AuthLayout';
 import type { Role } from '../components/RoleSelector';
 import { googleAuth, login, signUp, type AuthUser } from '../api';
-import { GoogleSignInCancelled, getGoogleIdToken } from '../googleSignIn';
+import {
+  GoogleSignInCancelled,
+  getGoogleIdToken,
+  googleSignInAvailable,
+} from '../googleSignIn';
 import { colors } from '../theme';
 
 // LayoutAnimation is opt-in on old-architecture Android. Harmless elsewhere:
@@ -122,13 +126,13 @@ function AuthFlow({ onAuthenticated }: Props) {
             <SignUpForm
               onGoToLogin={() => switchTo('login')}
               onSubmit={handleSignUp}
-              onGoogle={handleGoogle}
+              onGoogle={googleSignInAvailable() ? handleGoogle : undefined}
             />
           ) : (
             <LoginForm
               onGoToSignUp={() => switchTo('signup')}
               onSubmit={handleLogin}
-              onGoogle={() => handleGoogle()}
+              onGoogle={googleSignInAvailable() ? () => handleGoogle() : undefined}
             />
           )}
         </AuthLayout>

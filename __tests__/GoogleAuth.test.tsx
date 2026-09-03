@@ -7,6 +7,12 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { Platform } from 'react-native';
+
+// The RN jest preset reports ios, where the Google button is hidden until an
+// iOS OAuth client is configured. These flow tests are about the android path.
+Platform.OS = 'android';
+
 import AuthFlow from '../src/screens/AuthFlow';
 
 function render(onAuthenticated: (s: any) => void) {
@@ -107,4 +113,17 @@ test('backing out of the Google picker is not treated as an error', async () => 
   // No session, and crucially no request: cancelling must not post a token.
   expect(onAuthenticated).not.toHaveBeenCalled();
   expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test('the Google button is hidden on iOS until an iOS client id is set', async () => {
+  // Without GOOGLE_IOS_CLIENT_ID the SDK cannot resolve its client and throws
+  // "failed to determine clientID". Hiding the button is better than offering
+  // one that always errors.
+  Platform.OS = 'ios';
+  let tree!: ReactTestRenderer.ReactTestRenderer;
+  await ReactTestRenderer.act(() => {
+    tree = ReactTestRenderer.create(render(() => {}));
+  });
+  expect(googleButton(tree)).toBeFalsy();
+  Platform.OS = 'android';
 });
