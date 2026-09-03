@@ -81,7 +81,7 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>REVERSED_IOS_CLIENT_ID_GOES_HERE</string>
+				<string>com.googleusercontent.apps.193113275370-rnctnc7p6bma4kve8p0hrqbc0b1c9al2</string>
 			</array>
 		</dict>
 	</array>

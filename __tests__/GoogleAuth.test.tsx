@@ -115,15 +115,16 @@ test('backing out of the Google picker is not treated as an error', async () => 
   expect(globalThis.fetch).not.toHaveBeenCalled();
 });
 
-test('the Google button is hidden on iOS until an iOS client id is set', async () => {
-  // Without GOOGLE_IOS_CLIENT_ID the SDK cannot resolve its client and throws
-  // "failed to determine clientID". Hiding the button is better than offering
-  // one that always errors.
+test('the Google button is available on iOS too', async () => {
+  // iOS needs its own client id (GOOGLE_IOS_CLIENT_ID) because it cannot infer
+  // the OAuth client from a package name the way Android does. With that set,
+  // the button must render on iOS as well — this guards against the id being
+  // cleared and sign-in silently vanishing on the platform.
   Platform.OS = 'ios';
   let tree!: ReactTestRenderer.ReactTestRenderer;
   await ReactTestRenderer.act(() => {
     tree = ReactTestRenderer.create(render(() => {}));
   });
-  expect(googleButton(tree)).toBeFalsy();
+  expect(googleButton(tree)).toBeTruthy();
   Platform.OS = 'android';
 });

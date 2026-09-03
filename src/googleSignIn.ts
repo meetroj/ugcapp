@@ -41,7 +41,8 @@ let configured = false;
  * identifier. The backend still verifies against GOOGLE_WEB_CLIENT_ID, which is
  * why that stays the audience below.
  */
-export const GOOGLE_IOS_CLIENT_ID = '';
+export const GOOGLE_IOS_CLIENT_ID =
+  '193113275370-rnctnc7p6bma4kve8p0hrqbc0b1c9al2.apps.googleusercontent.com';
 
 /** Configures the SDK once. Safe to call repeatedly. */
 export function configureGoogleSignIn() {
