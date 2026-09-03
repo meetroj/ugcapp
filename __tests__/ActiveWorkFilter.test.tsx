@@ -40,14 +40,14 @@ test('filter trigger meets the 44pt touch target', async () => {
   expect(flat.height).toBeGreaterThanOrEqual(44);
 });
 
-test('opening the filter pushes content down instead of overlapping', async () => {
+test('opening the filter overlays the content instead of pushing it down', async () => {
   const t = await render();
   await ReactTestRenderer.act(async () => {
     filterButton(t).props.onPress();
   });
 
-  // The menu must participate in normal layout. An absolutely positioned menu
-  // would paint over the first work card instead of displacing it.
+  // The menu floats over the list. Laid out in normal flow it displaced every
+  // row on open, so the list jumped under the finger and jumped back on close.
   const menu = t.root.findAll(
     (n: any) =>
       n.props?.style &&
@@ -57,5 +57,5 @@ test('opening the filter pushes content down instead of overlapping', async () =
   )[0];
   expect(menu).toBeTruthy();
   const flat = StyleSheet.flatten(menu.props.style);
-  expect(flat.position).not.toBe('absolute');
+  expect(flat.position).toBe('absolute');
 });

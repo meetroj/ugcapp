@@ -19,6 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Path } from 'react-native-svg';
@@ -128,6 +129,7 @@ function Icon({
 
 function CreatorProfileSetup({ token, onDone, onLogout }: Props) {
   const [step, setStep] = useState(0);
+  const insets = useSafeAreaInsets();
   const [form, setForm] = useState<Form>({});
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
@@ -367,7 +369,7 @@ function CreatorProfileSetup({ token, onDone, onLogout }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         {step > 0 ? (
           <TouchableOpacity
             style={styles.headerBtn}
@@ -740,7 +742,7 @@ function CreatorProfileSetup({ token, onDone, onLogout }: Props) {
           )}
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
           <TouchableOpacity
             style={[styles.submit, (saving || busy) && styles.submitOff]}
             onPress={last ? save : next}

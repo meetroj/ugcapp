@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { scale, fontScale } from '../theme';
@@ -110,9 +111,11 @@ const ITEMS = [
 ] as const;
 
 function AppSettings({ onBack, onNavigate }: Props) {
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}

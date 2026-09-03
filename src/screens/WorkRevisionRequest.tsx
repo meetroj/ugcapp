@@ -20,6 +20,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import Video, { type VideoRef } from 'react-native-video';
@@ -144,6 +145,8 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
   );
 
   const [playing, setPlaying] = useState(false);
+
+  const insets = useSafeAreaInsets();
   const [position, setPosition] = useState(0);
   // Falls back to the duration the list already knew until the player reports its own.
   const [length, setLength] = useState(Number(work.duration_seconds) || 0);
@@ -263,7 +266,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onClose}

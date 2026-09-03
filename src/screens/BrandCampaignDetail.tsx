@@ -16,6 +16,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import {
@@ -266,6 +267,7 @@ function BrandCampaignDetail({
   onOpenThread,
 }: Props) {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const insets = useSafeAreaInsets();
   const [work, setWork] = useState<Work[]>([]);
   const [tab, setTab] = useState(0);
   /** Campaign Progress starts open; the header arrow folds it away. */
@@ -309,7 +311,7 @@ function BrandCampaignDetail({
     return (
       <View style={styles.screen}>
         <View style={styles.topBar}>
-          <View style={styles.header}>
+          <View style={[styles.header, { paddingTop: insets.top }]}>
             <TouchableOpacity
               style={styles.headerBtn}
               onPress={onBack}
@@ -339,7 +341,7 @@ function BrandCampaignDetail({
     return (
       <View style={styles.screen}>
         <View style={styles.topBar}>
-          <View style={styles.header}>
+          <View style={[styles.header, { paddingTop: insets.top }]}>
             <TouchableOpacity
               style={styles.headerBtn}
               onPress={onBack}
@@ -388,7 +390,7 @@ function BrandCampaignDetail({
     <View style={styles.screen}>
       {/* Navy bar + rounded sheet, matching the brand tab screens. */}
       <View style={styles.topBar}>
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top }]}>
           <TouchableOpacity
             style={styles.headerBtn}
             onPress={onBack}

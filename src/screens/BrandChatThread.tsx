@@ -598,7 +598,7 @@ function BrandChatThread({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}

@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import Svg, { Path } from 'react-native-svg';
 import { scale, fontScale } from '../theme';
@@ -23,8 +24,18 @@ function ScreenHeader({
   onChat?: () => void;
   unread?: number;
 }) {
+  // The bar is the first thing under the status bar, and the screen behind it
+  // is full-bleed, so it pads itself down by the inset instead of sitting
+  // beneath the clock on iOS.
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={styles.header}>
+    <View
+      style={[
+        styles.header,
+        { height: styles.header.height + insets.top, paddingTop: insets.top },
+      ]}
+    >
       <TouchableOpacity
         style={styles.iconBtn}
         onPress={onBack}

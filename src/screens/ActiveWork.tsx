@@ -234,6 +234,7 @@ function ActiveWork({
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.toolsWrap}>
         <View style={styles.tools}>
           <TouchableOpacity
             style={styles.tool}
@@ -274,6 +275,7 @@ function ActiveWork({
             ))}
           </View>
         )}
+        </View>
         {loading && <SkeletonList count={4} lines={2} footer />}
         {!loading && !visible.length && (
           <View style={styles.empty}>
@@ -483,8 +485,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#25274C',
   },
+  // Anchors the dropdown so it can float over the list below.
+  toolsWrap: { zIndex: 10 },
   filterMenu: {
-    marginBottom: scale(12),
+    // Overlays the content rather than pushing it down: the list keeps its
+    // scroll position while the menu is open, so dismissing it does not jump
+    // the rows back up under the finger.
+    position: 'absolute',
+    top: scale(68),
+    left: 0,
+    right: 0,
+    zIndex: 20,
     padding: scale(6),
     borderRadius: scale(12),
     backgroundColor: '#FFF',

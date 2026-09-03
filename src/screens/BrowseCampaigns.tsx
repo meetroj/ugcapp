@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
@@ -595,8 +596,17 @@ function Header({
   saved?: boolean;
   onToggleSave?: () => void;
 }) {
+  // First thing under the status bar on its own white ground, so it pads
+  // itself down rather than sitting beneath the clock on iOS.
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={styles.subHeader}>
+    <View
+      style={[
+        styles.subHeader,
+        { height: styles.subHeader.height + insets.top, paddingTop: insets.top },
+      ]}
+    >
       <TouchableOpacity style={styles.headerBtn} onPress={onBack}>
         <Icon name="back" color="#171943" />
       </TouchableOpacity>
@@ -633,6 +643,7 @@ function CampaignDetails({
   saved: boolean;
   onToggleSave: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const tags = tagsOf(campaign);
   const format = formatOf(campaign);
   const match = matchOf(campaign);
@@ -813,7 +824,12 @@ function CampaignDetails({
 
       {/* Pinned below the scroll area so Submit Bid is always reachable — the
           brief is long enough that it used to sit far off-screen. */}
-      <View style={styles.detailFooter}>
+      <View
+        style={[
+          styles.detailFooter,
+          { paddingBottom: scale(12) + NAV_CLEARANCE + insets.bottom },
+        ]}
+      >
         <TouchableOpacity style={styles.primary} onPress={onBid}>
           <Icon name="send" color="#FFF" size={18} />
           <Text style={styles.detailBtnText}>Submit Your Bid</Text>
@@ -1375,7 +1391,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: scale(9),
   },
-  bidContent: { padding: scale(12), paddingBottom: scale(24) },
+  bidContent: { padding: scale(12), paddingBottom: scale(24) + NAV_CLEARANCE },
   fieldLabel: {
     marginTop: scale(14),
     marginBottom: scale(8),

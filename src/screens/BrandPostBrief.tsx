@@ -24,6 +24,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
@@ -859,6 +860,7 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
 }
 
 function BrandPostBrief({ token, onBack, onDone }: Props) {
+  const insets = useSafeAreaInsets();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(initialForm);
   const [busy, setBusy] = useState<'draft' | 'publish' | null>(null);
@@ -1404,7 +1406,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={step === 1 ? onBack : goBack}
@@ -2139,7 +2141,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           )}
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
           {step > 1 && (
             <TouchableOpacity
               style={styles.backBtn}

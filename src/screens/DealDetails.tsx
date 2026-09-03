@@ -19,6 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
@@ -281,6 +282,7 @@ function DealDetails({
   onSubmitWork,
   unread = 0,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<Tab>('Overview');
   const [submitting, setSubmitting] = useState(false);
 
@@ -387,7 +389,7 @@ function DealDetails({
   return (
     <View style={styles.screen}>
       {/* --- dark header --- */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}

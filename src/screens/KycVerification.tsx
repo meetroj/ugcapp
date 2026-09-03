@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBlock } from '../components/Skeleton';
@@ -229,6 +230,7 @@ function KycVerification({
   onNotifications?: () => void;
 }) {
   const [kyc, setKyc] = useState<Kyc>({});
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // The status could not be read. Distinct from "not submitted": showing that
@@ -320,7 +322,7 @@ function KycVerification({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity style={styles.headerBtn} onPress={onBack}>
           <Icon name="back" color="#FFF" />
         </TouchableOpacity>

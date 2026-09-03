@@ -19,6 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Path } from 'react-native-svg';
@@ -93,6 +94,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
   const [form, setForm] = useState<Form>({
     business_name: String(session.nickname || ''),
   });
+  const insets = useSafeAreaInsets();
   const [logo, setLogo] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -173,7 +175,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Complete your business profile</Text>
           <Text style={styles.headerSub}>
@@ -319,7 +321,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           </Text>
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
           <TouchableOpacity
             style={[styles.submit, saving && styles.submitOff]}
             onPress={save}
