@@ -50,10 +50,10 @@ UGCad is the same account and data as ugcad.io, so you can move between the webs
   betaDescription: 'UGCad lets brands post UGC campaign briefs and hire creators, and lets creators find paid campaigns, submit work and get paid. Please test sign-up, onboarding, browsing campaigns or creators, bidding, chat and the wallet screens, and report anything that looks wrong.',
   reviewNotes: 'UGCad is a marketplace for user-generated content. Log in with the demo account, or create a new account: choose Brand or Creator, then complete the short onboarding. Brands land on the creator directory; creators land on the campaign feed. Google sign-in is available but email and password is sufficient for review.',
   contact: {
-    firstName: process.env.BETA_CONTACT_FIRST || 'Chandresh',
-    lastName: process.env.BETA_CONTACT_LAST || 'Delwar',
-    email: process.env.BETA_CONTACT_EMAIL || 'cdelwar13@gmail.com',
-    phone: process.env.BETA_CONTACT_PHONE || '',
+    firstName: process.env.BETA_CONTACT_FIRST || 'Akshay',
+    lastName: process.env.BETA_CONTACT_LAST || 'Shukla',
+    email: process.env.BETA_CONTACT_EMAIL || 'ugcad.io@gmail.com',
+    phone: process.env.BETA_CONTACT_PHONE || '+917999621130',
   },
   demo: { user: process.env.DEMO_ACCOUNT_USER || '', pass: process.env.DEMO_ACCOUNT_PASS || '' },
 };
