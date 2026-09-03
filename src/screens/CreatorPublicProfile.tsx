@@ -26,6 +26,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ScrollViewInstance } from 'react-native';
 import { Text } from '../components/Text';
 import { WebView } from 'react-native-webview';
@@ -326,6 +327,7 @@ function CreatorPublicProfile({
   onMessage,
   onSendBrief,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const [data, setData] = useState<Record<string, any> | null>(null);
   const [reviews, setReviews] = useState<CreatorReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -820,7 +822,7 @@ function CreatorPublicProfile({
 
       {/* Send Message stays pinned; this screen hides the bottom nav, so it is
           the only bar competing for the bottom edge. */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: scale(16) + insets.bottom }]}>
         <TouchableOpacity
           style={styles.messageBtn}
           onPress={onMessage}

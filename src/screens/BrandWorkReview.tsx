@@ -18,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import Video from 'react-native-video';
@@ -138,6 +139,7 @@ function BrandWorkReview({
   onMessages,
 }: Props) {
   const [items, setItems] = useState<Work[]>([]);
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // The submission whose revision composer is open.
@@ -213,7 +215,7 @@ function BrandWorkReview({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}

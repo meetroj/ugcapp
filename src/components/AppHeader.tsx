@@ -21,6 +21,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { scale, fontScale } from '../theme';
@@ -124,12 +125,13 @@ function AppHeader({
   /** Red bubble on the message icon; hidden at 0. */
   unreadMessages?: number;
 }) {
+  const insets = useSafeAreaInsets();
   // With no back arrow and no title, the logo is the only centre content, so
   // it takes the centred slot instead of sitting flush left.
   const centeredLogo = !onBack && !title;
 
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, { height: styles.header.height + insets.top, paddingTop: insets.top }]}>
       {onBack ? (
         <TouchableOpacity
           style={styles.backBtn}
