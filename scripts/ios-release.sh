@@ -18,7 +18,8 @@
 # App Store provisioning profile on first run.
 set -euo pipefail
 
-cd "$(dirname "$0")/../ios"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT/ios"
 export LANG=en_US.UTF-8
 
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-3LCA4AA483}"   # Parv Jain
@@ -41,7 +42,7 @@ if [ -z "$BUILD_NUMBER" ]; then
   # Ask App Store Connect for the highest build number already uploaded so the
   # upload is never rejected as a duplicate.
   BUILD_NUMBER="$(ASC_KEY_ID="$ASC_KEY_ID" ASC_ISSUER_ID="$ASC_ISSUER_ID" \
-    node "$(dirname "$0")/../scripts/asc-next-build.mjs" io.ugcad.app 2>/dev/null || echo 1)"
+    node "$ROOT/scripts/asc-next-build.mjs" io.ugcad.app 2>/dev/null || echo 1)"
 fi
 echo "==> Build number: $BUILD_NUMBER"
 
@@ -65,7 +66,11 @@ echo "==> $IPA"
 if [ "${SKIP_UPLOAD:-0}" = "1" ]; then exit 0; fi
 
 echo "==> Validating"
-xcrun altool --validate-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+# altool exits 0 even when validation fails, so check its output.
+xcrun altool --validate-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$OUT/validate.log"
+grep -qE "FAILED|\*\*\* Error|ERROR ITMS" "$OUT/validate.log" && { echo "validation failed, see $OUT/validate.log" >&2; exit 1; }
 echo "==> Uploading"
-xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-echo "==> Uploaded build $BUILD_NUMBER. It appears in TestFlight after Apple finishes processing (usually 5-15 min)."
+xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$OUT/upload.log"
+grep -qE "FAILED|\*\*\* Error|ERROR ITMS" "$OUT/upload.log" && { echo "upload failed, see $OUT/upload.log" >&2; exit 1; }
+echo "==> Uploaded build $BUILD_NUMBER. Waiting for Apple to process it, then filling in TestFlight details."
+node "$ROOT/scripts/asc-testflight.mjs" "$BUILD_NUMBER"
