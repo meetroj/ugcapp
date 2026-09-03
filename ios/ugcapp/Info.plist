@@ -33,14 +33,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>UGCad uses the camera so you can record and upload content for your campaigns and profile.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>UGCad uses the microphone when you record videos for your campaigns and profile.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>UGCad needs access to your photo library so you can upload photos and videos for your profile, KYC and campaign work.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>UGCad uses your location to show nearby campaigns and creators when a page requests it.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -69,6 +63,27 @@
 		<string>Inter-SemiBold.ttf</string>
 		<string>ReadexPro-Medium.ttf</string>
 		<string>ReadexPro-SemiBold.ttf</string>
+	</array>
+	<!--
+	  Google Sign-In redirects back into the app through this scheme. It is the
+	  iOS OAuth client id with its dot-separated parts REVERSED, e.g. client
+	  123-abc.apps.googleusercontent.com becomes
+	  com.googleusercontent.apps.123-abc.
+
+	  Fill this in from the iOS client created in Google Cloud Console, and paste
+	  the plain (unreversed) id into GOOGLE_IOS_CLIENT_ID in src/googleSignIn.ts.
+	  Without both, sign-in fails with "failed to determine clientID".
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>REVERSED_IOS_CLIENT_ID_GOES_HERE</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

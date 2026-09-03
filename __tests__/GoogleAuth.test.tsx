@@ -49,7 +49,7 @@ function googleButton(tree: ReactTestRenderer.ReactTestRenderer) {
 }
 
 beforeEach(() => {
-  global.fetch = jest.fn(async () => ({
+  globalThis.fetch = jest.fn(async () => ({
     ok: true,
     status: 200,
     json: async () => ({
@@ -83,7 +83,7 @@ test('signing in with Google exchanges the ID token for a session', async () => 
     googleButton(tree)?.props.onPress();
   });
 
-  const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+  const [url, init] = (globalThis.fetch as jest.Mock).mock.calls[0];
   expect(String(url)).toContain('/api/auth/google');
   // The backend verifies this token, so it must be the SDK's, sent as
   // `credential` — the field name /auth/google reads.
@@ -112,7 +112,7 @@ test('backing out of the Google picker is not treated as an error', async () => 
 
   // No session, and crucially no request: cancelling must not post a token.
   expect(onAuthenticated).not.toHaveBeenCalled();
-  expect(global.fetch).not.toHaveBeenCalled();
+  expect(globalThis.fetch).not.toHaveBeenCalled();
 });
 
 test('the Google button is hidden on iOS until an iOS client id is set', async () => {
