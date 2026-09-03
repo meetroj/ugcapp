@@ -177,10 +177,12 @@ const publicLink = await step('external group "UGCad Testers" with public link',
   await post(`/v1/betaGroups/${g.id}/relationships/builds`, { data: [{ type: 'builds', id: buildId }] });
   return (await get(`/v1/betaGroups/${g.id}`)).data.attributes.publicLink;
 });
-if (META.contact.phone && META.demo.user) {
+// The demo account is kept on App Store Connect once set, so only the phone is
+// needed to submit again; pass DEMO_ACCOUNT_* only to change the stored login.
+if (META.contact.phone) {
   await step('submit build for beta review (external testing)', () => post('/v1/betaAppReviewSubmissions', { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } }));
 } else {
-  console.log('skip beta review submission: set BETA_CONTACT_PHONE and DEMO_ACCOUNT_USER/DEMO_ACCOUNT_PASS, then rerun this script to submit for external testing.');
+  console.log('skip beta review submission: set BETA_CONTACT_PHONE, then rerun this script to submit for external testing.');
 }
 console.log(`\nTestFlight: https://appstoreconnect.apple.com/apps/${appId}/testflight/ios`);
 if (publicLink) console.log(`Public tester link: ${publicLink}`);
