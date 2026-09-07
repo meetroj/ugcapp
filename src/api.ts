@@ -51,14 +51,30 @@ export function login(email: string, password: string) {
   return authRequest('/auth/login', { email: email.trim(), password });
 }
 
+/**
+ * Dial code every signup is filed under. The form has no country picker, and
+ * the backend stores the dial code and the national number separately (see
+ * normalize_signup_phone in server.py), so it has to travel with the number.
+ */
+export const SIGNUP_DIAL_CODE = '+91';
+
+/**
+ * Sign-up. `phone` is the national number (10 digits for +91) and is required:
+ * the backend answers 400 when it is missing or the wrong length. There is no
+ * OTP step — it is contact detail the ops team reads on the application, not a
+ * verified second factor.
+ */
 export function signUp(
   role: 'creator' | 'brand',
   email: string,
   password: string,
+  phone: string,
 ) {
   return authRequest('/auth/signup', {
     email: email.trim(),
     password,
+    phone: phone.trim(),
+    dial_code: SIGNUP_DIAL_CODE,
     role: role === 'brand' ? 'business' : 'creator',
   });
 }

@@ -57,6 +57,30 @@ export function LockIcon({ color = STROKE, size = 20 }: IconProps) {
   );
 }
 
+/** Smartphone; used by the mobile-number field on sign-up. */
+export function PhoneIcon({ color = STROKE, size = 20 }: IconProps) {
+  return (
+    <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24" fill="none">
+      <Rect
+        x={6}
+        y={2.5}
+        width={12}
+        height={19}
+        rx={2.5}
+        stroke={color}
+        strokeWidth={1.8}
+      />
+      <Path
+        d="M10.5 5.75h3"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <Circle cx={12} cy={18} r={0.9} fill={color} />
+    </Svg>
+  );
+}
+
 /** Eye; `crossed` adds the slash used for the "hide password" state. */
 export function EyeIcon({
   color = STROKE,

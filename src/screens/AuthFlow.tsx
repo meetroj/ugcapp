@@ -65,9 +65,12 @@ function AuthFlow({ onAuthenticated }: Props) {
     role: Role;
     email: string;
     password: string;
+    phone: string;
   }) => {
     try {
-      onAuthenticated(await signUp(values.role, values.email, values.password));
+      onAuthenticated(
+        await signUp(values.role, values.email, values.password, values.phone),
+      );
     } catch (error) {
       Alert.alert(
         'Could not create account',
