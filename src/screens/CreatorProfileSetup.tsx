@@ -30,6 +30,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
+import Svg, {
+  Circle,
+  Defs,
+  LinearGradient,
+  Path,
+  Rect,
+  Stop,
+} from 'react-native-svg';
 import {
   BACKEND_URL,
   completeProfile,
@@ -291,8 +299,8 @@ const STEP2_FIELDS = [
   'address',
 ];
 
-/** Web caps portfolio uploads at 50MB and the profile photo at 5MB. */
-const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+/** Web caps portfolio video at 100MB and the profile photo at 5MB. */
+const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 const onlyDigits = (value: string) => String(value ?? '').replace(/\D/g, '');
@@ -425,6 +433,10 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     /** Multi pickers toggle and stay open; single ones close on choice. */
     multi?: boolean;
   }>(null);
+
+  // Its category is chosen from a list, not typed, so it matches the values
+  // brands filter on.
+  const [draftPicker, setDraftPicker] = useState(false);
 
   // Draft for the portfolio item being added.
   const [draft, setDraft] = useState({
@@ -562,7 +574,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       return;
     }
     if ((asset.fileSize || 0) > VIDEO_MAX_BYTES) {
-      setError('Video is too large. Maximum 50MB.');
+      setError('Video is too large. Maximum 100MB.');
       return;
     }
     setVideoUploading(true);
@@ -999,7 +1011,10 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               </Text>
               {PLATFORMS.map(platform => (
                 <View key={platform.key} style={styles.field}>
-                  <Text style={styles.fieldLabel}>{platform.label}</Text>
+                  <View style={styles.platformHead}>
+                    <PlatformBadge platform={platform.key} />
+                    <Text style={styles.fieldLabel}>{platform.label}</Text>
+                  </View>
                   <TextInput
                     style={[
                       styles.input,
@@ -1013,19 +1028,6 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                     placeholderTextColor={PLACEHOLDER}
                     autoCapitalize="none"
                     autoCorrect={false}
-                  />
-                  <TextInput
-                    style={[styles.input, styles.followerInput]}
-                    value={data.followers[platform.key] || ''}
-                    onChangeText={v =>
-                      set('followers', {
-                        ...data.followers,
-                        [platform.key]: onlyDigits(v),
-                      })
-                    }
-                    placeholder="Followers (optional)"
-                    placeholderTextColor={PLACEHOLDER}
-                    keyboardType="phone-pad"
                   />
                 </View>
               ))}
@@ -1081,11 +1083,11 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                   placeholder="2000"
                   keyboard="phone-pad"
                 />
-                <Field
+                <Select
                   label="Category"
                   value={draft.category}
-                  onChange={v => setDraft(prev => ({ ...prev, category: v }))}
-                  placeholder="e.g., Product Demo"
+                  placeholder="Select a category"
+                  onPress={() => setDraftPicker(true)}
                 />
                 <Field
                   label="Delivery (days)"
@@ -1134,12 +1136,6 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               ))}
 
               <Text style={styles.sectionTitle}>Rates</Text>
-              <Field
-                label="Last salary / rate"
-                value={data.lastSalary}
-                onChange={v => set('lastSalary', v)}
-                placeholder="Optional"
-              />
               <Field
                 label="Expected payout"
                 required
@@ -1395,7 +1391,134 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* The portfolio item's category. Its own sheet because the draft lives
+          outside `data`, which every other picker writes into. */}
+      <Modal
+        visible={draftPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDraftPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setDraftPicker(false)}
+        >
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Select a category</Text>
+            <ScrollView>
+              {NICHE_CATEGORIES.map(item => {
+                const active = draft.category === item.label;
+                return (
+                  <TouchableOpacity
+                    key={item.value}
+                    style={styles.modalRow}
+                    onPress={() => {
+                      setDraft(prev => ({ ...prev, category: item.label }));
+                      setDraftPicker(false);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text
+                      style={[
+                        styles.modalRowText,
+                        active && styles.modalRowTextOn,
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                    {active && <Text style={styles.modalTick}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
+  );
+}
+
+/**
+ * The real brand marks, drawn as vector paths on a tile in each network's own
+ * colour — the same badges the web puts beside its profile-link rows. Instagram
+ * is the one that needs a gradient rather than a flat fill; the others are a
+ * single brand colour.
+ */
+function PlatformBadge({ platform }: { platform: string }) {
+  const size = scale(26);
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Defs>
+        <LinearGradient id="ig" x1="0" y1="1" x2="1" y2="0">
+          <Stop offset="0" stopColor="#FEDA75" />
+          <Stop offset="0.35" stopColor="#FA7E1E" />
+          <Stop offset="0.6" stopColor="#D62976" />
+          <Stop offset="0.8" stopColor="#962FBF" />
+          <Stop offset="1" stopColor="#4F5BD5" />
+        </LinearGradient>
+      </Defs>
+
+      {platform === 'youtube' && (
+        <>
+          <Rect x={0} y={3} width={24} height={18} rx={5} fill="#FF0000" />
+          <Path d="M9.8 8.2l6.2 3.8-6.2 3.8z" fill="#FFFFFF" />
+        </>
+      )}
+
+      {platform === 'linkedin' && (
+        <>
+          <Rect x={0} y={0} width={24} height={24} rx={5} fill="#0A66C2" />
+          {/* The "i": dot over a stem. */}
+          <Circle cx={7} cy={7.4} r={1.5} fill="#FFFFFF" />
+          <Rect x={5.7} y={10} width={2.6} height={8} fill="#FFFFFF" />
+          {/* The "n": stem plus the arch that leans off it. */}
+          <Rect x={10.3} y={10} width={2.6} height={8} fill="#FFFFFF" />
+          <Path
+            d="M12.9 18v-4.1a2.6 2.6 0 0 1 5.2 0V18h-2.6v-3.8a1 1 0 0 0-2 0V18z"
+            fill="#FFFFFF"
+          />
+        </>
+      )}
+
+      {platform === 'instagram' && (
+        <>
+          <Rect x={0} y={0} width={24} height={24} rx={6} fill="url(#ig)" />
+          <Rect
+            x={5}
+            y={5}
+            width={14}
+            height={14}
+            rx={4.5}
+            stroke="#FFFFFF"
+            strokeWidth={1.8}
+            fill="none"
+          />
+          <Circle
+            cx={12}
+            cy={12}
+            r={3.2}
+            stroke="#FFFFFF"
+            strokeWidth={1.8}
+            fill="none"
+          />
+          <Circle cx={16.4} cy={7.7} r={1} fill="#FFFFFF" />
+        </>
+      )}
+
+      {platform === 'tiktok' && (
+        <>
+          <Rect x={0} y={0} width={24} height={24} rx={6} fill="#111111" />
+          {/* Note head with the flag curling off the top of its stem. */}
+          <Path
+            d="M13.4 5h2.1c.2 1.6 1.2 2.7 2.8 2.9v2.1a5 5 0 0 1-2.8-.9v4.6a4 4 0 1 1-4-4c.2 0 .4 0 .6.05v2.15a1.9 1.9 0 1 0 1.3 1.8z"
+            fill="#FFFFFF"
+          />
+        </>
+      )}
+    </Svg>
   );
 }
 
@@ -1719,7 +1842,12 @@ const styles = StyleSheet.create({
   },
   inputMultiline: { minHeight: scale(88), textAlignVertical: 'top' },
   inputError: { borderColor: '#E5484D' },
-  followerInput: { marginTop: scale(8) },
+  platformHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+    marginBottom: scale(6),
+  },
   phoneRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
   dialButton: {
     paddingHorizontal: scale(14),

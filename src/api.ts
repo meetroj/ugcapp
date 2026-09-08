@@ -732,11 +732,22 @@ export async function uploadMedia(
   file: PickedFile,
   dest: 'photo' | 'banner' | 'file' = 'file',
 ): Promise<string> {
+  // The picker does not always hand back a name or a MIME type — on Android it
+  // routinely omits both for videos. Defaulting those to .jpg / image/jpeg (as
+  // this did) uploaded every such video as a JPEG, which the server stores
+  // under a name nothing can play back.
+  const extension = (file.uri.split('?')[0].match(/.([a-z0-9]+)$/i) || [])[1];
+  const isVideo = /^(mp4|mov|m4v|3gp|mkv|webm)$/i.test(extension || '');
+  const fallbackType = isVideo
+    ? `video/${extension!.toLowerCase() === 'mov' ? 'quicktime' : extension!.toLowerCase()}`
+    : 'image/jpeg';
+  const fallbackName = `upload_${Date.now()}.${extension || (isVideo ? 'mp4' : 'jpg')}`;
+
   const form = new FormData();
   form.append('file', {
     uri: file.uri,
-    name: file.fileName || `upload_${Date.now()}.jpg`,
-    type: file.type || 'image/jpeg',
+    name: file.fileName || fallbackName,
+    type: file.type || fallbackType,
   } as unknown as Blob);
 
   const path =
@@ -760,9 +771,16 @@ export async function uploadMedia(
     );
   }
   // upload-banner answers with `banner`; the other two use photo_url/file_url.
-  return String(
+  const url = String(
     data.photo_url || data.banner || data.file_url || data.url || '',
   );
+  // A 2xx carrying no URL used to return the empty string, which every caller
+  // then stored as a perfectly valid "uploaded" value — the spinner stopped and
+  // nothing else happened. Fail loudly instead.
+  if (!url) {
+    throw new Error('Upload finished but the server returned no file URL.');
+  }
+  return url;
 }
 
 /**
