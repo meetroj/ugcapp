@@ -37,6 +37,7 @@ import {
   type AuthUser,
 } from '../api';
 import { scale, fontScale } from '../theme';
+import { useKeyboardVisible } from '../keyboard';
 
 type Props = {
   token: string;
@@ -44,6 +45,22 @@ type Props = {
   onDone: () => void;
   onLogout?: () => void;
 };
+
+/**
+ * The web page's palette: a near-black backdrop with the form card floating on
+ * top in white, periwinkle text inside it, and the chrome outside the card
+ * (title, progress, footer) in white. Kept as named constants because several
+ * of them repeat across a dozen style rules.
+ */
+const BACKDROP = '#0A0A16';
+const ACCENT = '#5B6BFF';
+const ACCENT_TEXT = '#6D7BFF';
+/** Tint used for input fills and chips — the web's rgba(7,7,78,.045). */
+const INK_SOFT = 'rgba(7,7,78,0.05)';
+const INK_BORDER = 'rgba(7,7,78,0.12)';
+const INK_MUTED = 'rgba(7,7,78,0.55)';
+const PLACEHOLDER = 'rgba(7,7,78,0.38)';
+const ON_DARK_MUTED = 'rgba(255,255,255,0.55)';
 
 const STEP_META = [
   {
@@ -385,6 +402,8 @@ const EMPTY: Data = {
 
 function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const insets = useSafeAreaInsets();
+  // The keyboard covers the gesture bar, so the inset would only show as a gap.
+  const keyboardUp = useKeyboardVisible();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<Data>(EMPTY);
   const [showErrors, setShowErrors] = useState(false);
@@ -855,7 +874,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                       )
                     }
                     placeholder="98765 43210"
-                    placeholderTextColor="#A9ADC2"
+                    placeholderTextColor={PLACEHOLDER}
                     keyboardType="phone-pad"
                   />
                 </View>
@@ -946,7 +965,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                       set('links', { ...data.links, [platform.key]: v })
                     }
                     placeholder={`${platform.label} link or handle`}
-                    placeholderTextColor="#A9ADC2"
+                    placeholderTextColor={PLACEHOLDER}
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
@@ -960,7 +979,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                       })
                     }
                     placeholder="Followers (optional)"
-                    placeholderTextColor="#A9ADC2"
+                    placeholderTextColor={PLACEHOLDER}
                     keyboardType="phone-pad"
                   />
                 </View>
@@ -1191,7 +1210,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         </ScrollView>
 
         <View
-          style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}
+          style={[styles.footer, { paddingBottom: scale(12) + (keyboardUp ? 0 : insets.bottom) }]}
         >
           {step > 1 && (
             <TouchableOpacity
@@ -1313,7 +1332,7 @@ function Field({
         value={value}
         onChangeText={onChange}
         placeholder={placeholder || label}
-        placeholderTextColor="#A9ADC2"
+        placeholderTextColor={PLACEHOLDER}
         keyboardType={keyboard || 'default'}
         autoCapitalize={keyboard === 'url' ? 'none' : 'sentences'}
         autoCorrect={false}
@@ -1412,7 +1431,7 @@ function Chips({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F7F7FD' },
+  screen: { flex: 1, backgroundColor: BACKDROP },
   flex: { flex: 1 },
   header: {
     paddingHorizontal: scale(16),
@@ -1426,77 +1445,79 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: fontScale(19),
     fontFamily: 'ReadexPro-SemiBold',
-    color: '#171A2B',
+    color: '#FFFFFF',
   },
   headerSub: {
     marginTop: scale(2),
     fontSize: fontScale(12.5),
-    color: '#6C7189',
+    color: ON_DARK_MUTED,
   },
-  logout: { fontSize: fontScale(13), color: '#4C5BF3' },
+  logout: { fontSize: fontScale(13), color: 'rgba(255,255,255,0.78)' },
   progressRow: { paddingHorizontal: scale(16), paddingBottom: scale(10) },
-  progressText: { fontSize: fontScale(12), color: '#6C7189' },
+  progressText: { fontSize: fontScale(12), color: ON_DARK_MUTED },
   progressTrack: {
     marginTop: scale(6),
     height: scale(4),
     borderRadius: scale(2),
-    backgroundColor: '#E2E4F0',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     overflow: 'hidden',
   },
-  progressFill: { height: '100%', backgroundColor: '#4C5BF3' },
+  progressFill: { height: '100%', backgroundColor: ACCENT },
   content: { paddingHorizontal: scale(16), paddingBottom: scale(24) },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: scale(16),
     padding: scale(16),
+    borderWidth: 1,
+    borderColor: '#E6E9FF',
   },
   photoPicker: {
     alignSelf: 'center',
     width: scale(88),
     height: scale(88),
     borderRadius: scale(44),
-    backgroundColor: '#F1F2FA',
+    backgroundColor: INK_SOFT,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   photoImage: { width: '100%', height: '100%' },
-  photoPlus: { fontSize: fontScale(28), color: '#9498B0' },
+  photoPlus: { fontSize: fontScale(28), color: ACCENT_TEXT },
   photoHint: {
     marginTop: scale(8),
     marginBottom: scale(8),
     textAlign: 'center',
     fontSize: fontScale(12),
-    color: '#6C7189',
+    color: INK_MUTED,
   },
   sectionTitle: {
     marginTop: scale(18),
     marginBottom: scale(4),
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
-    color: '#171A2B',
+    color: ACCENT_TEXT,
   },
   sectionNote: {
     marginBottom: scale(8),
     fontSize: fontScale(12),
-    color: '#6C7189',
+    color: INK_MUTED,
   },
   field: { marginTop: scale(14) },
   fieldLabel: {
     marginBottom: scale(6),
     fontSize: fontScale(13),
-    color: '#3A3F58',
+    color: ACCENT_TEXT,
   },
   required: { color: '#E5484D' },
   input: {
     borderWidth: 1,
-    borderColor: '#E2E4F0',
+    borderColor: INK_BORDER,
     borderRadius: scale(10),
     paddingHorizontal: scale(12),
     paddingVertical: scale(11),
     fontSize: fontScale(14),
-    color: '#2B2F45',
-    backgroundColor: '#FFFFFF',
+    color: ACCENT_TEXT,
+    backgroundColor: INK_SOFT,
   },
   inputMultiline: { minHeight: scale(88), textAlignVertical: 'top' },
   inputError: { borderColor: '#E5484D' },
@@ -1507,21 +1528,21 @@ const styles = StyleSheet.create({
     paddingVertical: scale(12),
     borderRadius: scale(10),
     borderWidth: 1,
-    borderColor: '#E2E4F0',
-    backgroundColor: '#FFFFFF',
+    borderColor: INK_BORDER,
+    backgroundColor: INK_SOFT,
   },
-  dialText: { fontSize: fontScale(14), color: '#2B2F45' },
+  dialText: { fontSize: fontScale(14), color: ACCENT_TEXT },
   phoneInput: { flex: 1 },
   select: {
     borderWidth: 1,
-    borderColor: '#E2E4F0',
+    borderColor: INK_BORDER,
     borderRadius: scale(10),
     paddingHorizontal: scale(12),
     paddingVertical: scale(13),
-    backgroundColor: '#FFFFFF',
+    backgroundColor: INK_SOFT,
   },
-  selectText: { fontSize: fontScale(14), color: '#2B2F45' },
-  selectPlaceholder: { color: '#A9ADC2' },
+  selectText: { fontSize: fontScale(14), color: ACCENT_TEXT },
+  selectPlaceholder: { color: PLACEHOLDER },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   chipRowError: {
     borderWidth: 1,
@@ -1534,12 +1555,12 @@ const styles = StyleSheet.create({
     paddingVertical: scale(8),
     borderRadius: scale(999),
     borderWidth: 1,
-    borderColor: '#E2E4F0',
-    backgroundColor: '#FFFFFF',
+    borderColor: INK_BORDER,
+    backgroundColor: INK_SOFT,
   },
-  chipOn: { borderColor: '#4C5BF3', backgroundColor: '#EEF0FF' },
-  chipText: { fontSize: fontScale(12.5), color: '#3A3F58' },
-  chipTextOn: { color: '#3340C8' },
+  chipOn: { borderColor: ACCENT, backgroundColor: ACCENT },
+  chipText: { fontSize: fontScale(12.5), color: ACCENT_TEXT },
+  chipTextOn: { color: '#FFFFFF' },
   portfolioRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1549,43 +1570,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#EEEFF6',
   },
-  portfolioText: { flex: 1, fontSize: fontScale(13), color: '#2B2F45' },
+  portfolioText: { flex: 1, fontSize: fontScale(13), color: ACCENT_TEXT },
   removeText: { fontSize: fontScale(12.5), color: '#E5484D' },
   draftBox: {
     marginTop: scale(10),
     padding: scale(12),
     borderRadius: scale(12),
-    backgroundColor: '#F7F7FD',
+    backgroundColor: INK_SOFT,
   },
   uploadButton: {
     paddingVertical: scale(12),
     borderRadius: scale(10),
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: '#B9BEDD',
+    borderColor: 'rgba(7,7,78,0.35)',
     alignItems: 'center',
   },
-  uploadText: { fontSize: fontScale(13), color: '#4C5BF3' },
+  uploadText: { fontSize: fontScale(13), color: ACCENT },
   addButton: {
     marginTop: scale(14),
     paddingVertical: scale(11),
     borderRadius: scale(10),
-    backgroundColor: '#EEF0FF',
+    backgroundColor: ACCENT,
     alignItems: 'center',
   },
-  addButtonText: { fontSize: fontScale(13.5), color: '#3340C8' },
+  addButtonText: { fontSize: fontScale(13.5), color: '#FFFFFF' },
   addon: {
     marginTop: scale(16),
     padding: scale(12),
     borderRadius: scale(12),
-    backgroundColor: '#F7F7FD',
+    backgroundColor: INK_SOFT,
   },
-  addonTitle: { fontSize: fontScale(13.5), color: '#171A2B' },
+  addonTitle: { fontSize: fontScale(13.5), color: ACCENT_TEXT },
   addonNote: {
     marginTop: scale(2),
     marginBottom: scale(8),
     fontSize: fontScale(12),
-    color: '#6C7189',
+    color: INK_MUTED,
   },
   errorBox: {
     marginTop: scale(12),
@@ -1597,7 +1618,7 @@ const styles = StyleSheet.create({
   note: {
     marginTop: scale(14),
     fontSize: fontScale(12),
-    color: '#6C7189',
+    color: ON_DARK_MUTED,
     textAlign: 'center',
   },
   footer: {
@@ -1605,21 +1626,21 @@ const styles = StyleSheet.create({
     gap: scale(10),
     paddingHorizontal: scale(16),
     paddingTop: scale(12),
-    backgroundColor: '#F7F7FD',
+    backgroundColor: BACKDROP,
   },
   backButton: {
     paddingHorizontal: scale(20),
     paddingVertical: scale(14),
     borderRadius: scale(12),
     borderWidth: 1,
-    borderColor: '#D8DBEC',
+    borderColor: 'rgba(255,255,255,0.25)',
   },
-  backText: { fontSize: fontScale(14), color: '#3A3F58' },
+  backText: { fontSize: fontScale(14), color: '#FFFFFF' },
   submit: {
     flex: 1,
     paddingVertical: scale(14),
     borderRadius: scale(12),
-    backgroundColor: '#20204A',
+    backgroundColor: ACCENT,
     alignItems: 'center',
   },
   submitOff: { opacity: 0.6 },
@@ -1644,15 +1665,15 @@ const styles = StyleSheet.create({
     marginBottom: scale(8),
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
-    color: '#171A2B',
+    color: ACCENT_TEXT,
   },
   modalRow: {
     paddingVertical: scale(13),
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F1F7',
+    borderBottomColor: 'rgba(7,7,78,0.08)',
   },
-  modalRowText: { fontSize: fontScale(14), color: '#2B2F45' },
-  modalRowTextOn: { color: '#4C5BF3' },
+  modalRowText: { fontSize: fontScale(14), color: ACCENT_TEXT },
+  modalRowTextOn: { color: ACCENT },
 });
 
 export default CreatorProfileSetup;

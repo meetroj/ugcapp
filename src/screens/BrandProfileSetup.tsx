@@ -29,6 +29,7 @@ import {
   type AuthUser,
 } from '../api';
 import { scale, fontScale } from '../theme';
+import { useKeyboardVisible } from '../keyboard';
 
 type Props = {
   token: string;
@@ -57,6 +58,20 @@ const INDUSTRIES = [
 /**
  * Countries offered by the web page's country <select>.
  */
+/**
+ * Same palette as the creator form and the web page it mirrors: a near-black
+ * backdrop, a white card floating on it, periwinkle text inside the card and
+ * white text on the chrome outside it.
+ */
+const BACKDROP = '#0A0A16';
+const ACCENT = '#5B6BFF';
+const ACCENT_TEXT = '#6D7BFF';
+const INK_SOFT = 'rgba(7,7,78,0.05)';
+const INK_BORDER = 'rgba(7,7,78,0.12)';
+const INK_MUTED = 'rgba(7,7,78,0.55)';
+const PLACEHOLDER = 'rgba(7,7,78,0.38)';
+const ON_DARK_MUTED = 'rgba(255,255,255,0.55)';
+
 const COUNTRIES = [
   'United States',
   'United Kingdom',
@@ -164,6 +179,8 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
     business_name: String(session.nickname || ''),
   });
   const insets = useSafeAreaInsets();
+  // The keyboard covers the gesture bar, so the inset would only show as a gap.
+  const keyboardUp = useKeyboardVisible();
   const [logo, setLogo] = useState('');
   const [picker, setPicker] = useState<null | 'industry' | 'country' | 'dial'>(null);
   const [dial, setDial] = useState(DIAL_CODES[0]);
@@ -368,7 +385,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
                   value={form.phone || ''}
                   onChangeText={v => set('phone', v.replace(/\D/g, ''))}
                   placeholder="98765 43210"
-                  placeholderTextColor="#A9ADC2"
+                  placeholderTextColor={PLACEHOLDER}
                   keyboardType="phone-pad"
                   autoCorrect={false}
                 />
@@ -451,7 +468,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           </Text>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
+        <View style={[styles.footer, { paddingBottom: scale(12) + (keyboardUp ? 0 : insets.bottom) }]}>
           <TouchableOpacity
             style={[styles.submit, saving && styles.submitOff]}
             onPress={save}
@@ -588,7 +605,7 @@ function Field({
         value={value}
         onChangeText={onChange}
         placeholder={placeholder || label}
-        placeholderTextColor="#A9ADC2"
+        placeholderTextColor={PLACEHOLDER}
         keyboardType={keyboard || 'default'}
         autoCapitalize={keyboard === 'url' ? 'none' : 'sentences'}
         autoCorrect={false}
@@ -599,7 +616,7 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F7F7FD' },
+  screen: { flex: 1, backgroundColor: BACKDROP },
   phoneRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
   dialButton: {
     flexDirection: 'row',
@@ -609,10 +626,10 @@ const styles = StyleSheet.create({
     paddingVertical: scale(12),
     borderRadius: scale(10),
     borderWidth: 1,
-    borderColor: '#E2E4F0',
-    backgroundColor: '#FFFFFF',
+    borderColor: INK_BORDER,
+    backgroundColor: INK_SOFT,
   },
-  dialText: { fontSize: fontScale(14), color: '#2B2F45' },
+  dialText: { fontSize: fontScale(14), color: ACCENT_TEXT },
   phoneInput: { flex: 1 },
   flex: { flex: 1 },
   header: {
@@ -628,15 +645,15 @@ const styles = StyleSheet.create({
     fontSize: fontScale(19),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
-    color: '#15163F',
+    color: '#FFFFFF',
   },
-  headerSub: { marginTop: scale(2), fontSize: fontScale(11), color: '#777B96' },
+  headerSub: { marginTop: scale(2), fontSize: fontScale(11), color: ON_DARK_MUTED },
   logout: {
     paddingHorizontal: scale(8),
     fontSize: fontScale(12),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
-    color: '#4C5BF3',
+    color: 'rgba(255,255,255,0.78)',
   },
 
   content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(24) },
@@ -646,7 +663,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(16),
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#EDEEF6',
+    borderColor: '#E6E9FF',
   },
 
   logoPicker: {
@@ -654,9 +671,9 @@ const styles = StyleSheet.create({
     width: scale(86),
     height: scale(86),
     borderRadius: scale(43),
-    backgroundColor: '#F4F5FA',
+    backgroundColor: INK_SOFT,
     borderWidth: 1,
-    borderColor: '#E2E4F0',
+    borderColor: INK_BORDER,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -666,7 +683,7 @@ const styles = StyleSheet.create({
     marginTop: scale(8),
     textAlign: 'center',
     fontSize: fontScale(11),
-    color: '#8A8FA8',
+    color: INK_MUTED,
   },
 
   sectionTitle: {
@@ -674,7 +691,7 @@ const styles = StyleSheet.create({
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
-    color: '#15163F',
+    color: ACCENT_TEXT,
   },
 
   field: { marginTop: scale(14) },
@@ -682,7 +699,7 @@ const styles = StyleSheet.create({
     fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
-    color: '#15163F',
+    color: ACCENT_TEXT,
     marginBottom: scale(7),
   },
   required: { color: '#E5484D' },
@@ -691,11 +708,11 @@ const styles = StyleSheet.create({
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#E2E4F0',
-    backgroundColor: '#FBFBFE',
+    backgroundColor: INK_SOFT,
     paddingHorizontal: scale(12),
     paddingVertical: scale(12),
     fontSize: fontScale(15),
-    color: '#15163F',
+    color: ACCENT_TEXT,
   },
   inputMultiline: { minHeight: scale(96), textAlignVertical: 'top' },
   inputError: { borderColor: '#E5484D', backgroundColor: '#FFF6F6' },
@@ -711,8 +728,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  selectText: { fontSize: fontScale(15), color: '#15163F' },
-  selectPlaceholder: { color: '#A9ADC2' },
+  selectText: { fontSize: fontScale(15), color: ACCENT_TEXT },
+  selectPlaceholder: { color: PLACEHOLDER },
 
   modalBackdrop: {
     flex: 1,
@@ -732,7 +749,7 @@ const styles = StyleSheet.create({
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
-    color: '#15163F',
+    color: ACCENT_TEXT,
     marginBottom: scale(6),
   },
   modalRow: {
@@ -743,11 +760,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  modalRowText: { fontSize: fontScale(14), color: '#15163F' },
+  modalRowText: { fontSize: fontScale(14), color: ACCENT_TEXT },
   modalRowTextOn: {
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
-    color: '#4C5BF3',
+    color: ACCENT,
   },
 
   errorBox: {
@@ -767,7 +784,7 @@ const styles = StyleSheet.create({
     marginTop: scale(14),
     fontSize: fontScale(11),
     lineHeight: fontScale(17),
-    color: '#8A8FA8',
+    color: ON_DARK_MUTED,
     textAlign: 'center',
   },
 
@@ -776,7 +793,7 @@ const styles = StyleSheet.create({
     paddingVertical: scale(12),
     borderTopWidth: 1,
     borderTopColor: '#EDEEF6',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: BACKDROP,
   },
   submit: {
     height: scale(50),
