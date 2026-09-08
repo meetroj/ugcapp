@@ -9,6 +9,7 @@ import SplashScreen from './src/screens/SplashScreen';
 import WebShell from './src/screens/WebShell';
 import BrandProfileSetup from './src/screens/BrandProfileSetup';
 import CreatorProfileSetup from './src/screens/CreatorProfileSetup';
+import ApprovalGate from './src/screens/ApprovalGate';
 import { verifySession, type AuthUser } from './src/api';
 import { clearSession, loadSession, saveSession } from './src/session';
 
@@ -40,6 +41,10 @@ function App(): React.JSX.Element {
   // Blocks the first paint so a returning user never sees the login screen
   // flash before the stored session is read back.
   const [restoring, setRestoring] = useState(true);
+  // Set when a creator or brand answers a more-info request: onboarding is
+  // complete, but they need the form back to change what the review team
+  // asked about.
+  const [reopenSetup, setReopenSetup] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +129,7 @@ function App(): React.JSX.Element {
     <SafeAreaProvider>
       {!session ? (
         <AuthFlow onAuthenticated={handleAuthenticated} />
-      ) : session.profile_completed === false &&
+      ) : (session.profile_completed === false || reopenSetup) &&
         session.role === 'business' ? (
         // Onboarding is native for both roles: every native route is gated on
         // profile_completed, so sending a new user to the web form here meant
@@ -132,14 +137,43 @@ function App(): React.JSX.Element {
         <BrandProfileSetup
           token={session.token}
           session={session}
-          onDone={handleProfileComplete}
+          onDone={() => {
+            setReopenSetup(false);
+            handleProfileComplete();
+          }}
           onLogout={handleLogout}
         />
-      ) : session.profile_completed === false && session.role === 'creator' ? (
+      ) : (session.profile_completed === false || reopenSetup) &&
+        session.role === 'creator' ? (
         <CreatorProfileSetup
           token={session.token}
           session={session}
-          onDone={handleProfileComplete}
+          onDone={() => {
+            setReopenSetup(false);
+            handleProfileComplete();
+          }}
+          onLogout={handleLogout}
+        />
+      ) : (session.role === 'creator' || session.role === 'business') &&
+        typeof session.approval_status === 'string' &&
+        session.approval_status !== 'approved' ? (
+        // Mirrors the website's verification gates: BOTH roles wait here until
+        // an admin approves the profile (BrandTopNavLayout gates brands the
+        // same way CreatorDashboard gates creators). Pending shows Check
+        // Status, rejected shows Contact Support, and a more-info request
+        // shows the team's message with an Update My Profile path back into
+        // onboarding.
+        <ApprovalGate
+          kind={session.role === 'business' ? 'business' : 'creator'}
+          status={session.approval_status}
+          review={
+            session.review as {
+              more_info_message?: string;
+              more_info_items?: string[];
+            } | null
+          }
+          onUpdateProfile={() => setReopenSetup(true)}
+          onRefresh={handleProfileComplete}
           onLogout={handleLogout}
         />
       ) : (
