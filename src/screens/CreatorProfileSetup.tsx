@@ -31,6 +31,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
+import Video from 'react-native-video';
 import Svg, {
   Circle,
   Defs,
@@ -425,6 +426,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const [showErrors, setShowErrors] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [videoUploading, setVideoUploading] = useState(false);
   const [picker, setPicker] = useState<null | {
@@ -437,7 +439,14 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
   // Its category is chosen from a list, not typed, so it matches the values
   // brands filter on.
-  const [draftPicker, setDraftPicker] = useState(false);
+  const [catPicker, setCatPicker] = useState<null | 'draft' | 'edit'>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({
+    price: '',
+    delivery: '',
+    category: '',
+    videoUrl: '',
+  });
 
   // Draft for the portfolio item being added.
   const [draft, setDraft] = useState({
@@ -567,7 +576,8 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     }
   }, [set, token]);
 
-  const pickVideo = useCallback(async () => {
+  const pickVideo = useCallback(
+    async (target: 'draft' | 'edit') => {
     const result = await launchImageLibrary({
       mediaType: 'video',
       selectionLimit: 1,
@@ -588,7 +598,11 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         fileName: asset.fileName,
         type: asset.type,
       });
-      setDraft(prev => ({ ...prev, videoUrl: url }));
+      if (target === 'edit') {
+        setEditDraft(prev => ({ ...prev, videoUrl: url }));
+      } else {
+        setDraft(prev => ({ ...prev, videoUrl: url }));
+      }
     } catch (err: any) {
       const message = err?.message || 'Video upload failed.';
       setError(message);
@@ -596,7 +610,29 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     } finally {
       setVideoUploading(false);
     }
-  }, [token]);
+    },
+    [token],
+  );
+
+  const startEdit = useCallback((item: PortfolioItem) => {
+    setEditingId(item.id);
+    setEditDraft({
+      price: item.price,
+      delivery: item.delivery,
+      category: item.category,
+      videoUrl: item.videoUrl,
+    });
+  }, []);
+
+  const saveEdit = useCallback(() => {
+    setData(prev => ({
+      ...prev,
+      portfolio: prev.portfolio.map(item =>
+        item.id === editingId ? { ...item, ...editDraft } : item,
+      ),
+    }));
+    setEditingId(null);
+  }, [editDraft, editingId]);
 
   const addPortfolioItem = useCallback(() => {
     if (!draft.videoUrl) {
@@ -676,13 +712,13 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         receive_briefs: true,
         terms_agreed: true,
       });
-      onDone();
+      setSubmitted(true);
     } catch (err: any) {
       setError(err?.message || 'Failed to submit profile');
     } finally {
       setSaving(false);
     }
-  }, [data, onDone, token]);
+  }, [data, token]);
 
   const next = useCallback(() => {
     if (!stepComplete) {
@@ -736,6 +772,47 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   }, [checksFor]);
 
   const meta = STEP_META[step - 1];
+
+  // The web does not drop a creator into the product the moment they submit —
+  // it swaps the card for a confirmation, because the account is now PENDING
+  // and going straight to the dashboard reads as "approved". Same here: the
+  // shell is only told to move on once this is dismissed.
+  if (submitted) {
+    return (
+      <View style={styles.screen}>
+        <View style={[styles.topbar, { paddingTop: insets.top + scale(8) }]}>
+          <Text style={styles.brand}>
+            UGC<Text style={styles.brandDim}>ad.io</Text>
+          </Text>
+          <View style={styles.topTag}>
+            <Text style={styles.topTagText}>Creator onboarding</Text>
+          </View>
+        </View>
+
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={styles.card}>
+            <View style={styles.thanksMark}>
+              <Text style={styles.thanksTick}>✓</Text>
+            </View>
+            <Text style={styles.thanksTitle}>Application Submitted 🎉</Text>
+            <Text style={styles.thanksText}>
+              Thanks for submitting your creator profile. Our team will review it
+              and get back to you within{' '}
+              <Text style={styles.thanksStrong}>24-48 hours</Text>. Keep an eye
+              on your inbox!
+            </Text>
+            <TouchableOpacity
+              style={styles.submit}
+              onPress={onDone}
+              accessibilityRole="button"
+            >
+              <Text style={styles.submitText}>Continue →</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -1040,78 +1117,211 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 </View>
               ))}
 
-              <Text style={styles.sectionTitle}>Portfolio samples</Text>
+              <Text style={styles.sectionTitle}>Upload your best video</Text>
               <Text style={styles.sectionNote}>
-                Add at least one sample. Brands watch these first.
+                UGC, brand ads, reels, or speaking samples work best.
               </Text>
 
-              {data.portfolio.map(item => (
-                <View key={item.id} style={styles.portfolioRow}>
-                  <Text style={styles.portfolioText} numberOfLines={1}>
-                    {item.category || 'Sample'}
-                    {item.price ? ` · ${item.price}` : ''}
-                    {item.delivery ? ` · ${item.delivery} days` : ''}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => removePortfolioItem(item.id)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Remove sample"
-                  >
-                    <Text style={styles.removeText}>Remove</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
+              {data.portfolio.map(item =>
+                editingId === item.id ? (
+                  // Editing: the same three fields, over the clip being changed.
+                  <View key={item.id} style={styles.pfCard}>
+                    <View style={styles.pfEditRow}>
+                      <VideoThumb uri={item.videoUrl} />
+                      <View style={styles.pfEditFields}>
+                        <TextInput
+                          style={styles.input}
+                          value={editDraft.price}
+                          onChangeText={v =>
+                            setEditDraft(prev => ({
+                              ...prev,
+                              price: onlyDigits(v),
+                            }))
+                          }
+                          placeholder="Price"
+                          placeholderTextColor={PLACEHOLDER}
+                          keyboardType="phone-pad"
+                        />
+                        <TextInput
+                          style={[styles.input, styles.pfEditSpacer]}
+                          value={editDraft.delivery}
+                          onChangeText={v =>
+                            setEditDraft(prev => ({
+                              ...prev,
+                              delivery: onlyDigits(v),
+                            }))
+                          }
+                          placeholder="Delivery time (days)"
+                          placeholderTextColor={PLACEHOLDER}
+                          keyboardType="phone-pad"
+                        />
+                        <TouchableOpacity
+                          style={[styles.select, styles.pfEditSpacer]}
+                          onPress={() => setCatPicker('edit')}
+                          accessibilityRole="button"
+                        >
+                          <Text
+                            style={[
+                              styles.selectText,
+                              !editDraft.category && styles.selectPlaceholder,
+                            ]}
+                          >
+                            {editDraft.category || 'Category'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    <View style={styles.pfActions}>
+                      <TouchableOpacity
+                        style={styles.pfGhost}
+                        onPress={() => pickVideo('edit')}
+                        disabled={videoUploading}
+                        accessibilityRole="button"
+                      >
+                        {videoUploading ? (
+                          <ActivityIndicator color={ACCENT} />
+                        ) : (
+                          <Text style={styles.pfGhostText}>Change video</Text>
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.pfPrimary}
+                        onPress={saveEdit}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.pfPrimaryText}>Save Changes</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.pfActions}>
+                      <TouchableOpacity
+                        onPress={() => removePortfolioItem(item.id)}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.pfDelete}>Delete</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setEditingId(null)}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.pfCancel}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <View key={item.id} style={styles.pfCard}>
+                    <View style={styles.pfEditRow}>
+                      <VideoThumb uri={item.videoUrl} />
+                      <View style={styles.pfEditFields}>
+                        <Text style={styles.pfTitle}>Portfolio work</Text>
+                        <View style={styles.pfMeta}>
+                          <Text style={styles.pfMetaText}>
+                            {[
+                              item.price,
+                              item.delivery ? `${item.delivery} days` : '',
+                              item.category,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ') || 'Sample'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.pfActions}>
+                      <Text style={styles.pfAdded}>✓ Added</Text>
+                      <TouchableOpacity
+                        style={styles.pfPrimary}
+                        onPress={() => startEdit(item)}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.pfPrimaryText}>Modify</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity
+                      onPress={() => removePortfolioItem(item.id)}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[styles.pfDelete, styles.pfDeleteWide]}>
+                        Delete
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ),
+              )}
+
+              {data.portfolio.length > 0 && (
+                <Text style={styles.pfAddMore}>+ Add More Videos</Text>
+              )}
 
               <View
-                style={[
-                  styles.draftBox,
-                  bad('portfolio') && styles.inputError,
-                ]}
+                style={[styles.draftBox, bad('portfolio') && styles.inputError]}
               >
+                {/* The web calls this a drag & drop zone; on a phone it is a
+                    tap target, so it says so. */}
                 <TouchableOpacity
-                  style={styles.uploadButton}
-                  onPress={pickVideo}
+                  style={styles.dropZone}
+                  onPress={() => pickVideo('draft')}
                   disabled={videoUploading}
                   accessibilityRole="button"
+                  accessibilityLabel="Select a video"
                 >
                   {videoUploading ? (
-                    <ActivityIndicator color="#5B5CF6" />
+                    <ActivityIndicator color={ACCENT} />
+                  ) : draft.videoUrl ? (
+                    <VideoThumb uri={draft.videoUrl} wide />
                   ) : (
-                    <Text style={styles.uploadText}>
-                      {draft.videoUrl ? 'Video ready ✓' : 'Upload a video'}
-                    </Text>
+                    <>
+                      <UploadCloud />
+                      <Text style={styles.dropZoneText}>Tap to select video</Text>
+                    </>
                   )}
                 </TouchableOpacity>
-                <Field
-                  label="Price"
+                <Text style={styles.uploadHint}>Upload (max 100 MB)</Text>
+
+                <TextInput
+                  style={[styles.input, styles.pfEditSpacer]}
                   value={draft.price}
-                  onChange={v =>
+                  onChangeText={v =>
                     setDraft(prev => ({ ...prev, price: onlyDigits(v) }))
                   }
-                  placeholder="2000"
-                  keyboard="phone-pad"
+                  placeholder="Price"
+                  placeholderTextColor={PLACEHOLDER}
+                  keyboardType="phone-pad"
                 />
-                <Select
-                  label="Category"
-                  value={draft.category}
-                  placeholder="Select a category"
-                  onPress={() => setDraftPicker(true)}
-                />
-                <Field
-                  label="Delivery (days)"
+                <TextInput
+                  style={[styles.input, styles.pfEditSpacer]}
                   value={draft.delivery}
-                  onChange={v =>
+                  onChangeText={v =>
                     setDraft(prev => ({ ...prev, delivery: onlyDigits(v) }))
                   }
-                  placeholder="5"
-                  keyboard="phone-pad"
+                  placeholder="Delivery time (days)"
+                  placeholderTextColor={PLACEHOLDER}
+                  keyboardType="phone-pad"
                 />
+                <TouchableOpacity
+                  style={[styles.select, styles.pfEditSpacer]}
+                  onPress={() => setCatPicker('draft')}
+                  accessibilityRole="button"
+                >
+                  <Text
+                    style={[
+                      styles.selectText,
+                      !draft.category && styles.selectPlaceholder,
+                    ]}
+                  >
+                    {draft.category || 'Category'}
+                  </Text>
+                </TouchableOpacity>
+
                 <TouchableOpacity
                   style={styles.addButton}
                   onPress={addPortfolioItem}
                   accessibilityRole="button"
                 >
-                  <Text style={styles.addButtonText}>Add sample</Text>
+                  <Text style={styles.addButtonText}>Add to Profile</Text>
                 </TouchableOpacity>
               </View>
 
@@ -1403,28 +1613,34 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       {/* The portfolio item's category. Its own sheet because the draft lives
           outside `data`, which every other picker writes into. */}
       <Modal
-        visible={draftPicker}
+        visible={catPicker !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setDraftPicker(false)}
+        onRequestClose={() => setCatPicker(null)}
       >
         <TouchableOpacity
           style={styles.modalBackdrop}
           activeOpacity={1}
-          onPress={() => setDraftPicker(false)}
+          onPress={() => setCatPicker(null)}
         >
           <View style={styles.modalSheet}>
             <Text style={styles.modalTitle}>Select a category</Text>
             <ScrollView>
               {NICHE_CATEGORIES.map(item => {
-                const active = draft.category === item.label;
+                const current =
+                  catPicker === 'edit' ? editDraft.category : draft.category;
+                const active = current === item.label;
                 return (
                   <TouchableOpacity
                     key={item.value}
                     style={styles.modalRow}
                     onPress={() => {
-                      setDraft(prev => ({ ...prev, category: item.label }));
-                      setDraftPicker(false);
+                      if (catPicker === 'edit') {
+                        setEditDraft(prev => ({ ...prev, category: item.label }));
+                      } else {
+                        setDraft(prev => ({ ...prev, category: item.label }));
+                      }
+                      setCatPicker(null);
                     }}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
@@ -1526,6 +1742,54 @@ function PlatformBadge({ platform }: { platform: string }) {
           />
         </>
       )}
+    </Svg>
+  );
+}
+
+/**
+ * First frame of an uploaded clip, used as its thumbnail. react-native-video
+ * renders a paused frame, which is all this needs — there is nothing to play
+ * here, the tile only has to show which clip the row is about.
+ */
+function VideoThumb({ uri, wide }: { uri: string; wide?: boolean }) {
+  if (!uri) {
+    return <View style={[styles.thumb, wide && styles.thumbWide]} />;
+  }
+  return (
+    <View style={[styles.thumb, wide && styles.thumbWide]}>
+      <Video
+        source={{ uri: mediaUrl(uri) }}
+        style={styles.thumbVideo}
+        paused
+        muted
+        resizeMode="cover"
+        repeat={false}
+      />
+      <View style={styles.thumbPlay}>
+        <Text style={styles.thumbPlayGlyph}>▶</Text>
+      </View>
+    </View>
+  );
+}
+
+/** The upload-cloud glyph the web puts in the middle of its drop zone. */
+function UploadCloud() {
+  return (
+    <Svg width={scale(30)} height={scale(30)} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M6.5 18a4 4 0 0 1-.4-7.98 5.5 5.5 0 0 1 10.7-1.2A4.25 4.25 0 0 1 17.5 18"
+        stroke={ACCENT}
+        strokeWidth={1.7}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M12 21v-8m0 0l-2.6 2.6M12 13l2.6 2.6"
+        stroke={ACCENT}
+        strokeWidth={1.7}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Svg>
   );
 }
@@ -1718,6 +1982,132 @@ function Chips({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: BACKDROP },
+  thanksMark: {
+    alignSelf: 'center',
+    width: scale(64),
+    height: scale(64),
+    borderRadius: scale(32),
+    backgroundColor: ACCENT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: scale(14),
+  },
+  thanksTick: { fontSize: fontScale(30), color: '#FFFFFF' },
+  thanksTitle: {
+    textAlign: 'center',
+    fontSize: fontScale(20),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
+  thanksText: {
+    marginTop: scale(10),
+    marginBottom: scale(20),
+    textAlign: 'center',
+    fontSize: fontScale(13),
+    lineHeight: fontScale(20),
+    color: INK_MUTED,
+  },
+  thanksStrong: { color: '#FFFFFF' },
+  thumb: {
+    width: scale(84),
+    height: scale(112),
+    borderRadius: scale(10),
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbWide: { width: '100%', height: scale(150) },
+  thumbVideo: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  thumbPlay: {
+    width: scale(28),
+    height: scale(28),
+    borderRadius: scale(14),
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbPlayGlyph: { fontSize: fontScale(11), color: '#FFFFFF' },
+  pfCard: {
+    marginTop: scale(12),
+    padding: scale(12),
+    borderRadius: scale(14),
+    borderWidth: 1,
+    borderColor: INK_BORDER,
+    backgroundColor: INK_SOFT,
+  },
+  pfEditRow: { flexDirection: 'row', gap: scale(12) },
+  pfEditFields: { flex: 1 },
+  pfEditSpacer: { marginTop: scale(10) },
+  pfTitle: {
+    fontSize: fontScale(14.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
+  pfMeta: {
+    marginTop: scale(8),
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(10),
+    borderRadius: scale(10),
+    borderWidth: 1,
+    borderColor: INK_BORDER,
+  },
+  pfMetaText: { fontSize: fontScale(13), color: '#FFFFFF' },
+  pfActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: scale(10),
+    marginTop: scale(12),
+  },
+  pfAdded: { fontSize: fontScale(13), color: '#34D399' },
+  pfPrimary: {
+    paddingHorizontal: scale(20),
+    paddingVertical: scale(10),
+    borderRadius: scale(999),
+    backgroundColor: ACCENT,
+  },
+  pfPrimaryText: { fontSize: fontScale(13.5), color: '#FFFFFF' },
+  pfGhost: {
+    paddingHorizontal: scale(18),
+    paddingVertical: scale(10),
+    borderRadius: scale(999),
+    borderWidth: 1,
+    borderColor: INK_BORDER,
+  },
+  pfGhostText: { fontSize: fontScale(13), color: ACCENT },
+  pfDelete: { fontSize: fontScale(13), color: '#F87171' },
+  pfDeleteWide: { marginTop: scale(12), textAlign: 'center' },
+  pfCancel: { fontSize: fontScale(13), color: INK_MUTED },
+  pfAddMore: {
+    marginTop: scale(16),
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
+  dropZone: {
+    paddingVertical: scale(26),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: scale(8),
+  },
+  dropZoneText: { fontSize: fontScale(13), color: '#FFFFFF' },
+  uploadHint: {
+    marginTop: scale(10),
+    textAlign: 'center',
+    fontSize: fontScale(12),
+    color: INK_MUTED,
+  },
   flex: { flex: 1 },
   topbar: {
     flexDirection: 'row',
