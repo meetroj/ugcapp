@@ -414,7 +414,9 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const [picker, setPicker] = useState<null | {
     field: keyof Data;
     title: string;
-    options: string[];
+    items: { label: string; value: string }[];
+    /** Multi pickers toggle and stay open; single ones close on choice. */
+    multi?: boolean;
   }>(null);
 
   // Draft for the portfolio item being added.
@@ -676,7 +678,20 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
   const openPicker = useCallback(
     (field: keyof Data, title: string, options: string[]) =>
-      setPicker({ field, title, options }),
+      setPicker({
+        field,
+        title,
+        items: options.map(option => ({ label: option, value: option })),
+      }),
+    [],
+  );
+
+  const openMultiPicker = useCallback(
+    (
+      field: keyof Data,
+      title: string,
+      items: { label: string; value: string }[],
+    ) => setPicker({ field, title, items, multi: true }),
     [],
   );
 
@@ -778,14 +793,19 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 error={bad('gender')}
               />
 
-              <Chips
+              <MultiSelect
                 label="How do you make content?"
-                hint="Pick at least one."
                 required
-                options={CONTENT_STYLES.map(item => item.label)}
-                values={CONTENT_STYLES.map(item => item.value)}
+                placeholder="Select content styles"
+                items={CONTENT_STYLES}
                 selected={data.contentStyles}
-                onPress={value => toggle('contentStyles', value)}
+                onPress={() =>
+                  openMultiPicker(
+                    'contentStyles',
+                    'How do you make content?',
+                    CONTENT_STYLES,
+                  )
+                }
                 error={bad('contentStyles')}
               />
               {data.contentStyles.includes('custom') && (
@@ -799,14 +819,19 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 />
               )}
 
-              <Chips
+              <MultiSelect
                 label="What do you make content about?"
-                hint="Pick at least one."
                 required
-                options={NICHE_CATEGORIES.map(item => item.label)}
-                values={NICHE_CATEGORIES.map(item => item.value)}
+                placeholder="Select categories"
+                items={NICHE_CATEGORIES}
                 selected={data.contentCategories}
-                onPress={value => toggle('contentCategories', value)}
+                onPress={() =>
+                  openMultiPicker(
+                    'contentCategories',
+                    'What do you make content about?',
+                    NICHE_CATEGORIES,
+                  )
+                }
                 error={bad('contentCategories')}
               />
 
@@ -825,14 +850,6 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 selected={data.skinTone ? [data.skinTone] : []}
                 onPress={value => set('skinTone', value)}
                 error={bad('skinTone')}
-              />
-
-              <Field
-                label="Short bio"
-                multiline
-                value={data.bio}
-                onChange={v => set('bio', v)}
-                placeholder="Tell brands about yourself, your style and expertise..."
               />
             </View>
           )}
@@ -1251,32 +1268,82 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
           onPress={() => setPicker(null)}
         >
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>{picker?.title}</Text>
-            <ScrollView>
-              {(picker?.options || []).map(option => {
-                const active =
-                  picker && (data as any)[picker.field] === option;
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>{picker?.title}</Text>
+              {/* A multi picker has no closing tap of its own, so it needs a
+                  way out that is not "dismiss by tapping the backdrop". */}
+              {picker?.multi && (
+                <TouchableOpacity
+                  onPress={() => setPicker(null)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.modalDone}>Done</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {/* Mirrors the web's toggle-all control: one tap takes every option,
+                a second clears them. */}
+            {picker?.multi &&
+              (() => {
+                const current = (data as any)[picker.field];
+                const chosen = Array.isArray(current) ? current : [];
+                const all = chosen.length === picker.items.length;
                 return (
                   <TouchableOpacity
-                    key={option}
+                    style={styles.modalAllRow}
+                    onPress={() =>
+                      set(
+                        picker.field,
+                        (all
+                          ? []
+                          : picker.items.map(item => item.value)) as never,
+                      )
+                    }
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.modalAllText}>
+                      {all ? 'Clear all' : 'Select all'}
+                    </Text>
+                    <Text style={styles.selectCount}>
+                      {chosen.length} of {picker.items.length}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })()}
+
+            <ScrollView>
+              {(picker?.items || []).map(item => {
+                if (!picker) {
+                  return null;
+                }
+                const current = (data as any)[picker.field];
+                const active = picker.multi
+                  ? Array.isArray(current) && current.includes(item.value)
+                  : current === item.value;
+                return (
+                  <TouchableOpacity
+                    key={item.value}
                     style={styles.modalRow}
                     onPress={() => {
-                      if (picker) {
-                        // Changing the state invalidates the chosen city.
-                        if (picker.field === 'state') {
-                          setData(prev => ({
-                            ...prev,
-                            state: option,
-                            city: '',
-                          }));
-                        } else {
-                          set(picker.field, option as never);
-                        }
+                      if (picker.multi) {
+                        // Toggle and stay open — picking several is the point.
+                        toggle(picker.field as any, item.value);
+                        return;
+                      }
+                      // Changing the state invalidates the chosen city.
+                      if (picker.field === 'state') {
+                        setData(prev => ({
+                          ...prev,
+                          state: item.value,
+                          city: '',
+                        }));
+                      } else {
+                        set(picker.field, item.value as never);
                       }
                       setPicker(null);
                     }}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: !!active }}
+                    accessibilityState={{ selected: active }}
                   >
                     <Text
                       style={[
@@ -1284,8 +1351,9 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                         active && styles.modalRowTextOn,
                       ]}
                     >
-                      {option}
+                      {item.label}
                     </Text>
+                    {active && <Text style={styles.modalTick}>✓</Text>}
                   </TouchableOpacity>
                 );
               })}
@@ -1373,6 +1441,59 @@ function Select({
           {value || placeholder}
         </Text>
       </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * Dropdown for the two content pickers. They are multi-select, so the row
+ * summarises what is chosen rather than showing a single value, and the sheet
+ * it opens keeps toggling until dismissed. A long chip grid pushed the rest of
+ * the step off screen; this keeps the step scannable.
+ */
+function MultiSelect({
+  label,
+  placeholder,
+  items,
+  selected,
+  onPress,
+  required,
+  error,
+}: {
+  label: string;
+  placeholder: string;
+  items: { label: string; value: string }[];
+  selected: string[];
+  onPress: () => void;
+  required?: boolean;
+  error?: boolean;
+}) {
+  const chosen = items
+    .filter(item => selected.includes(item.value))
+    .map(item => item.label);
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>
+        {label}
+        {required ? <Text style={styles.required}> *</Text> : null}
+      </Text>
+      <TouchableOpacity
+        style={[styles.select, error && styles.inputError]}
+        onPress={onPress}
+        accessibilityRole="button"
+      >
+        <Text
+          style={[styles.selectText, !chosen.length && styles.selectPlaceholder]}
+          numberOfLines={1}
+        >
+          {chosen.length ? chosen.join(', ') : placeholder}
+        </Text>
+      </TouchableOpacity>
+      {!!chosen.length && (
+        <Text style={styles.selectCount}>
+          {chosen.length} of {items.length} selected
+        </Text>
+      )}
     </View>
   );
 }
@@ -1543,6 +1664,11 @@ const styles = StyleSheet.create({
   },
   selectText: { fontSize: fontScale(14), color: ACCENT_TEXT },
   selectPlaceholder: { color: PLACEHOLDER },
+  selectCount: {
+    marginTop: scale(6),
+    fontSize: fontScale(11.5),
+    color: INK_MUTED,
+  },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   chipRowError: {
     borderWidth: 1,
@@ -1661,6 +1787,23 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(18),
     padding: scale(16),
   },
+  modalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: scale(12),
+  },
+  modalDone: { fontSize: fontScale(14), color: ACCENT },
+  modalAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: scale(11),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(7,7,78,0.08)',
+  },
+  modalAllText: { fontSize: fontScale(13.5), color: ACCENT },
+  modalTick: { fontSize: fontScale(14), color: ACCENT },
   modalTitle: {
     marginBottom: scale(8),
     fontSize: fontScale(15),
@@ -1668,6 +1811,10 @@ const styles = StyleSheet.create({
     color: ACCENT_TEXT,
   },
   modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: scale(12),
     paddingVertical: scale(13),
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(7,7,78,0.08)',
