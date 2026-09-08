@@ -19,6 +19,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -558,7 +559,9 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       );
       set('profile_picture', url);
     } catch (err: any) {
-      setError(err?.message || 'Photo upload failed.');
+      const message = err?.message || 'Photo upload failed.';
+      setError(message);
+      Alert.alert('Photo upload failed', message);
     } finally {
       setPhotoUploading(false);
     }
@@ -587,7 +590,9 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       });
       setDraft(prev => ({ ...prev, videoUrl: url }));
     } catch (err: any) {
-      setError(err?.message || 'Video upload failed.');
+      const message = err?.message || 'Video upload failed.';
+      setError(message);
+      Alert.alert('Video upload failed', message);
     } finally {
       setVideoUploading(false);
     }
@@ -595,7 +600,10 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
   const addPortfolioItem = useCallback(() => {
     if (!draft.videoUrl) {
-      setError('Upload the video before adding the sample.');
+      const message =
+        'Upload the video first — the sample is the video, so there is nothing to add without it.';
+      setError(message);
+      Alert.alert('No video yet', message);
       return;
     }
     setError('');
