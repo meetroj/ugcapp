@@ -47,20 +47,27 @@ type Props = {
 };
 
 /**
- * The web page's palette: a near-black backdrop with the form card floating on
- * top in white, periwinkle text inside it, and the chrome outside the card
- * (title, progress, footer) in white. Kept as named constants because several
- * of them repeat across a dozen style rules.
+ * The web page's dark navy theme. The backdrop is near-black, the form card is
+ * a translucent navy panel on top of it (rgba(18,18,26,0.72) over the backdrop,
+ * flattened here since RN has no backdrop blur), and everything on the card is
+ * white or a white alpha. Periwinkle is the accent for the primary button, the
+ * step badge, selected chips and the upload icons.
  */
 const BACKDROP = '#0A0A16';
-const ACCENT = '#5B6BFF';
-const ACCENT_TEXT = '#6D7BFF';
-/** Tint used for input fills and chips — the web's rgba(7,7,78,.045). */
-const INK_SOFT = 'rgba(7,7,78,0.05)';
-const INK_BORDER = 'rgba(7,7,78,0.12)';
-const INK_MUTED = 'rgba(7,7,78,0.55)';
-const PLACEHOLDER = 'rgba(7,7,78,0.38)';
-const ON_DARK_MUTED = 'rgba(255,255,255,0.55)';
+const CARD = '#13131D';
+const CARD_BORDER = 'rgba(255,255,255,0.10)';
+const ACCENT = '#6D7BFF';
+/** Text on the card: labels and headings are plain white. */
+const ACCENT_TEXT = '#FFFFFF';
+/** Input and chip fill / hairline on the card. */
+const INK_SOFT = 'rgba(255,255,255,0.04)';
+const INK_BORDER = 'rgba(255,255,255,0.14)';
+const INK_MUTED = 'rgba(255,255,255,0.6)';
+const PLACEHOLDER = 'rgba(255,255,255,0.4)';
+const ON_DARK_MUTED = 'rgba(255,255,255,0.66)';
+/** Selected chip: a tinted wash rather than a solid fill. */
+const CHIP_ON = 'rgba(109,123,255,0.20)';
+const SHEET = '#17171F';
 
 const STEP_META = [
   {
@@ -476,27 +483,25 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   );
 
   /** Which required fields on the current step are still incomplete. */
-  const checks = useMemo((): Record<string, boolean> => {
-    if (step === 1) {
+  const checksFor = useCallback(
+    (which: number): Record<string, boolean> => {
+    if (which === 1) {
       const base: Record<string, boolean> = Object.fromEntries(
         STEP1_FIELDS.map(key => [key, isFilled((data as any)[key])]),
       );
       // Both pickers need at least one, and a "custom" style needs its text.
-      base.contentStyles =
-        data.contentStyles.length > 0 &&
-        (!data.contentStyles.includes('custom') ||
-          isFilled(data.customCategory));
+      base.contentStyles = data.contentStyles.length > 0;
       base.contentCategories = data.contentCategories.length > 0;
       return base;
     }
-    if (step === 2) {
+    if (which === 2) {
       const base: Record<string, boolean> = Object.fromEntries(
         STEP2_FIELDS.map(key => [key, isFilled((data as any)[key])]),
       );
       base.phone = base.phone && phoneValid(data.phone, data.dialCode);
       return base;
     }
-    if (step === 3) {
+    if (which === 3) {
       return {
         skills: data.skills.length > 0,
         profileLink: PLATFORMS.some(p => isFilled(data.links[p.key])),
@@ -508,7 +513,11 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     }
     // The web leaves the last step entirely optional.
     return {};
-  }, [data, step]);
+    },
+    [data],
+  );
+
+  const checks = useMemo(() => checksFor(step), [checksFor, step]);
 
   const stepComplete = Object.values(checks).every(Boolean);
   const bad = (key: string) => showErrors && checks[key] === false;
@@ -695,14 +704,28 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     [],
   );
 
+  const percent = useMemo(() => {
+    let credit = 1;
+    for (let s = 1; s <= TOTAL_STEPS; s += 1) {
+      const values = Object.values(checksFor(s));
+      if (values.length) {
+        credit += values.filter(Boolean).length / values.length;
+      }
+    }
+    return Math.round((credit / (TOTAL_STEPS + 1)) * 100);
+  }, [checksFor]);
+
   const meta = STEP_META[step - 1];
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>{meta.title}</Text>
-          <Text style={styles.headerSub}>{meta.sub}</Text>
+      {/* Topbar: wordmark + the role tag, exactly as the web page opens. */}
+      <View style={[styles.topbar, { paddingTop: insets.top + scale(8) }]}>
+        <Text style={styles.brand}>
+          UGC<Text style={styles.brandDim}>ad.io</Text>
+        </Text>
+        <View style={styles.topTag}>
+          <Text style={styles.topTagText}>Creator onboarding</Text>
         </View>
         {!!onLogout && (
           <TouchableOpacity onPress={onLogout} accessibilityRole="button">
@@ -711,18 +734,15 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         )}
       </View>
 
-      {/* Sign Up is the already-done step 1, so the label runs 2..5. */}
+      {/* Field-granular completion, like the web: sign-up counts as one whole
+          step and every filled field nudges the bar up inside the current one. */}
       <View style={styles.progressRow}>
         <Text style={styles.progressText}>
-          Step {step + 1} of {TOTAL_STEPS + 1}
+          Your Profile is <Text style={styles.progressPct}>{percent}%</Text>{' '}
+          Complete
         </Text>
         <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${((step + 1) / (TOTAL_STEPS + 1)) * 100}%` },
-            ]}
-          />
+          <View style={[styles.progressFill, { width: `${percent}%` }]} />
         </View>
       </View>
 
@@ -734,6 +754,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         >
           {step === 1 && (
             <View style={styles.card}>
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepBadgeText}>
+                  Step {step + 1} of {TOTAL_STEPS + 1}
+                </Text>
+              </View>
+              <Text style={styles.cardTitle}>{meta.title}</Text>
               <TouchableOpacity
                 style={styles.photoPicker}
                 onPress={pickPhoto}
@@ -808,16 +834,6 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 }
                 error={bad('contentStyles')}
               />
-              {data.contentStyles.includes('custom') && (
-                <Field
-                  label="Describe your custom style"
-                  required
-                  value={data.customCategory}
-                  onChange={v => set('customCategory', v)}
-                  placeholder="e.g., Stop-motion product films"
-                  error={bad('contentStyles')}
-                />
-              )}
 
               <MultiSelect
                 label="What do you make content about?"
@@ -856,6 +872,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
           {step === 2 && (
             <View style={styles.card}>
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepBadgeText}>
+                  Step {step + 1} of {TOTAL_STEPS + 1}
+                </Text>
+              </View>
+              <Text style={styles.cardTitle}>{meta.title}</Text>
               <View style={styles.field}>
                 <Text style={styles.fieldLabel}>
                   Phone number<Text style={styles.required}> *</Text>
@@ -955,6 +977,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
           {step === 3 && (
             <View style={styles.card}>
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepBadgeText}>
+                  Step {step + 1} of {TOTAL_STEPS + 1}
+                </Text>
+              </View>
+              <Text style={styles.cardTitle}>{meta.title}</Text>
               <Chips
                 label="Your skills"
                 hint="Pick at least one."
@@ -1143,6 +1171,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
           {step === 4 && (
             <View style={styles.card}>
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepBadgeText}>
+                  Step {step + 1} of {TOTAL_STEPS + 1}
+                </Text>
+              </View>
+              <Text style={styles.cardTitle}>{meta.title}</Text>
               <Chips
                 label="Core setup"
                 hint="Everything you can shoot with."
@@ -1236,7 +1270,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               disabled={saving}
               accessibilityRole="button"
             >
-              <Text style={styles.backText}>Back</Text>
+              <Text style={styles.backText}>← Go Back</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -1249,7 +1283,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={styles.submitText}>
-                {step < TOTAL_STEPS ? 'Proceed' : 'Submit Application'}
+                {step < TOTAL_STEPS ? 'Proceed →' : 'Submit Application'}
               </Text>
             )}
           </TouchableOpacity>
@@ -1554,6 +1588,49 @@ function Chips({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: BACKDROP },
   flex: { flex: 1 },
+  topbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+    paddingHorizontal: scale(16),
+    paddingBottom: scale(12),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  brand: {
+    fontSize: fontScale(19),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: ACCENT,
+  },
+  brandDim: { color: '#FFFFFF' },
+  topTag: {
+    marginLeft: 'auto',
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(5),
+    borderRadius: scale(999),
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  topTagText: { fontSize: fontScale(11.5), color: INK_MUTED },
+  progressPct: { color: '#FFFFFF', fontFamily: 'ReadexPro-SemiBold' },
+  stepBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: scale(11),
+    paddingVertical: scale(4),
+    borderRadius: scale(999),
+    backgroundColor: ACCENT,
+  },
+  stepBadgeText: {
+    fontSize: fontScale(10.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
+  cardTitle: {
+    marginTop: scale(11),
+    fontSize: fontScale(21),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
   header: {
     paddingHorizontal: scale(16),
     paddingTop: scale(12),
@@ -1575,7 +1652,7 @@ const styles = StyleSheet.create({
   },
   logout: { fontSize: fontScale(13), color: 'rgba(255,255,255,0.78)' },
   progressRow: { paddingHorizontal: scale(16), paddingBottom: scale(10) },
-  progressText: { fontSize: fontScale(12), color: ON_DARK_MUTED },
+  progressText: { fontSize: fontScale(13), color: '#FFFFFF' },
   progressTrack: {
     marginTop: scale(6),
     height: scale(4),
@@ -1586,11 +1663,11 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: ACCENT },
   content: { paddingHorizontal: scale(16), paddingBottom: scale(24) },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: CARD,
     borderRadius: scale(16),
     padding: scale(16),
     borderWidth: 1,
-    borderColor: '#E6E9FF',
+    borderColor: CARD_BORDER,
   },
   photoPicker: {
     alignSelf: 'center',
@@ -1684,7 +1761,7 @@ const styles = StyleSheet.create({
     borderColor: INK_BORDER,
     backgroundColor: INK_SOFT,
   },
-  chipOn: { borderColor: ACCENT, backgroundColor: ACCENT },
+  chipOn: { borderColor: ACCENT, backgroundColor: CHIP_ON },
   chipText: { fontSize: fontScale(12.5), color: ACCENT_TEXT },
   chipTextOn: { color: '#FFFFFF' },
   portfolioRow: {
@@ -1757,7 +1834,7 @@ const styles = StyleSheet.create({
   backButton: {
     paddingHorizontal: scale(20),
     paddingVertical: scale(14),
-    borderRadius: scale(12),
+    borderRadius: scale(999),
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.25)',
   },
@@ -1765,7 +1842,7 @@ const styles = StyleSheet.create({
   submit: {
     flex: 1,
     paddingVertical: scale(14),
-    borderRadius: scale(12),
+    borderRadius: scale(999),
     backgroundColor: ACCENT,
     alignItems: 'center',
   },
@@ -1782,7 +1859,9 @@ const styles = StyleSheet.create({
   },
   modalSheet: {
     maxHeight: '70%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: SHEET,
+    borderWidth: 1,
+    borderColor: INK_BORDER,
     borderTopLeftRadius: scale(18),
     borderTopRightRadius: scale(18),
     padding: scale(16),

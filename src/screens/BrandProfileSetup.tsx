@@ -59,18 +59,25 @@ const INDUSTRIES = [
  * Countries offered by the web page's country <select>.
  */
 /**
- * Same palette as the creator form and the web page it mirrors: a near-black
- * backdrop, a white card floating on it, periwinkle text inside the card and
- * white text on the chrome outside it.
+ * The web page's dark navy theme. The backdrop is near-black, the form card is
+ * a translucent navy panel on top of it (rgba(18,18,26,0.72) over the backdrop,
+ * flattened here since RN has no backdrop blur), and everything on the card is
+ * white or a white alpha. Periwinkle is the accent for the primary button, the
+ * step badge, selected chips and the upload icons.
  */
 const BACKDROP = '#0A0A16';
-const ACCENT = '#5B6BFF';
-const ACCENT_TEXT = '#6D7BFF';
-const INK_SOFT = 'rgba(7,7,78,0.05)';
-const INK_BORDER = 'rgba(7,7,78,0.12)';
-const INK_MUTED = 'rgba(7,7,78,0.55)';
-const PLACEHOLDER = 'rgba(7,7,78,0.38)';
-const ON_DARK_MUTED = 'rgba(255,255,255,0.55)';
+const CARD = '#13131D';
+const CARD_BORDER = 'rgba(255,255,255,0.10)';
+const ACCENT = '#6D7BFF';
+/** Text on the card: labels and headings are plain white. */
+const ACCENT_TEXT = '#FFFFFF';
+/** Input and chip fill / hairline on the card. */
+const INK_SOFT = 'rgba(255,255,255,0.04)';
+const INK_BORDER = 'rgba(255,255,255,0.14)';
+const INK_MUTED = 'rgba(255,255,255,0.6)';
+const PLACEHOLDER = 'rgba(255,255,255,0.4)';
+const ON_DARK_MUTED = 'rgba(255,255,255,0.66)';
+const SHEET = '#17171F';
 
 const COUNTRIES = [
   'United States',
@@ -283,12 +290,12 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Complete your business profile</Text>
-          <Text style={styles.headerSub}>
-            Tell creators about your brand and products
-          </Text>
+      <View style={[styles.topbar, { paddingTop: insets.top + scale(8) }]}>
+        <Text style={styles.brand}>
+          UGC<Text style={styles.brandDim}>ad.io</Text>
+        </Text>
+        <View style={styles.topTag}>
+          <Text style={styles.topTagText}>Brand onboarding</Text>
         </View>
         {!!onLogout && (
           <TouchableOpacity onPress={onLogout} accessibilityRole="button">
@@ -307,6 +314,9 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.card}>
+            <Text style={styles.cardTitle}>
+              Complete your business profile
+            </Text>
             <TouchableOpacity
               style={styles.logoPicker}
               onPress={pickLogo}
@@ -632,6 +642,36 @@ const styles = StyleSheet.create({
   dialText: { fontSize: fontScale(14), color: ACCENT_TEXT },
   phoneInput: { flex: 1 },
   flex: { flex: 1 },
+  topbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+    paddingHorizontal: scale(16),
+    paddingBottom: scale(12),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  brand: {
+    fontSize: fontScale(19),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: ACCENT,
+  },
+  brandDim: { color: '#FFFFFF' },
+  topTag: {
+    marginLeft: 'auto',
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(5),
+    borderRadius: scale(999),
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  topTagText: { fontSize: fontScale(11.5), color: INK_MUTED },
+  cardTitle: {
+    marginBottom: scale(4),
+    fontSize: fontScale(20),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#FFFFFF',
+  },
   header: {
     paddingHorizontal: scale(16),
     paddingTop: scale(12),
@@ -661,9 +701,9 @@ const styles = StyleSheet.create({
     padding: scale(16),
     paddingTop: scale(18),
     borderRadius: scale(16),
-    backgroundColor: '#FFFFFF',
+    backgroundColor: CARD,
     borderWidth: 1,
-    borderColor: '#E6E9FF',
+    borderColor: CARD_BORDER,
   },
 
   logoPicker: {
@@ -743,7 +783,9 @@ const styles = StyleSheet.create({
     paddingBottom: scale(24),
     borderTopLeftRadius: scale(20),
     borderTopRightRadius: scale(20),
-    backgroundColor: '#FFFFFF',
+    backgroundColor: SHEET,
+    borderWidth: 1,
+    borderColor: INK_BORDER,
   },
   modalTitle: {
     fontSize: fontScale(15),
