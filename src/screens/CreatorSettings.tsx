@@ -26,7 +26,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Modal,
-  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -644,7 +643,7 @@ function CreatorSettings({ token, onBack }: Props) {
       <ScreenHeader title="Account Settings" onBack={onBack} />
       <KeyboardAvoidingView
         style={styles.sheet}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         {loading ? (
           <View style={styles.content}>

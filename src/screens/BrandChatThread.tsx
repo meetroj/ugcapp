@@ -659,7 +659,7 @@ function BrandChatThread({
           // 'height' measured a frame that never changed and lifted nothing,
           // leaving the keyboard over the composer and the action chips.
           // The composer block pads itself by the real keyboard height below.
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
           keyboardVerticalOffset={0}
         >
           <ScrollView

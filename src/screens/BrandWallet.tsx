@@ -10,7 +10,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -200,7 +199,7 @@ function BrandWallet({
         ) : (
           <KeyboardAvoidingView
             style={styles.flexOne}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
           >
           <ScrollView
             contentContainerStyle={styles.content}

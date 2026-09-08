@@ -17,7 +17,6 @@ import React, { useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Linking,
-  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -97,7 +96,7 @@ function KycSubmit({ onBack }: Props) {
       <ScreenHeader title="KYC Details" onBack={onBack} />
       <KeyboardAvoidingView
         style={styles.sheet}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <ScrollView
           contentContainerStyle={styles.content}

@@ -12,7 +12,6 @@
 import React, { useCallback, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -72,7 +71,7 @@ function WithdrawalRequest({ token, available, onBack, onVerifyKyc }: Props) {
       <ScreenHeader title="Withdraw" onBack={onBack} />
       <KeyboardAvoidingView
         style={styles.sheet}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <ScrollView
           contentContainerStyle={styles.content}

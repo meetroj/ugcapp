@@ -110,3 +110,36 @@ describe('uploadMedia destinations', () => {
     expect(headers.Authorization).toBe('Bearer token');
   });
 });
+
+/**
+ * FastAPI reports a rejected field as 422 with a LIST of {loc, msg} objects.
+ * Reading only the string form turned every one of those into "Authentication
+ * failed", which sent people to check a password that was never the problem.
+ */
+test('a 422 names the field that was rejected', async () => {
+  g.fetch = (async () => ({
+    ok: false,
+    status: 422,
+    json: async () => ({
+      detail: [{type: 'missing', loc: ['body', 'phone'], msg: 'Field required'}],
+    }),
+  })) as unknown as typeof fetch;
+
+  const {signUp} = require('../src/api');
+  await expect(
+    signUp('creator', 'a@b.com', 'hunter2', ''),
+  ).rejects.toThrow('phone: Field required');
+});
+
+test('a plain string detail is still passed through unchanged', async () => {
+  g.fetch = (async () => ({
+    ok: false,
+    status: 400,
+    json: async () => ({detail: 'Email already registered'}),
+  })) as unknown as typeof fetch;
+
+  const {signUp} = require('../src/api');
+  await expect(
+    signUp('creator', 'a@b.com', 'hunter2', '9876543210'),
+  ).rejects.toThrow('Email already registered');
+});

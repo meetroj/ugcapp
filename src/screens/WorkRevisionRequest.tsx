@@ -14,7 +14,6 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -302,7 +301,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           this the iOS keyboard covers them (Android resizes the window). */}
       <KeyboardAvoidingView
         style={styles.flexGrow}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
       <ScrollView
         contentContainerStyle={styles.content}

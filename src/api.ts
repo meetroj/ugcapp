@@ -21,6 +21,42 @@ export type AuthUser = {
   [key: string]: unknown;
 };
 
+/**
+ * Reads the reason out of an error body.
+ *
+ * FastAPI answers a failed check with a string `detail` ("Email already
+ * registered"), but a request that fails *validation* comes back as 422 with a
+ * LIST of {loc, msg} objects instead. Only handling the string form meant every
+ * 422 collapsed into the generic fallback, so a signup rejected for a missing
+ * or malformed mobile number read as "Authentication failed" — which points at
+ * the password rather than the field that was actually wrong.
+ */
+function errorDetail(data: any, fallback: string): string {
+  const detail = data?.detail;
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item: any) => {
+        const msg = typeof item?.msg === 'string' ? item.msg : '';
+        if (!msg) {
+          return '';
+        }
+        // loc is ["body", "phone"]: the field name is the last entry, and it is
+        // what turns "Field required" into something actionable.
+        const loc = Array.isArray(item?.loc) ? item.loc : [];
+        const field = loc.length ? String(loc[loc.length - 1]) : '';
+        return field && field !== 'body' ? `${field}: ${msg}` : msg;
+      })
+      .filter(Boolean);
+    if (messages.length) {
+      return messages.join('\n');
+    }
+  }
+  return fallback;
+}
+
 async function authRequest(
   path: '/auth/login' | '/auth/signup' | '/auth/google',
   body: Record<string, string>,
@@ -34,7 +70,7 @@ async function authRequest(
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(
-      typeof data.detail === 'string' ? data.detail : 'Authentication failed',
+      errorDetail(data, 'Authentication failed'),
     );
   }
   if (data.requires_2fa) {

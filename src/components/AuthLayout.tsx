@@ -12,7 +12,6 @@ import React from 'react';
 import {
   Image,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   useWindowDimensions,
@@ -104,17 +103,22 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
         resizeMode="cover"
       />
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      {/*
+        'padding' on BOTH platforms. KeyboardAvoidingView measures the overlap
+        from the keyboardDidShow event and its own frame, so it does not need
+        the window to resize — which matters because RN 0.87 draws this screen
+        edge-to-edge and adjustResize no longer shrinks it. Passing undefined
+        (the old Android value) made the component a no-op, leaving the keyboard
+        on top of the lower fields. When the window DOES resize, the measured
+        overlap is 0 and nothing is added, so this is safe either way.
+      */}
+      <KeyboardAvoidingView style={styles.flex} behavior="padding">
         <ScrollView
           style={styles.flex}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}
-          scrollEnabled={!compact}
         >
           <View style={{ height: spacer }} />
 
