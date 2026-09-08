@@ -39,7 +39,25 @@ type Props = {
 
 /** Web parity: same rates used on the review section's cost breakdown. */
 const COMMISSION_RATE = 0.25;
-const LISTING_FEE = 500;
+
+/**
+ * One-time listing fee, tiered by the size of the brief. Mirrors listingFeeFor()
+ * in the web wizard and campaign_listing_fee() in the backend's server.py — the
+ * backend is what actually debits the wallet, so keep all three in sync.
+ *   1 creator,  1 deliverable    -> ₹500
+ *   1 creator,  2+ deliverables  -> ₹1,500
+ *   2–10 creators                -> ₹1,500
+ *   11+ creators                 -> ₹3,000
+ * `deliverables` is the TOTAL asset count (sum of every row's quantity), so one
+ * creator x 3 Reels is a 3-deliverable brief. Charged once, never per creator.
+ */
+const listingFeeFor = (creators: number, deliverables: number): number => {
+  const c = Math.max(1, Number(creators) || 1);
+  const d = Math.max(1, Number(deliverables) || 1);
+  if (c >= 11) return 3000;
+  if (c > 1) return 1500;
+  return d > 1 ? 1500 : 500;
+};
 
 const STEPS = [
   'Campaign Basics',
@@ -949,7 +967,15 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
     Number(form.budgetMode === 'fixed' ? form.fixedBudget : form.budgetMax) ||
     0;
   const commission = Math.round(budget * COMMISSION_RATE);
-  const totalDebit = budget + commission + LISTING_FEE;
+  // Total assets requested = sum of every deliverable row's quantity. The app form
+  // is single-creator (it sends no creators_wanted, so the backend treats it as 1),
+  // so only the deliverable count moves the tier here.
+  const totalDeliverables = form.deliverables.reduce(
+    (sum, item) => sum + Math.max(1, Number(item.quantity) || 1),
+    0,
+  );
+  const listingFee = listingFeeFor(1, totalDeliverables);
+  const totalDebit = budget + commission + listingFee;
   const paidAdsSelected = form.platforms.some(p =>
     p.toLowerCase().includes('paid ads'),
   );
@@ -2100,9 +2126,9 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                     </Text>
                   </View>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Listing fee</Text>
+                    <Text style={styles.summaryLabel}>Listing fee (one-time)</Text>
                     <Text style={styles.summaryValue}>
-                      ₹{LISTING_FEE.toLocaleString('en-IN')}
+                      ₹{listingFee.toLocaleString('en-IN')}
                     </Text>
                   </View>
                   <View style={[styles.summaryRow, styles.summaryTotal]}>

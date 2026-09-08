@@ -62,7 +62,7 @@ layout is untouched. `__tests__/responsive.test.tsx` locks that in.
   `shadowOpacity`, `strokeWidth`, and 1px hairline dividers (`height: 1`) — a
   scaled hairline can round to 0 and disappear.
 - **Do not scale non-style numbers**: timings (`AUTOSCROLL_MS`), money
-  (`LISTING_FEE`), counts (`TOP_N`), or image intrinsics (`IMAGE_W`).
+  (`COMMISSION_RATE`), counts (`TOP_N`), or image intrinsics (`IMAGE_W`).
 - **Already-proportional values** (e.g. `Dimensions.get('window').width * 0.42`)
   are screen-relative already — scaling them again compounds the two. Pass
   `raw` to `SkeletonBlock` for these.
