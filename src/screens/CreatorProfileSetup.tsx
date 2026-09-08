@@ -1,18 +1,27 @@
 /**
  * Creator onboarding — the native replacement for the web
- * /profile-setup/creator page. Field-for-field the same form the website
- * shows: username, bio, intro video, portfolio, tags, social links, the
- * three-package rate card, payment methods and the terms checkboxes.
+ * /profile-setup/creator page.
  *
- * The web renders all eight sections on one long page; on a phone that is a
- * punishing scroll, so the same fields are split across four steps. The
- * payload sent to PUT /api/profile/creator is identical either way.
+ * The web runs four steps (sign-up counts as step 1, so it labels them "Step 2
+ * of 5" through "Step 5 of 5"): Profile Basics, Contact Information, Build Your
+ * Creator Portfolio, then Recording Setup & Equipment. Every field and the
+ * whole submit payload match it key-for-key, because the same profile is read
+ * back by the web dashboard and the admin review screens.
+ *
+ * What deliberately differs is the chrome, not the data: the web uses icon
+ * grids and hover cards, this uses the chip / select / sheet vocabulary the
+ * rest of the native app already speaks.
+ *
+ * Two web-only conveniences are left out because they need services the app has
+ * no client for: the PIN-code-to-city lookup that cross-checks the address, and
+ * the per-platform live link probes. The required and format checks still run.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Modal,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -21,7 +30,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
-import Svg, { Path } from 'react-native-svg';
 import {
   BACKEND_URL,
   completeProfile,
@@ -32,700 +40,1143 @@ import { scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
-  /**
-   * Still accepted so the shell can pass it uniformly with the brand screen,
-   * but the web form seeds nothing from the session — username and bio are
-   * both typed from scratch — so nothing reads it.
-   */
   session?: AuthUser;
   onDone: () => void;
   onLogout?: () => void;
 };
 
-type Form = Record<string, string>;
-
-/** Same rule the web enforces before it will submit. */
-const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
-
-/** Web caps the bio at 500 characters and the "included" notes at 500 too. */
-const BIO_MAX = 500;
-const INCLUDED_MAX = 500;
-
-/** Web rejects videos over 50MB and portfolio files over 10MB. */
-const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
-const PORTFOLIO_MAX_BYTES = 10 * 1024 * 1024;
-
-const STEPS = ['About you', 'Your work', 'Rates & payment', 'Terms'];
-
-/**
- * The three packages the web rate card collects. Price is required on all
- * three; the "what's included" note beside it is free text.
- */
-const PACKAGES = [
+const STEP_META = [
   {
-    title: 'Basic — 30s Video',
-    price: 'video_30s',
-    included: 'video_30s_included',
-    pricePlaceholder: '100',
-    includedPlaceholder:
-      'e.g., 1 x 30-second video, B-Roll included, Subtitles, 1 revision, 3 months usage rights',
+    title: 'Profile Basics',
+    sub: 'Just the essentials to get your creator profile started.',
   },
   {
-    title: 'Standard — 60s Video',
-    price: 'video_60s',
-    included: 'video_60s_included',
-    pricePlaceholder: '150',
-    includedPlaceholder:
-      'e.g., 1 x 60-second video, B-Roll, Graphics, Subtitles, 2 revisions, 6 months usage rights',
+    title: 'Contact Information',
+    sub: 'We use this to communicate about projects and payments.',
   },
   {
-    title: 'Premium — Photo Post / Bundle',
-    price: 'photo_post',
-    included: 'photo_post_included',
-    pricePlaceholder: '80',
-    includedPlaceholder:
-      'e.g., Photo post + 60s video, Full source files, Unlimited revisions, 12 months usage rights',
+    title: 'Build Your Creator Portfolio',
+    sub: 'This is the profile brands will see when shortlisting creators.',
+  },
+  {
+    title: 'Recording Setup & Equipment',
+    sub: 'Select what you have access to, so brands can match you to the right projects.',
+  },
+];
+const TOTAL_STEPS = STEP_META.length;
+
+/** National-number length per dial code; anything else allows up to 15. */
+const PHONE_LEN: Record<string, number> = {
+  '+91': 10,
+  '+1': 10,
+  '+44': 10,
+  '+61': 9,
+};
+const DIAL_CODES = [
+  { label: 'IN', code: '+91' },
+  { label: 'US', code: '+1' },
+  { label: 'GB', code: '+44' },
+  { label: 'AU', code: '+61' },
+  { label: 'CA', code: '+1' },
+  { label: 'DE', code: '+49' },
+  { label: 'FR', code: '+33' },
+  { label: 'AE', code: '+971' },
+  { label: 'SG', code: '+65' },
+];
+
+const COUNTRIES = [
+  'India',
+  'United States',
+  'United Kingdom',
+  'Canada',
+  'Australia',
+  'Germany',
+];
+
+const STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka',
+  'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram',
+  'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
+  'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman and Nicobar Islands', 'Chandigarh',
+  'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir',
+  'Ladakh', 'Lakshadweep', 'Puducherry',
+];
+
+/** The City list is driven by the chosen State, exactly as on the web. */
+const CITIES_BY_STATE: Record<string, string[]> = {
+  'Andhra Pradesh': ['Visakhapatnam', 'Vijayawada', 'Guntur', 'Nellore', 'Kurnool', 'Rajahmundry', 'Tirupati', 'Kakinada'],
+  'Arunachal Pradesh': ['Itanagar', 'Naharlagun', 'Pasighat', 'Tawang'],
+  Assam: ['Guwahati', 'Silchar', 'Dibrugarh', 'Jorhat', 'Nagaon', 'Tinsukia', 'Tezpur'],
+  Bihar: ['Patna', 'Gaya', 'Bhagalpur', 'Muzaffarpur', 'Darbhanga', 'Purnia', 'Arrah', 'Begusarai'],
+  Chhattisgarh: ['Raipur', 'Bhilai', 'Bilaspur', 'Korba', 'Durg', 'Raigarh'],
+  Goa: ['Panaji', 'Margao', 'Vasco da Gama', 'Mapusa', 'Ponda'],
+  Gujarat: ['Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar', 'Jamnagar', 'Gandhinagar', 'Junagadh'],
+  Haryana: ['Gurugram', 'Faridabad', 'Panipat', 'Ambala', 'Karnal', 'Hisar', 'Rohtak', 'Sonipat'],
+  'Himachal Pradesh': ['Shimla', 'Dharamshala', 'Solan', 'Mandi', 'Kullu', 'Manali'],
+  Jharkhand: ['Ranchi', 'Jamshedpur', 'Dhanbad', 'Bokaro', 'Hazaribagh', 'Deoghar'],
+  Karnataka: ['Bengaluru', 'Mysuru', 'Hubballi-Dharwad', 'Mangaluru', 'Belagavi', 'Davanagere', 'Ballari', 'Tumakuru'],
+  Kerala: ['Thiruvananthapuram', 'Kochi', 'Kozhikode', 'Thrissur', 'Kollam', 'Kannur', 'Alappuzha'],
+  'Madhya Pradesh': ['Bhopal', 'Indore', 'Jabalpur', 'Gwalior', 'Ujjain', 'Sagar', 'Rewa'],
+  Maharashtra: ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Solapur', 'Thane', 'Navi Mumbai', 'Kolhapur'],
+  Manipur: ['Imphal', 'Thoubal', 'Bishnupur'],
+  Meghalaya: ['Shillong', 'Tura', 'Jowai'],
+  Mizoram: ['Aizawl', 'Lunglei', 'Champhai'],
+  Nagaland: ['Kohima', 'Dimapur', 'Mokokchung'],
+  Odisha: ['Bhubaneswar', 'Cuttack', 'Rourkela', 'Berhampur', 'Sambalpur', 'Puri'],
+  Punjab: ['Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali', 'Hoshiarpur'],
+  Rajasthan: ['Jaipur', 'Jodhpur', 'Udaipur', 'Kota', 'Bikaner', 'Ajmer', 'Bhilwara', 'Alwar'],
+  Sikkim: ['Gangtok', 'Namchi', 'Gyalshing'],
+  'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem', 'Tirunelveli', 'Erode', 'Vellore'],
+  Telangana: ['Hyderabad', 'Secunderabad', 'Warangal', 'Nizamabad', 'Karimnagar', 'Khammam'],
+  Tripura: ['Agartala', 'Udaipur', 'Dharmanagar'],
+  'Uttar Pradesh': ['Lucknow', 'Kanpur', 'Ghaziabad', 'Agra', 'Varanasi', 'Meerut', 'Prayagraj', 'Noida', 'Bareilly'],
+  Uttarakhand: ['Dehradun', 'Haridwar', 'Roorkee', 'Haldwani', 'Rishikesh', 'Nainital'],
+  'West Bengal': ['Kolkata', 'Howrah', 'Durgapur', 'Asansol', 'Siliguri', 'Darjeeling', 'Kharagpur'],
+  'Andaman and Nicobar Islands': ['Port Blair'],
+  Chandigarh: ['Chandigarh'],
+  'Dadra and Nagar Haveli and Daman and Diu': ['Silvassa', 'Daman', 'Diu'],
+  Delhi: ['New Delhi', 'Delhi', 'Dwarka', 'Rohini', 'Saket'],
+  'Jammu and Kashmir': ['Srinagar', 'Jammu', 'Anantnag', 'Baramulla'],
+  Ladakh: ['Leh', 'Kargil'],
+  Lakshadweep: ['Kavaratti'],
+  Puducherry: ['Puducherry', 'Karaikal', 'Yanam', 'Mahe'],
+};
+
+const GENDERS = ['Male', 'Female', 'Other'];
+const BODY_TYPES = ['Average', 'Slim', 'Athletic', 'Plus Size', 'No Preference'];
+const SKIN_TONES = ['Fair', 'Brown', 'Dark', 'No preference'];
+
+/** How the content is made. Mirrors CONTENT_CATEGORIES on the web. */
+const CONTENT_STYLES = [
+  { value: 'testimonial', label: 'Testimonial / Review' },
+  { value: 'product_demo', label: 'Product Demo' },
+  { value: 'try_on', label: 'Try-On / Haul' },
+  { value: 'grwm', label: 'GRWM (Get Ready With Me)' },
+  { value: 'day_in_life', label: 'Day-in-the-Life / Vlog' },
+  { value: 'transformation', label: 'Before & After / Transformation' },
+  { value: 'food', label: 'Recipe / Food' },
+  { value: 'voiceover', label: 'Voiceover / Faceless' },
+  { value: 'asmr', label: 'ASMR' },
+  { value: 'ugc_ad', label: 'Problem-Solution Ad / Skit' },
+  { value: 'comparison', label: 'Comparison / This vs That' },
+  { value: 'street_interview', label: 'Street Interview / Vox Pop' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/** What the content is ABOUT. The same ten the brand signup uses. */
+const NICHE_CATEGORIES = [
+  { value: 'fashion', label: 'Fashion & Apparel' },
+  { value: 'beauty', label: 'Beauty & Cosmetics' },
+  { value: 'tech', label: 'Technology & Gadgets' },
+  { value: 'food', label: 'Food & Beverage' },
+  { value: 'fitness', label: 'Health & Fitness' },
+  { value: 'home', label: 'Home & Lifestyle' },
+  { value: 'travel', label: 'Travel & Tourism' },
+  { value: 'education', label: 'Education' },
+  { value: 'entertainment', label: 'Entertainment' },
+  { value: 'other', label: 'Other' },
+];
+
+const SKILLS = [
+  'Script Writing',
+  'Voiceovers',
+  'Acting',
+  'Videography (DOP)',
+  'Video Editing',
+  'Modelling',
+];
+
+const PLATFORMS = [
+  { key: 'youtube', label: 'YouTube' },
+  { key: 'linkedin', label: 'LinkedIn' },
+  { key: 'instagram', label: 'Instagram' },
+  { key: 'tiktok', label: 'TikTok' },
+];
+
+const LANGUAGES = [
+  'English', 'Hindi', 'Bengali', 'Marathi', 'Tamil', 'Telugu', 'Gujarati',
+  'Kannada', 'Malayalam', 'Punjabi', 'Bhojpuri',
+];
+const FLUENCY = ['Native', 'Fluent', 'Conversational'];
+const WEEKLY = [
+  '1-5 hrs / week',
+  '6-10 hrs / week',
+  '11-20 hrs / week',
+  '20+ hrs / week',
+];
+const TOPICS = ['None', 'Alcohol', 'Gambling', 'Adult products'];
+const PAYOUT_PERIODS = ['Per Video'];
+
+const CORE_SETUP = [
+  'DSLR Camera',
+  'Iphone',
+  'Android Phone',
+  'Tripod / Stable mount',
+  'External microphone',
+  'Quiet / noise-controlled room',
+  'Artificial lighting',
+  'Green screen',
+  'Aesthetic background',
+];
+const APPEAR_IN = [
+  'Solo only',
+  'Friends / peers',
+  'Family members',
+  'Pets / animals',
+];
+
+/** The three yes/no add-ons on the last step. */
+const ADDONS = [
+  {
+    key: 'ownAccount',
+    title: 'Post content from your own account',
+    note: 'Includes organic posts or collab posts.',
+    yes: 'Yes, I can post from my account',
+  },
+  {
+    key: 'runAds',
+    title: 'Run ads via your account (Collab / Branded Ads)',
+    note: 'Only for brand-approved, paid collaborations.',
+    yes: 'Yes, I am open to running ads',
+  },
+  {
+    key: 'newAccount',
+    title: 'Create a new account for a brand',
+    note: 'For brands that need a fresh account for campaigns.',
+    yes: 'Yes, I can set up an account',
   },
 ];
 
-const isVideo = (url: string) => /\.(mp4|mov|webm|avi)$/i.test(url);
+/** Required per step. The web keeps the photo and the map link optional. */
+const STEP1_FIELDS = [
+  'firstName',
+  'lastName',
+  'age',
+  'gender',
+  'bodyType',
+  'skinTone',
+];
+const STEP2_FIELDS = [
+  'phone',
+  'pincode',
+  'country',
+  'state',
+  'city',
+  'address',
+];
+
+/** Web caps portfolio uploads at 50MB and the profile photo at 5MB. */
+const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+
+const onlyDigits = (value: string) => String(value ?? '').replace(/\D/g, '');
+const phoneMax = (dial: string) => PHONE_LEN[dial] || 15;
+const phoneValid = (value: string, dial: string) =>
+  onlyDigits(value).length === phoneMax(dial);
+const isFilled = (value: unknown) => String(value ?? '').trim() !== '';
+
+/**
+ * A pasted international number arrives with the country code merged in. Drop
+ * it, but only when that is the sole reason the number is too long — so a real
+ * number that happens to start with "91" is left alone.
+ */
+function stripDialPrefix(digits: string, dial: string): string {
+  const cc = onlyDigits(dial);
+  const max = phoneMax(dial);
+  return cc && digits.startsWith(cc) && digits.length > max
+    ? digits.slice(cc.length)
+    : digits;
+}
 
 const mediaUrl = (path: string) =>
   /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
 
-function Icon({
-  name,
-  color = '#7C819C',
-  size = 20,
-}: {
-  name: string;
-  color?: string;
-  size?: number;
-}) {
-  const line = {
-    stroke: color,
-    strokeWidth: 1.8,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-  };
-  return (
-    <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24" fill="none">
-      {name === 'back' && <Path d="m14.5 5-6 7 6 7" {...line} />}
-      {name === 'plus' && <Path d="M12 5.5v13M5.5 12h13" {...line} />}
-      {name === 'video' && (
-        <>
-          <Path d="M3.5 6.5h11v11h-11z" {...line} />
-          <Path d="m14.5 12 6-3.5v7z" {...line} />
-        </>
-      )}
-      {name === 'check' && <Path d="m5 12.5 4.5 4.5L19 7.5" {...line} />}
-      {name === 'trash' && (
-        <Path d="M5 7h14M10 7V5.5h4V7M6.5 7l.8 12h9.4l.8-12" {...line} />
-      )}
-    </Svg>
-  );
-}
+type PortfolioItem = {
+  id: string;
+  price: string;
+  category: string;
+  delivery: string;
+  videoUrl: string;
+};
 
-function CreatorProfileSetup({ token, onDone, onLogout }: Props) {
-  const [step, setStep] = useState(0);
+type Data = {
+  profile_picture: string;
+  firstName: string;
+  lastName: string;
+  age: string;
+  gender: string;
+  contentStyles: string[];
+  contentCategories: string[];
+  customCategory: string;
+  bodyType: string;
+  skinTone: string;
+  bio: string;
+  dialCode: string;
+  phone: string;
+  pincode: string;
+  country: string;
+  state: string;
+  city: string;
+  address: string;
+  mapLink: string;
+  skills: string[];
+  links: Record<string, string>;
+  followers: Record<string, string>;
+  portfolio: PortfolioItem[];
+  languages: string[];
+  langFluency: Record<string, string>;
+  coreSetup: string[];
+  appearIn: string[];
+  ownAccount: string;
+  runAds: string;
+  newAccount: string;
+  bring: string;
+  weekly: string;
+  flexible: boolean;
+  lastSalary: string;
+  expectedPayout: string;
+  payoutPeriod: string;
+  deliveryDays: string;
+  topics: string[];
+};
+
+const EMPTY: Data = {
+  profile_picture: '',
+  firstName: '',
+  lastName: '',
+  age: '',
+  gender: '',
+  contentStyles: [],
+  contentCategories: [],
+  customCategory: '',
+  bodyType: '',
+  skinTone: '',
+  bio: '',
+  dialCode: '+91',
+  phone: '',
+  pincode: '',
+  country: 'India',
+  state: '',
+  city: '',
+  address: '',
+  mapLink: '',
+  skills: [],
+  links: { youtube: '', linkedin: '', instagram: '', tiktok: '' },
+  followers: { youtube: '', linkedin: '', instagram: '', tiktok: '' },
+  portfolio: [],
+  languages: [],
+  langFluency: {},
+  coreSetup: [],
+  appearIn: [],
+  ownAccount: '',
+  runAds: '',
+  newAccount: '',
+  bring: '',
+  weekly: '',
+  flexible: false,
+  lastSalary: '',
+  expectedPayout: '',
+  payoutPeriod: 'Per Video',
+  deliveryDays: '',
+  topics: ['None'],
+};
+
+function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const insets = useSafeAreaInsets();
-  const [form, setForm] = useState<Form>({});
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState('');
-  const [introVideo, setIntroVideo] = useState('');
-  const [portfolio, setPortfolio] = useState<string[]>([]);
-  const [receiveBriefs, setReceiveBriefs] = useState(true);
-  const [termsAgreed, setTermsAgreed] = useState(false);
-  const [uploadingVideo, setUploadingVideo] = useState(false);
-  const [uploadingPortfolio, setUploadingPortfolio] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [missing, setMissing] = useState<string[]>([]);
+  const [step, setStep] = useState(1);
+  const [data, setData] = useState<Data>(EMPTY);
+  const [showErrors, setShowErrors] = useState(false);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [videoUploading, setVideoUploading] = useState(false);
+  const [picker, setPicker] = useState<null | {
+    field: keyof Data;
+    title: string;
+    options: string[];
+  }>(null);
+
+  // Draft for the portfolio item being added.
+  const [draft, setDraft] = useState({
+    price: '',
+    category: '',
+    delivery: '',
+    videoUrl: '',
+  });
 
   const set = useCallback(
-    (key: string, value: string) =>
-      setForm(prev => ({ ...prev, [key]: value })),
+    <K extends keyof Data>(key: K, value: Data[K]) =>
+      setData(prev => ({ ...prev, [key]: value })),
     [],
   );
 
-  const username = form.username || '';
-  const bio = form.bio || '';
-
   /**
-   * Mirrors the web's eight-section progress meter so the percentage a
-   * creator sees here matches what they'd see on the site.
+   * The mobile number is captured at sign-up and stored on the user (not under
+   * `profile`), so carry it into the contact step rather than asking twice.
+   * Never overwrites a number already typed here.
    */
-  const progressPct = useMemo(() => {
-    const done = [
-      bio.trim().length > 0 && USERNAME_RE.test(username.trim()),
-      !!introVideo,
-      portfolio.length > 0,
-      tags.length > 0,
-      !!(form.instagram || form.youtube),
-      !!(form.video_30s && form.video_60s && form.photo_post),
-      !!form.upi,
-      termsAgreed,
-    ].filter(Boolean).length;
-    return Math.round((done / 8) * 100);
-  }, [
-    bio,
-    form,
-    introVideo,
-    portfolio.length,
-    tags.length,
-    termsAgreed,
-    username,
-  ]);
+  useEffect(() => {
+    const signupPhone = session?.phone;
+    const signupDial = session?.dial_code;
+    if (typeof signupPhone !== 'string' || !signupPhone.trim()) {
+      return;
+    }
+    setData(prev =>
+      prev.phone
+        ? prev
+        : {
+            ...prev,
+            phone: onlyDigits(signupPhone),
+            dialCode:
+              typeof signupDial === 'string' && signupDial.trim()
+                ? signupDial
+                : prev.dialCode,
+          },
+    );
+  }, [session]);
 
-  const addTag = useCallback(() => {
-    const tag = tagInput.trim();
-    if (!tag || tags.includes(tag)) return;
-    setTags(prev => [...prev, tag]);
-    setTagInput('');
-  }, [tagInput, tags]);
+  const toggle = useCallback(
+    (key: 'contentStyles' | 'contentCategories' | 'skills' | 'languages' | 'coreSetup' | 'appearIn' | 'topics', value: string) =>
+      setData(prev => {
+        const list = prev[key];
+        const next = list.includes(value)
+          ? list.filter(item => item !== value)
+          : [...list, value];
+        return { ...prev, [key]: next };
+      }),
+    [],
+  );
 
-  const pickIntroVideo = useCallback(async () => {
+  const cities = useMemo(
+    () => CITIES_BY_STATE[data.state] || [],
+    [data.state],
+  );
+
+  /** Which required fields on the current step are still incomplete. */
+  const checks = useMemo((): Record<string, boolean> => {
+    if (step === 1) {
+      const base: Record<string, boolean> = Object.fromEntries(
+        STEP1_FIELDS.map(key => [key, isFilled((data as any)[key])]),
+      );
+      // Both pickers need at least one, and a "custom" style needs its text.
+      base.contentStyles =
+        data.contentStyles.length > 0 &&
+        (!data.contentStyles.includes('custom') ||
+          isFilled(data.customCategory));
+      base.contentCategories = data.contentCategories.length > 0;
+      return base;
+    }
+    if (step === 2) {
+      const base: Record<string, boolean> = Object.fromEntries(
+        STEP2_FIELDS.map(key => [key, isFilled((data as any)[key])]),
+      );
+      base.phone = base.phone && phoneValid(data.phone, data.dialCode);
+      return base;
+    }
+    if (step === 3) {
+      return {
+        skills: data.skills.length > 0,
+        profileLink: PLATFORMS.some(p => isFilled(data.links[p.key])),
+        portfolio: data.portfolio.length > 0,
+        languages: data.languages.length > 0,
+        expectedPayout: isFilled(data.expectedPayout),
+        deliveryDays: Number(data.deliveryDays) > 0,
+      };
+    }
+    // The web leaves the last step entirely optional.
+    return {};
+  }, [data, step]);
+
+  const stepComplete = Object.values(checks).every(Boolean);
+  const bad = (key: string) => showErrors && checks[key] === false;
+
+  const pickPhoto = useCallback(async () => {
+    const result = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+      quality: 0.8,
+    });
+    const asset = result.assets?.[0];
+    if (!asset?.uri) {
+      return;
+    }
+    if ((asset.fileSize || 0) > PHOTO_MAX_BYTES) {
+      setError('Image is too large. Maximum 5MB.');
+      return;
+    }
+    setPhotoUploading(true);
+    setError('');
+    try {
+      const url = await uploadMedia(
+        token,
+        { uri: asset.uri, fileName: asset.fileName, type: asset.type },
+        'photo',
+      );
+      set('profile_picture', url);
+    } catch (err: any) {
+      setError(err?.message || 'Photo upload failed.');
+    } finally {
+      setPhotoUploading(false);
+    }
+  }, [set, token]);
+
+  const pickVideo = useCallback(async () => {
     const result = await launchImageLibrary({
       mediaType: 'video',
       selectionLimit: 1,
     });
     const asset = result.assets?.[0];
-    if (!asset?.uri) return;
-    if (asset.fileSize && asset.fileSize > VIDEO_MAX_BYTES) {
-      setError('Video file too large. Maximum 50MB allowed.');
+    if (!asset?.uri) {
       return;
     }
-
-    setUploadingVideo(true);
+    if ((asset.fileSize || 0) > VIDEO_MAX_BYTES) {
+      setError('Video is too large. Maximum 50MB.');
+      return;
+    }
+    setVideoUploading(true);
     setError('');
     try {
-      setIntroVideo(
-        await uploadMedia(
-          token,
-          { uri: asset.uri, fileName: asset.fileName, type: asset.type },
-          'file',
-        ),
-      );
+      const url = await uploadMedia(token, {
+        uri: asset.uri,
+        fileName: asset.fileName,
+        type: asset.type,
+      });
+      setDraft(prev => ({ ...prev, videoUrl: url }));
     } catch (err: any) {
-      setError(err?.message || 'Failed to upload video');
+      setError(err?.message || 'Video upload failed.');
     } finally {
-      setUploadingVideo(false);
+      setVideoUploading(false);
     }
   }, [token]);
 
-  const addPortfolio = useCallback(async () => {
-    // The web lets you multi-select; image-picker does too, and each file is
-    // uploaded separately so one oversized pick doesn't lose the rest.
-    const result = await launchImageLibrary({
-      mediaType: 'mixed',
-      selectionLimit: 0,
-      quality: 0.8,
-    });
-    const assets = (result.assets || []).filter(asset => !!asset.uri);
-    if (!assets.length) return;
-
-    setUploadingPortfolio(true);
-    setError('');
-    try {
-      const urls: string[] = [];
-      for (const asset of assets) {
-        if (asset.fileSize && asset.fileSize > PORTFOLIO_MAX_BYTES) {
-          throw new Error(
-            `${
-              asset.fileName || 'That file'
-            } is too large. Maximum 10MB per file.`,
-          );
-        }
-        urls.push(
-          await uploadMedia(
-            token,
-            { uri: asset.uri!, fileName: asset.fileName, type: asset.type },
-            'file',
-          ),
-        );
-      }
-      setPortfolio(prev => [...prev, ...urls]);
-    } catch (err: any) {
-      // The backend OCR-scans uploads and rejects images carrying contact
-      // details, so this message is worth showing verbatim.
-      setError(err?.message || 'Failed to upload portfolio items');
-    } finally {
-      setUploadingPortfolio(false);
-    }
-  }, [token]);
-
-  /** The web validates username, tags and terms; each is checked on its step. */
-  const checkStep = useCallback(
-    (index: number): string[] => {
-      if (index === 0) {
-        const blank: string[] = [];
-        if (!USERNAME_RE.test(username.trim())) blank.push('username');
-        if (!bio.trim()) blank.push('bio');
-        return blank;
-      }
-      if (index === 1) return tags.length ? [] : ['tags'];
-      if (index === 2) {
-        return PACKAGES.map(p => p.price)
-          .concat('upi')
-          .filter(key => !String(form[key] || '').trim());
-      }
-      return termsAgreed ? [] : ['terms'];
-    },
-    [bio, form, tags.length, termsAgreed, username],
-  );
-
-  const messageFor = useCallback(
-    (index: number, blank: string[]) => {
-      if (index === 0) {
-        return blank.includes('username') && username.trim()
-          ? 'Username must be 3–20 characters: lowercase letters, numbers, or underscores'
-          : 'Fill in the highlighted fields.';
-      }
-      if (index === 1) return 'Please add at least one tag/niche';
-      if (index === 3) return 'Please agree to the terms and conditions';
-      return 'Fill in the highlighted fields.';
-    },
-    [username],
-  );
-
-  const next = useCallback(() => {
-    const blank = checkStep(step);
-    setMissing(blank);
-    if (blank.length) {
-      setError(messageFor(step, blank));
+  const addPortfolioItem = useCallback(() => {
+    if (!draft.videoUrl) {
+      setError('Upload the video before adding the sample.');
       return;
     }
     setError('');
-    setStep(s => Math.min(s + 1, STEPS.length - 1));
-  }, [checkStep, messageFor, step]);
+    setData(prev => ({
+      ...prev,
+      portfolio: [
+        ...prev.portfolio,
+        { ...draft, id: `pf-${prev.portfolio.length + 1}-${draft.videoUrl}` },
+      ],
+    }));
+    setDraft({ price: '', category: '', delivery: '', videoUrl: '' });
+  }, [draft]);
 
-  const save = useCallback(async () => {
-    // Re-check every step, not just the last one, so a creator who jumped
-    // back and cleared a required field can't submit an invalid profile.
-    for (let index = 0; index < STEPS.length; index += 1) {
-      const blank = checkStep(index);
-      if (blank.length) {
-        setStep(index);
-        setMissing(blank);
-        setError(messageFor(index, blank));
-        return;
-      }
-    }
+  const removePortfolioItem = useCallback(
+    (id: string) =>
+      setData(prev => ({
+        ...prev,
+        portfolio: prev.portfolio.filter(item => item.id !== id),
+      })),
+    [],
+  );
 
+  const submit = useCallback(async () => {
     setSaving(true);
     setError('');
     try {
+      const styleValue = (value: string) =>
+        value === 'custom'
+          ? data.customCategory.trim() || 'Custom'
+          : value;
+      const styles = data.contentStyles.map(styleValue);
+      const niches = data.contentCategories;
+      const fullName = [data.firstName, data.lastName]
+        .map(part => part.trim())
+        .filter(Boolean)
+        .join(' ');
+
       await completeProfile(token, 'creator', {
-        username: username.trim().toLowerCase(),
-        bio: bio.trim(),
-        tags,
-        social_links: {
-          instagram: form.instagram || '',
-          youtube: form.youtube || '',
-          tiktok: form.tiktok || '',
-        },
+        ...data,
+        fullName,
+        first_name: data.firstName.trim(),
+        last_name: data.lastName.trim(),
+        content_styles: styles,
+        content_style: styles[0] || '',
+        content_categories: niches,
+        niche: niches[0] || '',
+        category: niches[0] || styles[0] || '',
+        primary_category: niches[0] || styles[0] || '',
+        bio: data.bio || '',
+        tags: data.skills,
+        // The deployed backend types portfolio as List[str], so the raw objects
+        // 422 — send URL refs here and keep the structured items alongside.
+        portfolio: data.portfolio.map(item => item.videoUrl).filter(Boolean),
+        portfolio_items: data.portfolio.filter(item => !!item.videoUrl),
+        social_links: Object.fromEntries(
+          Object.entries(data.links).filter(([, value]) => value && value.trim()),
+        ),
+        delivery_days: data.deliveryDays ? Number(data.deliveryDays) : '',
         rate_card: {
-          video_30s: form.video_30s || '',
-          video_30s_included: form.video_30s_included || '',
-          video_60s: form.video_60s || '',
-          video_60s_included: form.video_60s_included || '',
-          photo_post: form.photo_post || '',
-          photo_post_included: form.photo_post_included || '',
+          last_salary: data.lastSalary || '',
+          expected_payout: data.expectedPayout || '',
+          payout_period: data.payoutPeriod || '',
+          delivery_days: data.deliveryDays ? Number(data.deliveryDays) : '',
         },
-        payment_methods: {
-          upi: form.upi || '',
-          bank_account: form.bank_account || '',
+        availability_calendar: {
+          weekly: data.weekly || '',
+          flexible: !!data.flexible,
         },
-        receive_briefs: receiveBriefs,
-        terms_agreed: termsAgreed,
-        intro_video: introVideo,
-        portfolio,
-        availability_calendar: {},
+        payment_methods: {},
+        receive_briefs: true,
+        terms_agreed: true,
       });
       onDone();
     } catch (err: any) {
-      setError(err?.message || 'Failed to update profile');
+      setError(err?.message || 'Failed to submit profile');
     } finally {
       setSaving(false);
     }
-  }, [
-    bio,
-    checkStep,
-    form,
-    introVideo,
-    messageFor,
-    onDone,
-    portfolio,
-    receiveBriefs,
-    tags,
-    termsAgreed,
-    token,
-    username,
-  ]);
+  }, [data, onDone, token]);
 
-  const last = step === STEPS.length - 1;
-  const busy = uploadingVideo || uploadingPortfolio;
+  const next = useCallback(() => {
+    if (!stepComplete) {
+      setShowErrors(true);
+      setError('Fill in the highlighted fields.');
+      return;
+    }
+    setShowErrors(false);
+    setError('');
+    if (step < TOTAL_STEPS) {
+      setStep(current => current + 1);
+      return;
+    }
+    submit();
+  }, [step, stepComplete, submit]);
+
+  const back = useCallback(() => {
+    setShowErrors(false);
+    setError('');
+    setStep(current => Math.max(1, current - 1));
+  }, []);
+
+  const openPicker = useCallback(
+    (field: keyof Data, title: string, options: string[]) =>
+      setPicker({ field, title, options }),
+    [],
+  );
+
+  const meta = STEP_META[step - 1];
 
   return (
     <View style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        {step > 0 ? (
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={() => setStep(s => s - 1)}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-          >
-            <Icon name="back" color="#15163F" size={22} />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.headerBtn} />
-        )}
         <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Complete your creator profile</Text>
-          <Text style={styles.headerSub}>
-            Step {step + 1} of {STEPS.length} · {STEPS[step]} · {progressPct}%
-            complete
-          </Text>
+          <Text style={styles.headerTitle}>{meta.title}</Text>
+          <Text style={styles.headerSub}>{meta.sub}</Text>
         </View>
-        {!!onLogout && step === 0 && (
+        {!!onLogout && (
           <TouchableOpacity onPress={onLogout} accessibilityRole="button">
             <Text style={styles.logout}>Log out</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <View style={styles.progress}>
-        {STEPS.map((_, index) => (
+      {/* Sign Up is the already-done step 1, so the label runs 2..5. */}
+      <View style={styles.progressRow}>
+        <Text style={styles.progressText}>
+          Step {step + 1} of {TOTAL_STEPS + 1}
+        </Text>
+        <View style={styles.progressTrack}>
           <View
-            key={index}
-            style={[styles.progressBar, index <= step && styles.progressOn]}
+            style={[
+              styles.progressFill,
+              { width: `${((step + 1) / (TOTAL_STEPS + 1)) * 100}%` },
+            ]}
           />
-        ))}
+        </View>
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior="padding"
-      >
+      <KeyboardAvoidingView style={styles.flex} behavior="padding">
         <ScrollView
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.card}>
-            {step === 0 && (
-              <>
-                <SectionHead
-                  number={1}
-                  title="About You"
-                  hint="Introduce yourself in your own words."
-                />
+          {step === 1 && (
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.photoPicker}
+                onPress={pickPhoto}
+                disabled={photoUploading}
+                accessibilityRole="button"
+                accessibilityLabel="Add a profile photo"
+              >
+                {photoUploading ? (
+                  <ActivityIndicator color="#5B5CF6" />
+                ) : data.profile_picture ? (
+                  <Image
+                    source={{ uri: mediaUrl(data.profile_picture) }}
+                    style={styles.photoImage}
+                  />
+                ) : (
+                  <Text style={styles.photoPlus}>+</Text>
+                )}
+              </TouchableOpacity>
+              <Text style={styles.photoHint}>
+                {data.profile_picture
+                  ? 'Tap to change photo'
+                  : 'Add a profile photo (optional)'}
+              </Text>
 
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>
-                    Username
-                    <Text style={styles.required}> *</Text>
-                  </Text>
-                  <Text style={styles.labelMeta}>
-                    3–20 chars · lowercase, numbers, _
-                  </Text>
-                  <View
-                    style={[
-                      styles.usernameWrap,
-                      missing.includes('username') && styles.inputError,
-                    ]}
-                  >
-                    <Text style={styles.usernamePrefix}>@</Text>
-                    <TextInput
-                      style={styles.usernameInput}
-                      value={username}
-                      // Same sanitising the web does as you type.
-                      onChangeText={value =>
-                        set(
-                          'username',
-                          value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
-                        )
-                      }
-                      placeholder="yourname"
-                      placeholderTextColor="#A9ADC2"
-                      maxLength={20}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                  </View>
-                  <Text style={styles.charCount}>
-                    {username.length}/20 characters
-                  </Text>
-                </View>
+              <Field
+                label="First name"
+                required
+                value={data.firstName}
+                onChange={v => set('firstName', v)}
+                placeholder="Priya"
+                error={bad('firstName')}
+              />
+              <Field
+                label="Last name"
+                required
+                value={data.lastName}
+                onChange={v => set('lastName', v)}
+                placeholder="Sharma"
+                error={bad('lastName')}
+              />
+              <Field
+                label="Age"
+                required
+                value={data.age}
+                onChange={v => set('age', onlyDigits(v).slice(0, 2))}
+                placeholder="24"
+                keyboard="phone-pad"
+                error={bad('age')}
+              />
 
+              <Chips
+                label="Gender"
+                required
+                options={GENDERS}
+                selected={data.gender ? [data.gender] : []}
+                onPress={value => set('gender', value)}
+                error={bad('gender')}
+              />
+
+              <Chips
+                label="How do you make content?"
+                hint="Pick at least one."
+                required
+                options={CONTENT_STYLES.map(item => item.label)}
+                values={CONTENT_STYLES.map(item => item.value)}
+                selected={data.contentStyles}
+                onPress={value => toggle('contentStyles', value)}
+                error={bad('contentStyles')}
+              />
+              {data.contentStyles.includes('custom') && (
                 <Field
-                  label="Bio"
-                  meta="(100 words max)"
+                  label="Describe your custom style"
                   required
-                  multiline
-                  value={bio}
-                  onChange={v => set('bio', v)}
-                  placeholder="Tell brands about yourself, your style, and expertise..."
-                  maxLength={BIO_MAX}
-                  counter
-                  error={missing.includes('bio')}
+                  value={data.customCategory}
+                  onChange={v => set('customCategory', v)}
+                  placeholder="e.g., Stop-motion product films"
+                  error={bad('contentStyles')}
                 />
-              </>
-            )}
+              )}
 
-            {step === 1 && (
-              <>
-                <SectionHead
-                  number={2}
-                  title="Intro Video"
-                  optional
-                  hint="A 30–60s clip introducing yourself helps brands trust you faster."
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.dropzone,
-                    !!introVideo && styles.dropzoneFilled,
-                  ]}
-                  onPress={pickIntroVideo}
-                  disabled={busy}
-                  accessibilityRole="button"
-                >
-                  {uploadingVideo ? (
-                    <ActivityIndicator color="#5B5CF6" />
-                  ) : introVideo ? (
-                    <>
-                      <Icon name="check" color="#2F9E62" size={26} />
-                      <Text style={styles.dropzoneText}>Video uploaded</Text>
-                      <Text style={styles.dropzoneSub}>Tap to replace</Text>
-                    </>
-                  ) : (
-                    <>
-                      <Icon name="video" color="#4C5BF3" size={26} />
-                      <Text style={styles.dropzoneText}>Choose video</Text>
-                      <Text style={styles.dropzoneSub}>
-                        MP4, MOV, WEBM · Max 50MB
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-                {!!introVideo && (
+              <Chips
+                label="What do you make content about?"
+                hint="Pick at least one."
+                required
+                options={NICHE_CATEGORIES.map(item => item.label)}
+                values={NICHE_CATEGORIES.map(item => item.value)}
+                selected={data.contentCategories}
+                onPress={value => toggle('contentCategories', value)}
+                error={bad('contentCategories')}
+              />
+
+              <Chips
+                label="Body type"
+                required
+                options={BODY_TYPES}
+                selected={data.bodyType ? [data.bodyType] : []}
+                onPress={value => set('bodyType', value)}
+                error={bad('bodyType')}
+              />
+              <Chips
+                label="Skin tone"
+                required
+                options={SKIN_TONES}
+                selected={data.skinTone ? [data.skinTone] : []}
+                onPress={value => set('skinTone', value)}
+                error={bad('skinTone')}
+              />
+
+              <Field
+                label="Short bio"
+                multiline
+                value={data.bio}
+                onChange={v => set('bio', v)}
+                placeholder="Tell brands about yourself, your style and expertise..."
+              />
+            </View>
+          )}
+
+          {step === 2 && (
+            <View style={styles.card}>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>
+                  Phone number<Text style={styles.required}> *</Text>
+                </Text>
+                <View style={styles.phoneRow}>
                   <TouchableOpacity
-                    onPress={() => setIntroVideo('')}
+                    style={styles.dialButton}
+                    onPress={() =>
+                      openPicker(
+                        'dialCode',
+                        'Select a dial code',
+                        DIAL_CODES.map(item => item.code),
+                      )
+                    }
                     accessibilityRole="button"
                   >
-                    <Text style={styles.ghostBtn}>Remove video</Text>
+                    <Text style={styles.dialText}>{data.dialCode}</Text>
                   </TouchableOpacity>
-                )}
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.phoneInput,
+                      bad('phone') && styles.inputError,
+                    ]}
+                    value={data.phone}
+                    onChangeText={v =>
+                      set(
+                        'phone',
+                        stripDialPrefix(onlyDigits(v), data.dialCode).slice(
+                          0,
+                          phoneMax(data.dialCode),
+                        ),
+                      )
+                    }
+                    placeholder="98765 43210"
+                    placeholderTextColor="#A9ADC2"
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              </View>
 
-                <SectionHead
-                  number={3}
-                  title="Portfolio"
-                  optional
-                  hint="Past work that shows your style. Max 10MB per file."
-                />
+              <Select
+                label="Country"
+                required
+                value={data.country}
+                placeholder="Select a country"
+                onPress={() => openPicker('country', 'Select a country', COUNTRIES)}
+                error={bad('country')}
+              />
+              <Select
+                label="State"
+                required
+                value={data.state}
+                placeholder="Select a state"
+                onPress={() => openPicker('state', 'Select a state', STATES)}
+                error={bad('state')}
+              />
+              <Select
+                label="City"
+                required
+                value={data.city}
+                placeholder={
+                  data.state ? 'Select a city' : 'Choose a state first'
+                }
+                onPress={() =>
+                  data.state && openPicker('city', 'Select a city', cities)
+                }
+                error={bad('city')}
+              />
+              <Field
+                label="Pincode"
+                required
+                value={data.pincode}
+                onChange={v => set('pincode', onlyDigits(v).slice(0, 6))}
+                placeholder="560001"
+                keyboard="phone-pad"
+                error={bad('pincode')}
+              />
+              <Field
+                label="Address"
+                required
+                multiline
+                value={data.address}
+                onChange={v => set('address', v)}
+                placeholder="Flat, street, area"
+                error={bad('address')}
+              />
+              <Field
+                label="Map link"
+                value={data.mapLink}
+                onChange={v => set('mapLink', v)}
+                placeholder="Google Maps link (optional)"
+                keyboard="url"
+              />
+            </View>
+          )}
+
+          {step === 3 && (
+            <View style={styles.card}>
+              <Chips
+                label="Your skills"
+                hint="Pick at least one."
+                required
+                options={SKILLS}
+                selected={data.skills}
+                onPress={value => toggle('skills', value)}
+                error={bad('skills')}
+              />
+
+              <Text style={styles.sectionTitle}>Social profiles</Text>
+              <Text style={styles.sectionNote}>
+                At least one link is required. Follower counts are optional.
+              </Text>
+              {PLATFORMS.map(platform => (
+                <View key={platform.key} style={styles.field}>
+                  <Text style={styles.fieldLabel}>{platform.label}</Text>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      bad('profileLink') && styles.inputError,
+                    ]}
+                    value={data.links[platform.key] || ''}
+                    onChangeText={v =>
+                      set('links', { ...data.links, [platform.key]: v })
+                    }
+                    placeholder={`${platform.label} link or handle`}
+                    placeholderTextColor="#A9ADC2"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <TextInput
+                    style={[styles.input, styles.followerInput]}
+                    value={data.followers[platform.key] || ''}
+                    onChangeText={v =>
+                      set('followers', {
+                        ...data.followers,
+                        [platform.key]: onlyDigits(v),
+                      })
+                    }
+                    placeholder="Followers (optional)"
+                    placeholderTextColor="#A9ADC2"
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              ))}
+
+              <Text style={styles.sectionTitle}>Portfolio samples</Text>
+              <Text style={styles.sectionNote}>
+                Add at least one sample. Brands watch these first.
+              </Text>
+
+              {data.portfolio.map(item => (
+                <View key={item.id} style={styles.portfolioRow}>
+                  <Text style={styles.portfolioText} numberOfLines={1}>
+                    {item.category || 'Sample'}
+                    {item.price ? ` · ${item.price}` : ''}
+                    {item.delivery ? ` · ${item.delivery} days` : ''}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => removePortfolioItem(item.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove sample"
+                  >
+                    <Text style={styles.removeText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+
+              <View
+                style={[
+                  styles.draftBox,
+                  bad('portfolio') && styles.inputError,
+                ]}
+              >
                 <TouchableOpacity
-                  style={styles.dropzone}
-                  onPress={addPortfolio}
-                  disabled={busy}
+                  style={styles.uploadButton}
+                  onPress={pickVideo}
+                  disabled={videoUploading}
                   accessibilityRole="button"
                 >
-                  {uploadingPortfolio ? (
+                  {videoUploading ? (
                     <ActivityIndicator color="#5B5CF6" />
                   ) : (
-                    <>
-                      <Icon name="plus" color="#4C5BF3" size={22} />
-                      <Text style={styles.dropzoneText}>
-                        Add portfolio items
-                      </Text>
-                      <Text style={styles.dropzoneSub}>
-                        Images or videos · Select multiple
-                      </Text>
-                    </>
+                    <Text style={styles.uploadText}>
+                      {draft.videoUrl ? 'Video ready ✓' : 'Upload a video'}
+                    </Text>
                   )}
                 </TouchableOpacity>
-                {portfolio.length > 0 && (
-                  <View style={styles.portfolioGrid}>
-                    {portfolio.map((url, index) => (
-                      <View key={url + index} style={styles.portfolioItem}>
-                        {isVideo(url) ? (
-                          <View style={styles.portfolioVideo}>
-                            <Icon name="video" color="#6C71A0" size={20} />
-                          </View>
-                        ) : (
-                          <Image
-                            source={{ uri: mediaUrl(url) }}
-                            style={styles.portfolioImage}
-                          />
-                        )}
-                        <TouchableOpacity
-                          style={styles.portfolioRemove}
-                          onPress={() =>
-                            setPortfolio(prev =>
-                              prev.filter(item => item !== url),
-                            )
-                          }
-                          accessibilityRole="button"
-                          accessibilityLabel="Remove item"
-                        >
-                          <Text style={styles.portfolioRemoveText}>×</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                <SectionHead
-                  number={4}
-                  title="Tags & Niche"
-                  hint="Help brands discover you by your strengths."
+                <Field
+                  label="Price"
+                  value={draft.price}
+                  onChange={v =>
+                    setDraft(prev => ({ ...prev, price: onlyDigits(v) }))
+                  }
+                  placeholder="2000"
+                  keyboard="phone-pad"
                 />
-                <View style={styles.field}>
-                  <Text style={styles.fieldLabel}>
-                    Add Tags
-                    <Text style={styles.required}> *</Text>
-                  </Text>
-                  <Text style={styles.labelMeta}>
-                    (Fashion, Beauty, Tech, etc.)
-                  </Text>
-                  <View style={styles.tagRow}>
-                    <TextInput
-                      style={[
-                        styles.input,
-                        styles.tagInput,
-                        missing.includes('tags') && styles.inputError,
-                      ]}
-                      value={tagInput}
-                      onChangeText={setTagInput}
-                      onSubmitEditing={addTag}
-                      placeholder="Type and press Enter"
-                      placeholderTextColor="#A9ADC2"
-                      returnKeyType="done"
-                      autoCorrect={false}
-                    />
-                    <TouchableOpacity
-                      style={styles.tagAdd}
-                      onPress={addTag}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.tagAddText}>Add</Text>
-                    </TouchableOpacity>
-                  </View>
-                  {tags.length > 0 && (
-                    <View style={styles.chipWrap}>
-                      {tags.map(tag => (
-                        <View key={tag} style={styles.tagBadge}>
-                          <Text style={styles.tagBadgeText}>{tag}</Text>
+                <Field
+                  label="Category"
+                  value={draft.category}
+                  onChange={v => setDraft(prev => ({ ...prev, category: v }))}
+                  placeholder="e.g., Product Demo"
+                />
+                <Field
+                  label="Delivery (days)"
+                  value={draft.delivery}
+                  onChange={v =>
+                    setDraft(prev => ({ ...prev, delivery: onlyDigits(v) }))
+                  }
+                  placeholder="5"
+                  keyboard="phone-pad"
+                />
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={addPortfolioItem}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.addButtonText}>Add sample</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Chips
+                label="Languages"
+                hint="Pick at least one, then set fluency."
+                required
+                options={LANGUAGES}
+                selected={data.languages}
+                onPress={value => toggle('languages', value)}
+                error={bad('languages')}
+              />
+              {data.languages.map(language => (
+                <Chips
+                  key={language}
+                  label={`${language} fluency`}
+                  options={FLUENCY}
+                  selected={
+                    data.langFluency[language]
+                      ? [data.langFluency[language]]
+                      : []
+                  }
+                  onPress={value =>
+                    set('langFluency', {
+                      ...data.langFluency,
+                      [language]: value,
+                    })
+                  }
+                />
+              ))}
+
+              <Text style={styles.sectionTitle}>Rates</Text>
+              <Field
+                label="Last salary / rate"
+                value={data.lastSalary}
+                onChange={v => set('lastSalary', v)}
+                placeholder="Optional"
+              />
+              <Field
+                label="Expected payout"
+                required
+                value={data.expectedPayout}
+                onChange={v => set('expectedPayout', v)}
+                placeholder="5000"
+                keyboard="phone-pad"
+                error={bad('expectedPayout')}
+              />
+              <Select
+                label="Payout period"
+                value={data.payoutPeriod}
+                placeholder="Per Video"
+                onPress={() =>
+                  openPicker('payoutPeriod', 'Payout period', PAYOUT_PERIODS)
+                }
+              />
+              <Field
+                label="Delivery days"
+                required
+                value={data.deliveryDays}
+                onChange={v => set('deliveryDays', onlyDigits(v))}
+                placeholder="5"
+                keyboard="phone-pad"
+                error={bad('deliveryDays')}
+              />
+            </View>
+          )}
+
+          {step === 4 && (
+            <View style={styles.card}>
+              <Chips
+                label="Core setup"
+                hint="Everything you can shoot with."
+                options={CORE_SETUP}
+                selected={data.coreSetup}
+                onPress={value => toggle('coreSetup', value)}
+              />
+              <Chips
+                label="Who can appear in your videos?"
+                options={APPEAR_IN}
+                selected={data.appearIn}
+                onPress={value => toggle('appearIn', value)}
+              />
+
+              {ADDONS.map(addon => {
+                const value = (data as any)[addon.key] as string;
+                return (
+                  <View key={addon.key} style={styles.addon}>
+                    <Text style={styles.addonTitle}>{addon.title}</Text>
+                    <Text style={styles.addonNote}>{addon.note}</Text>
+                    <View style={styles.chipRow}>
+                      {[addon.yes, 'No'].map(option => {
+                        const active = value === option;
+                        return (
                           <TouchableOpacity
+                            key={option}
+                            style={[styles.chip, active && styles.chipOn]}
                             onPress={() =>
-                              setTags(prev => prev.filter(item => item !== tag))
+                              set(addon.key as keyof Data, option as never)
                             }
                             accessibilityRole="button"
-                            accessibilityLabel={`Remove ${tag}`}
+                            accessibilityState={{ selected: active }}
                           >
-                            <Text style={styles.tagBadgeRemove}>×</Text>
+                            <Text
+                              style={[
+                                styles.chipText,
+                                active && styles.chipTextOn,
+                              ]}
+                            >
+                              {option}
+                            </Text>
                           </TouchableOpacity>
-                        </View>
-                      ))}
+                        );
+                      })}
                     </View>
-                  )}
-                </View>
-
-                <SectionHead
-                  number={5}
-                  title="Social Links"
-                  pill="Private"
-                  hint="Used internally for verification — hidden from public view."
-                />
-                <Field
-                  label="Instagram"
-                  value={form.instagram || ''}
-                  onChange={v => set('instagram', v)}
-                  placeholder="@username"
-                />
-                <Field
-                  label="YouTube"
-                  value={form.youtube || ''}
-                  onChange={v => set('youtube', v)}
-                  placeholder="Channel URL"
-                />
-              </>
-            )}
-
-            {step === 2 && (
-              <>
-                <SectionHead
-                  number={6}
-                  title="Rate Card"
-                  hint="Set your price for each package and describe what is included."
-                />
-                {PACKAGES.map(pkg => (
-                  <View key={pkg.price} style={styles.package}>
-                    <Text style={styles.packageTitle}>{pkg.title}</Text>
-                    <Field
-                      label="Price ($)"
-                      required
-                      value={form[pkg.price] || ''}
-                      onChange={v => set(pkg.price, v)}
-                      placeholder={pkg.pricePlaceholder}
-                      keyboard="numeric"
-                      error={missing.includes(pkg.price)}
-                    />
-                    <Field
-                      label="What's Included"
-                      multiline
-                      value={form[pkg.included] || ''}
-                      onChange={v => set(pkg.included, v)}
-                      placeholder={pkg.includedPlaceholder}
-                      maxLength={INCLUDED_MAX}
-                      counter
-                    />
                   </View>
-                ))}
+                );
+              })}
 
-                <SectionHead
-                  number={7}
-                  title="Payment Methods"
-                  hint="Where you'd like to receive payouts."
-                />
-                <Field
-                  label="UPI ID"
-                  required
-                  value={form.upi || ''}
-                  onChange={v => set('upi', v)}
-                  placeholder="yourname@upi"
-                  error={missing.includes('upi')}
-                />
-                <Field
-                  label="Bank Account (Last 4 digits)"
-                  value={form.bank_account || ''}
-                  onChange={v => set('bank_account', v)}
-                  placeholder="XXXX1234"
-                />
-              </>
-            )}
-
-            {step === 3 && (
-              <>
-                <SectionHead
-                  number={8}
-                  title="Preferences & Terms"
-                  hint="Final step before review."
-                />
-                <Checkbox
-                  label="I want to receive campaign briefs"
-                  checked={receiveBriefs}
-                  onToggle={() => setReceiveBriefs(v => !v)}
-                />
-                <Checkbox
-                  label="I agree to the Terms & Conditions"
-                  checked={termsAgreed}
-                  onToggle={() => setTermsAgreed(v => !v)}
-                  error={missing.includes('terms')}
-                />
-              </>
-            )}
-          </View>
+              <Field
+                label="Anything else you can bring?"
+                multiline
+                value={data.bring}
+                onChange={v => set('bring', v)}
+                placeholder="Props, locations, a studio..."
+              />
+              <Chips
+                label="Weekly availability"
+                options={WEEKLY}
+                selected={data.weekly ? [data.weekly] : []}
+                onPress={value => set('weekly', value)}
+              />
+              <Chips
+                label="Topics you will NOT cover"
+                options={TOPICS}
+                selected={data.topics}
+                onPress={value => toggle('topics', value)}
+              />
+            </View>
+          )}
 
           {!!error && (
             <View style={styles.errorBox}>
@@ -733,65 +1184,96 @@ function CreatorProfileSetup({ token, onDone, onLogout }: Props) {
             </View>
           )}
 
-          {last && (
-            <Text style={styles.note}>
-              {progressPct}% complete · Your profile will be reviewed by our
-              team within 24–48 hours.
-            </Text>
-          )}
+          <Text style={styles.note}>
+            Your profile goes to our team for a quick review after this. You can
+            explore the app while it is pending.
+          </Text>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
+        <View
+          style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}
+        >
+          {step > 1 && (
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={back}
+              disabled={saving}
+              accessibilityRole="button"
+            >
+              <Text style={styles.backText}>Back</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={[styles.submit, (saving || busy) && styles.submitOff]}
-            onPress={last ? save : next}
-            disabled={saving || busy}
+            style={[styles.submit, saving && styles.submitOff]}
+            onPress={next}
+            disabled={saving}
             accessibilityRole="button"
           >
             {saving ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={styles.submitText}>
-                {last ? 'Submit for Review' : 'Continue'}
+                {step < TOTAL_STEPS ? 'Proceed' : 'Submit Application'}
               </Text>
             )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </View>
-  );
-}
 
-/** The numbered section header the web shows above each block of fields. */
-function SectionHead({
-  number,
-  title,
-  hint,
-  optional,
-  pill,
-}: {
-  number: number;
-  title: string;
-  hint: string;
-  optional?: boolean;
-  pill?: string;
-}) {
-  return (
-    <View style={styles.sectionHead}>
-      <View style={styles.sectionNumber}>
-        <Text style={styles.sectionNumberText}>{number}</Text>
-      </View>
-      <View style={styles.sectionCopy}>
-        <View style={styles.sectionTitleRow}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          {(optional || !!pill) && (
-            <View style={styles.pill}>
-              <Text style={styles.pillText}>{pill || 'Optional'}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.sectionHint}>{hint}</Text>
-      </View>
+      <Modal
+        visible={picker !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPicker(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setPicker(null)}
+        >
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>{picker?.title}</Text>
+            <ScrollView>
+              {(picker?.options || []).map(option => {
+                const active =
+                  picker && (data as any)[picker.field] === option;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.modalRow}
+                    onPress={() => {
+                      if (picker) {
+                        // Changing the state invalidates the chosen city.
+                        if (picker.field === 'state') {
+                          setData(prev => ({
+                            ...prev,
+                            state: option,
+                            city: '',
+                          }));
+                        } else {
+                          set(picker.field, option as never);
+                        }
+                      }
+                      setPicker(null);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: !!active }}
+                  >
+                    <Text
+                      style={[
+                        styles.modalRowText,
+                        active && styles.modalRowTextOn,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -806,9 +1288,6 @@ function Field({
   multiline,
   keyboard,
   error,
-  meta,
-  maxLength,
-  counter,
 }: {
   label: string;
   value: string;
@@ -816,11 +1295,8 @@ function Field({
   placeholder?: string;
   required?: boolean;
   multiline?: boolean;
-  keyboard?: 'default' | 'numeric';
+  keyboard?: 'default' | 'url' | 'phone-pad';
   error?: boolean;
-  meta?: string;
-  maxLength?: number;
-  counter?: boolean;
 }) {
   return (
     <View style={styles.field}>
@@ -828,7 +1304,6 @@ function Field({
         {label}
         {required ? <Text style={styles.required}> *</Text> : null}
       </Text>
-      {!!meta && <Text style={styles.labelMeta}>{meta}</Text>}
       <TextInput
         style={[
           styles.input,
@@ -840,49 +1315,99 @@ function Field({
         placeholder={placeholder || label}
         placeholderTextColor="#A9ADC2"
         keyboardType={keyboard || 'default'}
+        autoCapitalize={keyboard === 'url' ? 'none' : 'sentences'}
         autoCorrect={false}
         multiline={multiline}
-        maxLength={maxLength}
       />
-      {!!counter && !!maxLength && (
-        <Text style={styles.charCount}>
-          {value.length}/{maxLength} characters
-        </Text>
-      )}
     </View>
   );
 }
 
-/** Native stand-in for the web's `<input type="checkbox">` rows. */
-function Checkbox({
+/** Read-only row that opens the shared picker sheet. */
+function Select({
   label,
-  checked,
-  onToggle,
+  value,
+  placeholder,
+  onPress,
+  required,
   error,
 }: {
   label: string;
-  checked: boolean;
-  onToggle: () => void;
+  value: string;
+  placeholder: string;
+  onPress: () => void;
+  required?: boolean;
   error?: boolean;
 }) {
   return (
-    <TouchableOpacity
-      style={styles.checkboxRow}
-      onPress={onToggle}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
-    >
-      <View
-        style={[
-          styles.checkbox,
-          checked && styles.checkboxOn,
-          error && styles.checkboxError,
-        ]}
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>
+        {label}
+        {required ? <Text style={styles.required}> *</Text> : null}
+      </Text>
+      <TouchableOpacity
+        style={[styles.select, error && styles.inputError]}
+        onPress={onPress}
+        accessibilityRole="button"
       >
-        {checked && <Icon name="check" color="#FFFFFF" size={14} />}
+        <Text style={[styles.selectText, !value && styles.selectPlaceholder]}>
+          {value || placeholder}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/**
+ * Tappable chips. `values` lets the label shown differ from the value stored,
+ * which the two content pickers need — they display a label but submit a slug.
+ */
+function Chips({
+  label,
+  hint,
+  options,
+  values,
+  selected,
+  onPress,
+  required,
+  error,
+}: {
+  label: string;
+  hint?: string;
+  options: string[];
+  values?: string[];
+  selected: string[];
+  onPress: (value: string) => void;
+  required?: boolean;
+  error?: boolean;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>
+        {label}
+        {required ? <Text style={styles.required}> *</Text> : null}
+      </Text>
+      {!!hint && <Text style={styles.sectionNote}>{hint}</Text>}
+      <View style={[styles.chipRow, error && styles.chipRowError]}>
+        {options.map((option, index) => {
+          const value = values ? values[index] : option;
+          const active = selected.includes(value);
+          return (
+            <TouchableOpacity
+              key={value}
+              style={[styles.chip, active && styles.chipOn]}
+              onPress={() => onPress(value)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextOn]}>
+                {option}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
-      <Text style={styles.checkboxLabel}>{label}</Text>
-    </TouchableOpacity>
+    </View>
   );
 }
 
@@ -890,346 +1415,244 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F7F7FD' },
   flex: { flex: 1 },
   header: {
-    paddingHorizontal: scale(10),
-    paddingTop: scale(10),
-    paddingBottom: scale(10),
+    paddingHorizontal: scale(16),
+    paddingTop: scale(12),
+    paddingBottom: scale(12),
     flexDirection: 'row',
     alignItems: 'center',
-    gap: scale(4),
-  },
-  headerBtn: {
-    width: scale(36),
-    height: scale(36),
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: scale(8),
   },
   headerCopy: { flex: 1 },
   headerTitle: {
     fontSize: fontScale(19),
     fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '800',
-    color: '#15163F',
+    color: '#171A2B',
   },
-  headerSub: { marginTop: scale(2), fontSize: fontScale(11), color: '#777B96' },
-  logout: {
-    paddingHorizontal: scale(8),
-    fontSize: fontScale(12),
-    fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '700',
-    color: '#4C5BF3',
+  headerSub: {
+    marginTop: scale(2),
+    fontSize: fontScale(12.5),
+    color: '#6C7189',
   },
-
-  progress: {
-    flexDirection: 'row',
-    gap: scale(5),
-    paddingHorizontal: scale(16),
-    paddingBottom: scale(12),
-  },
-  progressBar: {
-    flex: 1,
+  logout: { fontSize: fontScale(13), color: '#4C5BF3' },
+  progressRow: { paddingHorizontal: scale(16), paddingBottom: scale(10) },
+  progressText: { fontSize: fontScale(12), color: '#6C7189' },
+  progressTrack: {
+    marginTop: scale(6),
     height: scale(4),
     borderRadius: scale(2),
-    backgroundColor: '#E4E5F0',
+    backgroundColor: '#E2E4F0',
+    overflow: 'hidden',
   },
-  progressOn: { backgroundColor: '#4C5BF3' },
-
-  content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(24) },
+  progressFill: { height: '100%', backgroundColor: '#4C5BF3' },
+  content: { paddingHorizontal: scale(16), paddingBottom: scale(24) },
   card: {
-    padding: scale(16),
-    paddingTop: scale(18),
-    borderRadius: scale(16),
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EDEEF6',
+    borderRadius: scale(16),
+    padding: scale(16),
   },
-
-  sectionHead: {
-    marginTop: scale(18),
-    marginBottom: scale(2),
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: scale(10),
-  },
-  sectionNumber: {
-    width: scale(24),
-    height: scale(24),
-    borderRadius: scale(12),
-    backgroundColor: '#EEF0FE',
+  photoPicker: {
+    alignSelf: 'center',
+    width: scale(88),
+    height: scale(88),
+    borderRadius: scale(44),
+    backgroundColor: '#F1F2FA',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  sectionNumberText: {
+  photoImage: { width: '100%', height: '100%' },
+  photoPlus: { fontSize: fontScale(28), color: '#9498B0' },
+  photoHint: {
+    marginTop: scale(8),
+    marginBottom: scale(8),
+    textAlign: 'center',
     fontSize: fontScale(12),
-    fontFamily: 'Inter-ExtraBold',
-    fontWeight: '800',
-    color: '#4C5BF3',
+    color: '#6C7189',
   },
-  sectionCopy: { flex: 1 },
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: scale(7) },
   sectionTitle: {
+    marginTop: scale(18),
+    marginBottom: scale(4),
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '800',
-    color: '#15163F',
+    color: '#171A2B',
   },
-  pill: {
-    paddingHorizontal: scale(7),
-    paddingVertical: scale(2),
-    borderRadius: scale(6),
-    backgroundColor: '#F0F1F7',
+  sectionNote: {
+    marginBottom: scale(8),
+    fontSize: fontScale(12),
+    color: '#6C7189',
   },
-  pillText: {
-    fontSize: fontScale(10),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#7C819C',
-  },
-  sectionHint: { marginTop: scale(3), fontSize: fontScale(11), lineHeight: fontScale(16), color: '#777B96' },
-
   field: { marginTop: scale(14) },
   fieldLabel: {
+    marginBottom: scale(6),
     fontSize: fontScale(13),
-    fontFamily: 'Inter-SemiBold',
-    fontWeight: '600',
-    color: '#15163F',
-    marginBottom: scale(7),
+    color: '#3A3F58',
   },
-  labelMeta: { marginTop: scale(-4), marginBottom: scale(7), fontSize: fontScale(11), color: '#8A8FA8' },
   required: { color: '#E5484D' },
   input: {
-    minHeight: scale(46),
-    borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#E2E4F0',
-    backgroundColor: '#FBFBFE',
+    borderRadius: scale(10),
     paddingHorizontal: scale(12),
+    paddingVertical: scale(11),
+    fontSize: fontScale(14),
+    color: '#2B2F45',
+    backgroundColor: '#FFFFFF',
+  },
+  inputMultiline: { minHeight: scale(88), textAlignVertical: 'top' },
+  inputError: { borderColor: '#E5484D' },
+  followerInput: { marginTop: scale(8) },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
+  dialButton: {
+    paddingHorizontal: scale(14),
     paddingVertical: scale(12),
-    fontSize: fontScale(15),
-    color: '#15163F',
+    borderRadius: scale(10),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FFFFFF',
   },
-  inputMultiline: { minHeight: scale(84), textAlignVertical: 'top' },
-  inputError: { borderColor: '#E5484D', backgroundColor: '#FFF6F6' },
-  charCount: {
-    marginTop: scale(5),
-    fontSize: fontScale(10),
-    color: '#9498B0',
-    textAlign: 'right',
+  dialText: { fontSize: fontScale(14), color: '#2B2F45' },
+  phoneInput: { flex: 1 },
+  select: {
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    borderRadius: scale(10),
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(13),
+    backgroundColor: '#FFFFFF',
   },
-
-  usernameWrap: {
+  selectText: { fontSize: fontScale(14), color: '#2B2F45' },
+  selectPlaceholder: { color: '#A9ADC2' },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
+  chipRowError: {
+    borderWidth: 1,
+    borderColor: '#E5484D',
+    borderRadius: scale(10),
+    padding: scale(6),
+  },
+  chip: {
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(8),
+    borderRadius: scale(999),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FFFFFF',
+  },
+  chipOn: { borderColor: '#4C5BF3', backgroundColor: '#EEF0FF' },
+  chipText: { fontSize: fontScale(12.5), color: '#3A3F58' },
+  chipTextOn: { color: '#3340C8' },
+  portfolioRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: scale(46),
+    justifyContent: 'space-between',
+    gap: scale(8),
+    paddingVertical: scale(10),
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEFF6',
+  },
+  portfolioText: { flex: 1, fontSize: fontScale(13), color: '#2B2F45' },
+  removeText: { fontSize: fontScale(12.5), color: '#E5484D' },
+  draftBox: {
+    marginTop: scale(10),
+    padding: scale(12),
     borderRadius: scale(12),
-    borderWidth: 1,
-    borderColor: '#E2E4F0',
-    backgroundColor: '#FBFBFE',
-    paddingHorizontal: scale(12),
+    backgroundColor: '#F7F7FD',
   },
-  usernamePrefix: {
-    fontSize: fontScale(15),
-    fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '700',
-    color: '#8A8FA8',
-  },
-  usernameInput: {
-    flex: 1,
+  uploadButton: {
     paddingVertical: scale(12),
-    paddingHorizontal: scale(4),
-    fontSize: fontScale(15),
-    color: '#15163F',
-  },
-
-  dropzone: {
-    marginTop: scale(12),
-    paddingVertical: scale(22),
-    borderRadius: scale(14),
+    borderRadius: scale(10),
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: '#C3C6E8',
-    backgroundColor: '#FBFBFE',
+    borderColor: '#B9BEDD',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: scale(5),
   },
-  dropzoneFilled: { borderColor: '#8FD3AC', backgroundColor: '#F4FCF7' },
-  dropzoneText: {
-    fontSize: fontScale(13),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#15163F',
-  },
-  dropzoneSub: { fontSize: fontScale(11), color: '#8A8FA8' },
-  ghostBtn: {
-    marginTop: scale(9),
-    fontSize: fontScale(12),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#C4373B',
-    textAlign: 'center',
-  },
-
-  portfolioGrid: {
-    marginTop: scale(12),
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: scale(8),
-  },
-  portfolioItem: {
-    width: scale(84),
-    height: scale(84),
-    borderRadius: scale(10),
-    overflow: 'hidden',
-    backgroundColor: '#E7E8F2',
-  },
-  portfolioImage: { width: '100%', height: '100%' },
-  portfolioVideo: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  portfolioRemove: {
-    position: 'absolute',
-    top: scale(3),
-    right: scale(3),
-    width: scale(20),
-    height: scale(20),
-    borderRadius: scale(10),
-    backgroundColor: 'rgba(21,22,63,0.72)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  portfolioRemoveText: {
-    color: '#FFFFFF',
-    fontSize: fontScale(14),
-    lineHeight: fontScale(16),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-  },
-
-  tagRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
-  tagInput: { flex: 1 },
-  tagAdd: {
-    height: scale(46),
-    paddingHorizontal: scale(16),
-    borderRadius: scale(12),
-    backgroundColor: '#EEF0FE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tagAddText: {
-    fontSize: fontScale(13),
-    fontFamily: 'Inter-ExtraBold',
-    fontWeight: '800',
-    color: '#4C5BF3',
-  },
-  chipWrap: {
-    marginTop: scale(10),
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: scale(8),
-  },
-  tagBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(6),
-    height: scale(32),
-    paddingHorizontal: scale(12),
-    borderRadius: scale(8),
-    backgroundColor: '#4C5BF3',
-  },
-  tagBadgeText: {
-    fontSize: fontScale(12),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  tagBadgeRemove: {
-    fontSize: fontScale(15),
-    lineHeight: fontScale(17),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-
-  package: {
+  uploadText: { fontSize: fontScale(13), color: '#4C5BF3' },
+  addButton: {
     marginTop: scale(14),
+    paddingVertical: scale(11),
+    borderRadius: scale(10),
+    backgroundColor: '#EEF0FF',
+    alignItems: 'center',
+  },
+  addButtonText: { fontSize: fontScale(13.5), color: '#3340C8' },
+  addon: {
+    marginTop: scale(16),
     padding: scale(12),
-    borderRadius: scale(14),
-    backgroundColor: '#FAFAFE',
-    borderWidth: 1,
-    borderColor: '#EDEEF6',
+    borderRadius: scale(12),
+    backgroundColor: '#F7F7FD',
   },
-  packageTitle: {
-    fontSize: fontScale(13),
-    fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '800',
-    color: '#15163F',
+  addonTitle: { fontSize: fontScale(13.5), color: '#171A2B' },
+  addonNote: {
+    marginTop: scale(2),
+    marginBottom: scale(8),
+    fontSize: fontScale(12),
+    color: '#6C7189',
   },
-
-  checkboxRow: {
-    marginTop: scale(14),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(10),
-  },
-  checkbox: {
-    width: scale(22),
-    height: scale(22),
-    borderRadius: scale(6),
-    borderWidth: 1.5,
-    borderColor: '#C3C6E8',
-    backgroundColor: '#FBFBFE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxOn: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
-  checkboxError: { borderColor: '#E5484D' },
-  checkboxLabel: { flex: 1, fontSize: fontScale(13), color: '#15163F' },
-
   errorBox: {
     marginTop: scale(12),
     padding: scale(12),
-    borderRadius: scale(12),
-    backgroundColor: '#FFE6E7',
+    borderRadius: scale(10),
+    backgroundColor: '#FDECEC',
   },
-  errorText: {
-    fontSize: fontScale(12),
-    fontFamily: 'Inter-SemiBold',
-    fontWeight: '600',
-    color: '#C4373B',
-  },
-
+  errorText: { fontSize: fontScale(13), color: '#B4232A' },
   note: {
     marginTop: scale(14),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(17),
-    color: '#8A8FA8',
+    fontSize: fontScale(12),
+    color: '#6C7189',
     textAlign: 'center',
   },
-
   footer: {
+    flexDirection: 'row',
+    gap: scale(10),
     paddingHorizontal: scale(16),
-    paddingVertical: scale(12),
-    borderTopWidth: 1,
-    borderTopColor: '#EDEEF6',
-    backgroundColor: '#FFFFFF',
+    paddingTop: scale(12),
+    backgroundColor: '#F7F7FD',
   },
+  backButton: {
+    paddingHorizontal: scale(20),
+    paddingVertical: scale(14),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D8DBEC',
+  },
+  backText: { fontSize: fontScale(14), color: '#3A3F58' },
   submit: {
-    height: scale(50),
-    borderRadius: scale(14),
-    backgroundColor: '#1B2A6B',
+    flex: 1,
+    paddingVertical: scale(14),
+    borderRadius: scale(12),
+    backgroundColor: '#20204A',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   submitOff: { opacity: 0.6 },
   submitText: {
-    fontSize: fontScale(15),
-    fontFamily: 'Inter-ExtraBold',
-    fontWeight: '800',
+    fontSize: fontScale(14.5),
+    fontFamily: 'ReadexPro-SemiBold',
     color: '#FFFFFF',
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(12,14,34,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    maxHeight: '70%',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: scale(18),
+    borderTopRightRadius: scale(18),
+    padding: scale(16),
+  },
+  modalTitle: {
+    marginBottom: scale(8),
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-SemiBold',
+    color: '#171A2B',
+  },
+  modalRow: {
+    paddingVertical: scale(13),
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F7',
+  },
+  modalRowText: { fontSize: fontScale(14), color: '#2B2F45' },
+  modalRowTextOn: { color: '#4C5BF3' },
 });
 
 export default CreatorProfileSetup;

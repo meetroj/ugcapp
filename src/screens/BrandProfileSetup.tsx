@@ -54,6 +54,76 @@ const INDUSTRIES = [
   'Other',
 ];
 
+/**
+ * Countries offered by the web page's country <select>.
+ */
+const COUNTRIES = [
+  'United States',
+  'United Kingdom',
+  'India',
+  'Canada',
+  'Australia',
+  'Germany',
+  'France',
+  'United Arab Emirates',
+  'Singapore',
+  'Netherlands',
+  'Spain',
+  'Italy',
+  'Japan',
+  'Brazil',
+  'Mexico',
+  'Other',
+];
+
+/**
+ * Dial codes offered beside the phone field. The web renders a flag image per
+ * row from flagcdn.com; a remote image per row is not worth the load here, so
+ * the country code carries the meaning instead.
+ */
+const DIAL_CODES = [
+  { label: 'IN', code: '+91' },
+  { label: 'US', code: '+1' },
+  { label: 'GB', code: '+44' },
+  { label: 'AU', code: '+61' },
+  { label: 'CA', code: '+1' },
+  { label: 'DE', code: '+49' },
+  { label: 'FR', code: '+33' },
+  { label: 'AE', code: '+971' },
+  { label: 'SG', code: '+65' },
+];
+
+/** Same two rules the web validates with — any real website, any IG handle. */
+const URL_RE = /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/\S*)?$/i;
+const IG_HANDLE_RE = /^@?[a-z0-9._]{1,30}$/i;
+
+/**
+ * Reduces whatever was pasted to a bare Instagram handle. A link copied out of
+ * the app carries ?igsh=/&utm_source= tracking params and sometimes a /reel/
+ * path; both have to go or the handle fails IG_HANDLE_RE.
+ */
+function instagramHandle(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
+    .replace(/^@/, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/.*$/, '')
+    .replace(/\/+$/, '');
+}
+
+/**
+ * The backend validates website as a URL, so a bare "www.brand.com" is
+ * rejected with a 422. Prepend the scheme when the user left it out.
+ */
+function withScheme(url: string): string {
+  const value = String(url || '').trim();
+  if (!value) {
+    return value;
+  }
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
 const photoUrl = (path: string) =>
   /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
 
@@ -95,7 +165,8 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
   });
   const insets = useSafeAreaInsets();
   const [logo, setLogo] = useState('');
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picker, setPicker] = useState<null | 'industry' | 'country' | 'dial'>(null);
+  const [dial, setDial] = useState(DIAL_CODES[0]);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [missing, setMissing] = useState<string[]>([]);
@@ -133,35 +204,56 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
   }, [token]);
 
   const save = useCallback(async () => {
-    // The web marks description, product type and industry as required and
-    // leaves everything in the online-presence block optional.
-    const required = [
-      'business_name',
-      'business_description',
-      'product_type',
-      'industry_category',
-    ];
+    // Required set is the web's: business name, website, phone and country.
+    // Industry and GSTIN are optional there, so they are optional here too.
+    const required = ['business_name', 'website', 'phone', 'country'];
     const blank = required.filter(key => !String(form[key] || '').trim());
+
+    // Format checks the web runs alongside the required ones.
+    const website = String(form.website || '').trim();
+    if (website && !URL_RE.test(website) && !blank.includes('website')) {
+      blank.push('website');
+    }
+    const instagram = String(form.instagram || '').trim();
+    const badInstagram = !!instagram && !IG_HANDLE_RE.test(instagram);
+    if (badInstagram) {
+      blank.push('instagram');
+    }
+
     setMissing(blank);
     if (blank.length) {
-      setError('Fill in the highlighted fields.');
+      setError(
+        badInstagram && blank.length === 1
+          ? 'Enter a valid Instagram username, for example @yourbrand.'
+          : 'Fill in the highlighted fields.',
+      );
       return;
     }
 
     setSaving(true);
     setError('');
     try {
+      const industry = String(form.industry_category || '');
       await completeProfile(token, 'business', {
         business_name: form.business_name,
-        business_description: form.business_description,
-        product_type: form.product_type,
-        industry_category: form.industry_category,
-        website: form.website || '',
+        website: withScheme(form.website),
         social_links: {
-          facebook: form.facebook || '',
-          instagram: form.instagram || '',
-          linkedin: form.linkedin || '',
+          ...(instagram
+            ? { instagram: `https://instagram.com/${instagramHandle(instagram)}` }
+            : {}),
+          linkedin: '',
         },
+        industry_category:
+          industry === 'Other'
+            ? String(form.custom_industry || '').trim() || 'Other'
+            : industry,
+        // Required by the backend's BusinessProfileUpdate model but no longer
+        // collected by either client, so both send empty strings.
+        business_description: '',
+        product_type: '',
+        country: form.country,
+        phone: `${dial.code} ${String(form.phone || '').trim()}`.trim(),
+        gstin: form.gstin || '',
         logo,
       });
       onDone();
@@ -170,7 +262,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [form, logo, onDone, token]);
+  }, [dial, form, logo, onDone, token]);
 
   return (
     <View style={styles.screen}>
@@ -232,36 +324,89 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
             />
 
             <Field
-              label="Business Description"
+              label="Website"
               required
-              multiline
-              value={form.business_description || ''}
-              onChange={v => set('business_description', v)}
-              placeholder="Describe your business, products, and what makes your brand unique..."
-              error={missing.includes('business_description')}
+              value={form.website || ''}
+              onChange={v => set('website', v)}
+              placeholder="yourbrand.com"
+              keyboard="url"
+              error={missing.includes('website')}
             />
 
             <Field
-              label="Product Type"
-              required
-              value={form.product_type || ''}
-              onChange={v => set('product_type', v)}
-              placeholder="e.g., Clothing, Electronics, Skincare"
-              error={missing.includes('product_type')}
+              label="Instagram"
+              value={form.instagram || ''}
+              onChange={v => set('instagram', v)}
+              placeholder="@yourbrand"
+              error={missing.includes('instagram')}
             />
 
-            {/* Native stand-in for the web's industry <select>. */}
+            {/* Dial code + number, matching the web's split control. */}
             <View style={styles.field}>
               <Text style={styles.fieldLabel}>
-                Industry Category
+                Phone number
+                <Text style={styles.required}> *</Text>
+              </Text>
+              <View style={styles.phoneRow}>
+                <TouchableOpacity
+                  style={styles.dialButton}
+                  onPress={() => setPicker('dial')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Select country dial code"
+                >
+                  <Text style={styles.dialText}>
+                    {dial.label} {dial.code}
+                  </Text>
+                  <Icon name="chevron" color="#7C819C" size={16} />
+                </TouchableOpacity>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.phoneInput,
+                    missing.includes('phone') && styles.inputError,
+                  ]}
+                  value={form.phone || ''}
+                  onChangeText={v => set('phone', v.replace(/\D/g, ''))}
+                  placeholder="98765 43210"
+                  placeholderTextColor="#A9ADC2"
+                  keyboardType="phone-pad"
+                  autoCorrect={false}
+                />
+              </View>
+            </View>
+
+            {/* Native stand-in for the web's country <select>. */}
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>
+                Country
                 <Text style={styles.required}> *</Text>
               </Text>
               <TouchableOpacity
                 style={[
                   styles.select,
-                  missing.includes('industry_category') && styles.inputError,
+                  missing.includes('country') && styles.inputError,
                 ]}
-                onPress={() => setPickerOpen(true)}
+                onPress={() => setPicker('country')}
+                accessibilityRole="button"
+              >
+                <Text
+                  style={[
+                    styles.selectText,
+                    !form.country && styles.selectPlaceholder,
+                  ]}
+                >
+                  {form.country || 'Select a country'}
+                </Text>
+                <Icon name="chevron" color="#7C819C" size={18} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Native stand-in for the web's industry <select>. Optional there. */}
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Industry Category</Text>
+              <TouchableOpacity
+                style={styles.select}
+                onPress={() => setPicker('industry')}
                 accessibilityRole="button"
               >
                 <Text
@@ -276,35 +421,21 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.sectionTitle}>Online Presence</Text>
+            {/* Only the web's "Other" branch asks for a typed industry. */}
+            {form.industry_category === 'Other' && (
+              <Field
+                label="Tell us your industry"
+                value={form.custom_industry || ''}
+                onChange={v => set('custom_industry', v)}
+                placeholder="e.g., Pet care"
+              />
+            )}
 
             <Field
-              label="Website URL"
-              value={form.website || ''}
-              onChange={v => set('website', v)}
-              placeholder="https://yourbrand.com"
-              keyboard="url"
-            />
-
-            <Field
-              label="Facebook"
-              value={form.facebook || ''}
-              onChange={v => set('facebook', v)}
-              placeholder="facebook.com/yourpage"
-            />
-
-            <Field
-              label="Instagram"
-              value={form.instagram || ''}
-              onChange={v => set('instagram', v)}
-              placeholder="@yourbrand"
-            />
-
-            <Field
-              label="LinkedIn"
-              value={form.linkedin || ''}
-              onChange={v => set('linkedin', v)}
-              placeholder="linkedin.com/company/yourbrand"
+              label="GSTIN"
+              value={form.gstin || ''}
+              onChange={v => set('gstin', v.toUpperCase())}
+              placeholder="22AAAAA0000A1Z5"
             />
           </View>
 
@@ -336,45 +467,84 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
         </View>
       </KeyboardAvoidingView>
 
+      {/* One sheet serves all three lists; `picker` says which one is open. */}
       <Modal
-        visible={pickerOpen}
+        visible={picker !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setPickerOpen(false)}
+        onRequestClose={() => setPicker(null)}
       >
         <TouchableOpacity
           style={styles.modalBackdrop}
           activeOpacity={1}
-          onPress={() => setPickerOpen(false)}
+          onPress={() => setPicker(null)}
         >
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Select an industry</Text>
+            <Text style={styles.modalTitle}>
+              {picker === 'country'
+                ? 'Select a country'
+                : picker === 'dial'
+                ? 'Select a dial code'
+                : 'Select an industry'}
+            </Text>
             <ScrollView>
-              {INDUSTRIES.map(industry => {
-                const active = form.industry_category === industry;
-                return (
-                  <TouchableOpacity
-                    key={industry}
-                    style={styles.modalRow}
-                    onPress={() => {
-                      set('industry_category', industry);
-                      setPickerOpen(false);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                  >
-                    <Text
-                      style={[
-                        styles.modalRowText,
-                        active && styles.modalRowTextOn,
-                      ]}
-                    >
-                      {industry}
-                    </Text>
-                    {active && <Icon name="check" color="#4C5BF3" size={18} />}
-                  </TouchableOpacity>
-                );
-              })}
+              {picker === 'dial'
+                ? DIAL_CODES.map(option => {
+                    const active = dial.label === option.label;
+                    return (
+                      <TouchableOpacity
+                        key={option.label}
+                        style={styles.modalRow}
+                        onPress={() => {
+                          setDial(option);
+                          setPicker(null);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text
+                          style={[
+                            styles.modalRowText,
+                            active && styles.modalRowTextOn,
+                          ]}
+                        >
+                          {option.label} {option.code}
+                        </Text>
+                        {active && (
+                          <Icon name="check" color="#4C5BF3" size={18} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })
+                : (picker === 'country' ? COUNTRIES : INDUSTRIES).map(option => {
+                    const key =
+                      picker === 'country' ? 'country' : 'industry_category';
+                    const active = form[key] === option;
+                    return (
+                      <TouchableOpacity
+                        key={option}
+                        style={styles.modalRow}
+                        onPress={() => {
+                          set(key, option);
+                          setPicker(null);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text
+                          style={[
+                            styles.modalRowText,
+                            active && styles.modalRowTextOn,
+                          ]}
+                        >
+                          {option}
+                        </Text>
+                        {active && (
+                          <Icon name="check" color="#4C5BF3" size={18} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
             </ScrollView>
           </View>
         </TouchableOpacity>
@@ -430,6 +600,20 @@ function Field({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F7F7FD' },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
+  dialButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(4),
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(12),
+    borderRadius: scale(10),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FFFFFF',
+  },
+  dialText: { fontSize: fontScale(14), color: '#2B2F45' },
+  phoneInput: { flex: 1 },
   flex: { flex: 1 },
   header: {
     paddingHorizontal: scale(16),
