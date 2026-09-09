@@ -296,7 +296,13 @@ type Deliverable = {
   quantity: number;
   duration: string;
   aspectRatios: string[];
-  rawRequired: boolean;
+  /**
+   * Does the brand want a finished CUT on top of the raw footage? Raw is not a
+   * question - creators hand it over on every brief - so the old "Raw file delivery
+   * required" toggle asked something that had no wrong answer. This replaces it, and
+   * it is what gives the creator a second upload step when they submit.
+   */
+  editedRequired: boolean;
 };
 
 let deliverableSeq = 0;
@@ -306,7 +312,7 @@ const createDeliverable = (): Deliverable => ({
   quantity: 1,
   duration: '',
   aspectRatios: ['9:16'],
-  rawRequired: false,
+  editedRequired: false,
 });
 
 type FormState = {
@@ -1184,8 +1190,8 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           (item, index) =>
             `${index + 1}. ${item.quantity} x ${item.type}; duration ${
               item.duration || 'n/a'
-            }; ratios ${item.aspectRatios.join(', ')}; raw files ${
-              item.rawRequired ? 'required' : 'not required'
+            }; ratios ${item.aspectRatios.join(', ')}; deliver ${
+              item.editedRequired ? 'raw footage + an edited cut' : 'raw footage only'
             }`,
         ),
         '',
@@ -1303,7 +1309,10 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           quantity: item.quantity,
           duration: item.duration || undefined,
           aspect_ratios: item.aspectRatios,
-          raw_required: item.rawRequired,
+          // Always true - every brief gets the raw footage. Still sent because the
+          // backend model and the creator-facing brief both read this field.
+          raw_required: true,
+          edited_required: item.editedRequired,
         })),
         product_visible: form.productVisible,
         product_visible_seconds: form.visibilitySeconds,
@@ -1711,11 +1720,11 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                   />
 
                   <Segment
-                    label="Raw file delivery required"
+                    label="Edited file delivery required"
                     required
-                    value={item.rawRequired}
+                    value={item.editedRequired}
                     onChange={v =>
-                      updateDeliverable(item.id, { rawRequired: v })
+                      updateDeliverable(item.id, { editedRequired: v })
                     }
                   />
 

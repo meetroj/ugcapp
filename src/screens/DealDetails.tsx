@@ -332,6 +332,13 @@ function DealDetails({
     ? escrow.deductions
     : [];
 
+  // Does this brief owe a finished cut on top of the raw footage? Any ONE deliverable
+  // row asking for it is enough. A brief saved before the field existed reads false,
+  // so its submit flow is the single-file one it has always been.
+  const needsEdited =
+    Array.isArray(campaign.deliverable_items) &&
+    campaign.deliverable_items.some((d: any) => d && d.edited_required);
+
   const campaignId = String(campaign.id || deal.campaign_id || '');
 
   /**
@@ -340,6 +347,45 @@ function DealDetails({
    * parent-supplied onSubmitWork still wins so a future dedicated screen can
    * replace this without touching the button.
    */
+  /** Pick one file and push it through the generic uploader. Null when the picker
+   *  was dismissed, which is a cancel and not an error. */
+  const pickAndUpload = async (): Promise<string | null> => {
+    const picked = await launchImageLibrary({
+      mediaType: 'mixed',
+      selectionLimit: 1,
+    });
+    const asset = picked.assets?.[0];
+    if (!asset?.uri) {
+    // Only now is there something to upload, so this is where the busy state starts.
+      return null;
+    }
+    setSubmitting(true);
+    const url = await uploadMedia(
+      token as string,
+      { uri: asset.uri, fileName: asset.fileName, type: asset.type },
+      'file',
+    );
+    if (!url) {
+      throw new Error('The upload did not return a file URL.');
+    }
+    return url;
+  };
+
+  /** Says which file to pick next, so the two-file flow cannot be picked blind.
+   *  Resolves false when the creator backs out. */
+  const confirmStep = (title: string, message: string) =>
+    new Promise<boolean>(resolve => {
+      Alert.alert(
+        title,
+        message,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Choose file', onPress: () => resolve(true) },
+        ],
+        { cancelable: false },
+      );
+    });
+
   const handleSubmitWork = async () => {
     if (onSubmitWork) {
       onSubmitWork();
@@ -348,25 +394,49 @@ function DealDetails({
     if (!token || !campaignId) {
       return;
     }
-    const picked = await launchImageLibrary({
-      mediaType: 'mixed',
-      selectionLimit: 1,
-    });
-    const asset = picked.assets?.[0];
-    if (!asset?.uri) {
-      return;
-    }
-    setSubmitting(true);
     try {
-      const url = await uploadMedia(
-        token,
-        { uri: asset.uri, fileName: asset.fileName, type: asset.type },
-        'file',
-      );
-      if (!url) {
-        throw new Error('The upload did not return a file URL.');
+      if (needsEdited) {
+        // Two files, picked one at a time - the mobile equivalent of the web's two
+        // upload zones. Bail out silently on cancel at any step; nothing is submitted
+        // until BOTH files are in hand, so a half-finished flow leaves no trace.
+        if (
+          !(await confirmStep(
+            'Edited file',
+            'This brief asks for a finished cut as well as the raw footage. Pick the EDITED file first.',
+          ))
+        ) {
+          return;
+        }
+        const edited = await pickAndUpload();
+        if (!edited) {
+          return;
+        }
+        if (
+          !(await confirmStep(
+            'Raw file',
+            'Now pick the RAW footage the cut was made from.',
+          ))
+        ) {
+          return;
+        }
+        const raw = await pickAndUpload();
+        if (!raw) {
+          return;
+        }
+        await submitWork(token, campaignId, {
+          // Edited first: work_files[0] is the primary video the backend watermarks
+          // and the brand's review screen plays, so the raw footage must not lead.
+          work_files: [edited, raw],
+          edited_files: [edited],
+          raw_files: [raw],
+        });
+      } else {
+        const url = await pickAndUpload();
+        if (!url) {
+          return;
+        }
+        await submitWork(token, campaignId, { work_files: [url] });
       }
-      await submitWork(token, campaignId, { work_files: [url] });
       Alert.alert(
         'Work submitted',
         'Your work was sent to the brand for review. It appears under Deliverables once the deal refreshes.',

@@ -1091,7 +1091,16 @@ export async function requestWorkRevision(
 export async function submitWork(
   token: string,
   campaignId: string,
-  payload: { work_files: string[]; description?: string },
+  payload: {
+    /** Everything delivered. The EDITED cut must lead: the backend treats
+     *  work_files[0] as the primary video (watermark + the brand's review player). */
+    work_files: string[];
+    description?: string;
+    /** The same URLs split by kind, so the brand can tell a cut from raw footage.
+     *  Optional - the backend defaults both to [] when a brief needs no edited cut. */
+    edited_files?: string[];
+    raw_files?: string[];
+  },
 ) {
   return send(token, 'POST', '/api/work/submit', {
     campaign_id: campaignId,
