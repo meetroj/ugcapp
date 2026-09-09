@@ -30,7 +30,8 @@ type Social = {
   url?: string;
 };
 
-/** Instagram is the only account live today. */
+/** A social is tappable only once it has a `url` - the rest render as
+ *  not-yet-live. Instagram and LinkedIn are live; YouTube and X are not. */
 const SOCIALS: Social[] = [
   {
     key: 'instagram',
@@ -38,7 +39,12 @@ const SOCIALS: Social[] = [
     handle: '@ugcad.app',
     url: 'https://www.instagram.com/ugcad.app',
   },
-  { key: 'linkedin', name: 'LinkedIn', handle: 'UGCad.io' },
+  {
+    key: 'linkedin',
+    name: 'LinkedIn',
+    handle: 'UGCad.io',
+    url: 'https://www.linkedin.com/company/ugcad-io/',
+  },
   { key: 'youtube', name: 'YouTube', handle: 'UGCad.io' },
   { key: 'x', name: 'X (Twitter)', handle: '@ugcad_io' },
 ];
