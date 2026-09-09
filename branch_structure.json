@@ -1,0 +1,15 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "main",
+    "signup-mobile-number"
+  ],
+  "parent": {
+    "main": null,
+    "signup-mobile-number": "main"
+  },
+  "order": [
+    "main",
+    "signup-mobile-number"
+  ]
+}
