@@ -3,7 +3,7 @@
  *
  * Release builds use the live API — the same host the ugcad.io website calls,
  * so the app and the site share one set of accounts and data.
- *
+ * 
  * Debug builds keep pointing at the local backend on localhost:8000, which
  * `adb reverse tcp:8000 tcp:8000` (run by `npm run android`) makes reachable
  * from both emulators and physical devices. Without this split a shipped APK
@@ -300,7 +300,7 @@ export async function verifySession(
 }
 
 /**
- * Chat. Threads come from the live Node backend's chatController:
+ * Chat. Threads come from the FastAPI backend (server.py):
  * `GET /api/chat/conversations` lists them, `GET /api/chat/:otherId` returns one
  * thread's messages (and marks incoming ones read), `POST /api/chat/send` posts.
  */
@@ -336,7 +336,7 @@ export type ChatMessage = {
 
 /**
  * Action cards — the structured offers/requests sent from the chat composer.
- * Mirrors Message.ACTION_CARD_TYPES in the Node backend.
+ * Mirrors ACTION_CARD_TYPES in the backend (server.py).
  */
 export type ActionCardType =
   | 'custom_offer'
@@ -440,7 +440,7 @@ export async function sendMessage(
 
 /**
  * Deals. `GET /api/deals/my` returns the signed-in party's deals already
- * serialized for their side (see utils/dealStateMachine.serializeDeal).
+ * serialized for their side by the backend (server.py).
  */
 export type Deal = {
   deal_id: string;
@@ -522,7 +522,7 @@ export async function getMyBids(token: string): Promise<MyBid[]> {
 }
 
 /**
- * Creator profile editing. The live Node backend has no granular
+ * Creator profile editing. The backend has no granular
  * `/creator/settings/*` routes like the brand side does; the only full-form
  * write (`PUT /api/profile/creator`) REPLACES the whole profile object and
  * resets approval_status to 'pending', so it must not be used for edits.
@@ -597,10 +597,10 @@ export async function savePortfolio(
 }
 
 /**
- * Withdrawal. NOTE: `POST /api/withdrawal/request` is a stub on the backend —
- * its KYC gate is real and enforced, but it ignores the amount and creates no
- * payout record. It is called here so the flow stays in-app and the KYC
- * rejection surfaces natively.
+ * Withdrawal. `POST /api/withdrawal/request` (server.py) validates KYC and
+ * balance, deducts the requested amount from the creator's balance, and
+ * writes a real `withdrawals` record (7 business day processing, tracked via
+ * `GET /api/withdrawal/history`).
  */
 export async function requestWithdrawal(
   token: string,
@@ -1191,12 +1191,11 @@ export type Wallet = {
 /**
  * Brand wallet balance and ledger.
  *
- * Note what the live backend actually sends (controllers/authController.js →
- * getWallet): `recharge_bonus` and `transactions` are hardcoded to `{}` / `[]`,
- * and it emits no `bonus_tiers` at all. So the balance and the chat-unlock gate
- * are real, while the transaction list and bonus tiers render empty until the
- * backend fills them in — the screen degrades to its empty states rather than
- * inventing rows.
+ * `GET /api/business/wallet` (server.py) returns a real, merged transaction
+ * ledger (wallet_ledger + successful payment_transactions + escrow holds/
+ * refunds) plus `bonus_tiers`. All of balance, transactions and bonus_tiers
+ * are live data — BrandWallet.tsx's empty states only show when a brand
+ * genuinely has no history yet, not because the backend omits the fields.
  */
 export async function getWallet(token: string): Promise<Wallet> {
   const data = await get<Partial<Wallet>>(token, '/api/business/wallet');
@@ -1335,18 +1334,13 @@ export async function getCategories(
 }
 
 /**
- * Total unread chat messages, summed across threads.
- *
- * There is no `/api/chat/unread-count` endpoint: that path falls through to the
- * `/api/chat/:otherId` wildcard, which treats "unread-count" as a user id and
- * answers `[]`. Reading `.unread_count` off that array yielded 0 forever, so
- * the chat badge never appeared. The per-thread counts on the conversations
- * list are the real source.
+ * Total unread chat messages (and unread action cards), summed server-side by
+ * `GET /api/chat/unread-count` (server.py).
  */
 export async function getChatUnreadCount(token: string): Promise<number> {
-  const conversations = await getConversations(token);
-  return conversations.reduce(
-    (total, thread) => total + Number(thread.unread_count || 0),
-    0,
+  const data = await get<{ unread_count?: number }>(
+    token,
+    '/api/chat/unread-count',
   );
+  return Number(data?.unread_count || 0);
 }

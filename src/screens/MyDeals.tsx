@@ -1,8 +1,8 @@
 /**
  * My Deals — native screen replacing the web /my-deals page inside the shell.
  * Lists the signed-in creator's deals from GET /api/deals/my, which the backend
- * already serializes for the viewer's side (see utils/dealStateMachine.js), so
- * `primary_next_action` and the countdown are ready to display as-is.
+ * (server.py) already serializes for the viewer's side, so `primary_next_action`
+ * and the countdown are ready to display as-is.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {

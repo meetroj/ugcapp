@@ -3,10 +3,10 @@
  * and who may send it.
  *
  * These mirror the website's MessagesPage.js so a card sent from the app is
- * identical to one sent from the browser. The Node backend does NOT validate
- * per-field requirements (only the type and the sender's role), so the rules
- * here are the only thing standing between a half-filled form and a card that
- * reaches the other side with blank terms — they are enforced, not cosmetic.
+ * identical to one sent from the browser. The backend (server.py,
+ * validate_action_card_payload) also enforces per-field requirements per
+ * card type, so this is belt-and-suspenders: the rules here give fast,
+ * in-app feedback before the round trip, and the backend is the real gate.
  */
 import type { ActionCardType } from './api';
 
