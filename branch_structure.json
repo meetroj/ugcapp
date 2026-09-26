@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "app-web-sync",
+    "main",
+    "signup-mobile-number"
+  ],
+  "parent": {
+    "app-web-sync": "main",
+    "main": null,
+    "signup-mobile-number": "main"
+  },
+  "order": [
+    "main",
+    "app-web-sync",
+    "signup-mobile-number"
+  ]
+}
