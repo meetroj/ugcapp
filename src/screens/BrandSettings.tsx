@@ -12,9 +12,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text, TextInput } from '../components/Text';
+} from 'react-native';import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SkeletonForm } from '../components/Skeleton';
 import {
@@ -177,8 +175,6 @@ function Field({
 
 function BrandSettings({ token, onBack }: Props) {
   const [tab, setTab] = useState<'profile' | 'company'>('profile');
-
-  const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<Form>({});
   const [company, setCompany] = useState<Form>({});
   const [loading, setLoading] = useState(true);
@@ -258,7 +254,7 @@ function BrandSettings({ token, onBack }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}

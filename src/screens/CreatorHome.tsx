@@ -13,7 +13,7 @@ import type {
   ScrollViewInstance,
 } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
-import { WebView } from 'react-native-webview';
+import Video from 'react-native-video';
 import { SkeletonBlock } from '../components/Skeleton';
 import {
   BACKEND_URL,
@@ -93,60 +93,28 @@ const isVideo = (creator: Creator, uri: string | null) =>
     (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) ||
       /\/video\/upload\//i.test(uri)));
 
-// Portfolio previews are real .mp4 files served from the backend's /uploads.
-// The app has no native video package, so the clip is played inside the WebView
-// that already ships with the app — this needs no extra native rebuild.
-// `muted` + `playsinline` are required for autoplay to be allowed.
-// Origin of the clip itself, so the inline page and the video share a scheme.
-const videoOrigin = (uri: string) => {
-  const match = /^(https?:\/\/[^/]+)/i.exec(uri);
-  return match ? match[1] : BACKEND_URL;
-};
-
+// Portfolio previews are real .mp4 files served from the backend's /uploads,
+// played by react-native-video -- the same native player the rest of the app
+// uses. The inline-HTML web player this replaced was governed by the browser
+// autoplay policy and needed a baseUrl to dodge a null origin; neither applies
+// to the native player.
 function VideoPreview({ uri }: { uri: string }) {
-  const html = `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;padding:0;background:#DBDDF0;overflow:hidden}
-video{width:100vw;height:100vh;object-fit:cover;display:block}</style>
-</head><body>
-<video src="${uri}" autoplay muted loop playsinline webkit-playsinline
-       preload="auto" disableremoteplayback></video>
-<script>
-  // Android blocks autoplay until the element is explicitly told to play, and
-  // silently ignores the attribute when the WebView had no user gesture.
-  var v = document.querySelector('video');
-  v.muted = true;
-  var go = function () { var p = v.play(); if (p) { p.catch(function () {}); } };
-  go();
-  document.addEventListener('visibilitychange', go);
-  v.addEventListener('canplay', go);
-</script>
-</body></html>`;
-
   return (
-    <WebView
-      // `baseUrl` gives the inline document a real origin (a null origin makes
-      // Android refuse the remote .mp4). It must match the video's scheme:
-      // BACKEND_URL is http://localhost, and an http page loading an https
-      // video is mixed content, which Android blocks -> empty src.
-      source={{ html, baseUrl: videoOrigin(uri) }}
-      // An explicit pixel size is required: a percentage-sized WebView collapses
-      // to zero height inside the centered parent, so nothing would render.
+    <Video
+      source={{ uri }}
       style={styles.creatorVideo}
-      scrollEnabled={false}
-      allowsInlineMediaPlayback
-      mediaPlaybackRequiresUserAction={false}
-      allowsFullscreenVideo={false}
-      // Lets the http(s) video load from the inline document.
-      mixedContentMode="always"
-      javaScriptEnabled
-      domStorageEnabled
-      androidLayerType="hardware"
+      resizeMode="cover"
+      repeat
+      muted
+      playInBackground={false}
+      playWhenInactive={false}
+      disableFocus
+      ignoreSilentSwitch="ignore"
     />
   );
 }
 
-// Card + media dimensions. The WebView needs these as real numbers (not '100%'),
+// Card + media dimensions. The player needs these as real numbers (not '100%'),
 // so they are shared with the stylesheet to keep the two in sync.
 const CARD_WIDTH = scale(238);
 /**

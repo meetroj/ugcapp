@@ -4,8 +4,9 @@
  * creator-preferences endpoint exists), Legal & Policies (native documents),
  * Account (deactivate / delete via the account settings screen).
  */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   Linking,
   ScrollView,
   StyleSheet,
@@ -16,6 +17,7 @@ import {
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import ScreenHeader from '../components/ScreenHeader';
+import { getPrivacyPrefs, savePrivacyPrefs, type PrivacyPrefs } from '../api';
 import { scale, fontScale } from '../theme';
 
 type RowIconName =
@@ -218,14 +220,47 @@ function SectionTitle({ children }: { children: string }) {
 }
 
 function PrivacySecurity({
+  token,
   onBack,
   onNavigate,
   unread = 0,
 }: {
+  token: string;
   onBack: () => void;
   onNavigate: (path: string) => void;
   unread?: number;
 }) {
+  const [privacy, setPrivacy] = useState<PrivacyPrefs>({});
+
+  useEffect(() => {
+    let active = true;
+    getPrivacyPrefs(token)
+      .then(prefs => {
+        if (active) setPrivacy(prefs);
+      })
+      // An unreadable preference block leaves the switches on their defaults,
+      // which is what the backend applies anyway.
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  /**
+   * Flips one switch and saves the whole block. The switch moves first so it
+   * never feels laggy; a failed save rolls it back and says so, rather than
+   * leaving the UI claiming a setting that did not stick.
+   */
+  const setPref = (key: keyof PrivacyPrefs, value: boolean) => {
+    const previous = privacy;
+    const next = { ...privacy, [key]: value };
+    setPrivacy(next);
+    savePrivacyPrefs(token, next).catch(() => {
+      setPrivacy(previous);
+      Alert.alert('Not saved', 'Could not reach the server. Please try again.');
+    });
+  };
+
   return (
     <View style={styles.screen}>
       <ScreenHeader
@@ -247,24 +282,22 @@ function PrivacySecurity({
             iconBg="#EEEFFF"
             label="Change Password"
             hint="Update your account password"
-            onPress={() => onNavigate('/settings')}
+            onPress={() => onNavigate('/app/security')}
           />
           <Row
             icon="shield"
             iconTint="#5B5CF6"
             iconBg="#EEEFFF"
             label="Two-Factor Authentication"
-            hint="Managed on ugcad.io — the app can't read or change it"
-            onPress={() =>
-              Linking.openURL('https://www.ugcad.io/settings').catch(() => {})
-            }
+            hint="Add a code from your authenticator app"
+            onPress={() => onNavigate('/app/security')}
             last
           />
         </View>
 
-        {/* The backend has no privacy-preferences endpoint yet. These render
-            as "Coming soon" rather than as switches that silently reset —
-            flipping a privacy control that saves nothing is worse than none. */}
+        {/* These write through PUT /api/profile/preferences, the same endpoint
+            the website's privacy tab uses. They were marked "Coming soon" on
+            the strength of a comment saying no endpoint existed. */}
         <SectionTitle>Privacy</SectionTitle>
         <View style={styles.card}>
           <Row
@@ -273,7 +306,9 @@ function PrivacySecurity({
             iconBg="#E7F8F0"
             label="Public Profile"
             hint="Let brands discover your profile"
-            value="Coming soon"
+            toggle
+            on={privacy.public_profile !== false}
+            onToggle={next => setPref('public_profile', next)}
           />
           <Row
             icon="rupee"
@@ -281,7 +316,9 @@ function PrivacySecurity({
             iconBg="#FEF4E6"
             label="Show Earnings"
             hint={'Display total earned on\nyour public profile'}
-            value="Coming soon"
+            toggle
+            on={!!privacy.show_earnings}
+            onToggle={next => setPref('show_earnings', next)}
           />
           <Row
             icon="chat"
@@ -289,7 +326,9 @@ function PrivacySecurity({
             iconBg="#EEEFFF"
             label="Allow Direct Messages"
             hint={'Let brands message you\nwithout a deal'}
-            value="Coming soon"
+            toggle
+            on={privacy.allow_direct_messages !== false}
+            onToggle={next => setPref('allow_direct_messages', next)}
             last
           />
         </View>

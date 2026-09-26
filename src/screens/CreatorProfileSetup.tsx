@@ -12,9 +12,10 @@
  * grids and hover cards, this uses the chip / select / sheet vocabulary the
  * rest of the native app already speaks.
  *
- * Two web-only conveniences are left out because they need services the app has
- * no client for: the PIN-code-to-city lookup that cross-checks the address, and
- * the per-platform live link probes. The required and format checks still run.
+ * One web-only convenience is left out because it needs a service the app has
+ * no client for: the PIN-code-to-city lookup that cross-checks the address.
+ * Link validation is fully mirrored — the same per-platform LINK_RE patterns
+ * the web uses, plus a live Instagram existence probe on blur.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -42,7 +43,9 @@ import Svg, {
 } from 'react-native-svg';
 import {
   BACKEND_URL,
+  checkInstagramLive,
   completeProfile,
+  getMe,
   uploadMedia,
   type AuthUser,
 } from '../api';
@@ -228,6 +231,82 @@ const PLATFORMS = [
   { key: 'instagram', label: 'Instagram' },
   { key: 'tiktok', label: 'TikTok' },
 ];
+
+/**
+ * Per-platform link validators, character-for-character the web's LINK_RE (see
+ * Frontend/src/pages/CreatorProfileSetup.js). Each field must hold a link that
+ * actually lives on that network — or a bare @handle — so a creator can't drop
+ * a random website, or their YouTube URL, into the Instagram box.
+ *
+ * Share sheets append tracking params (?igsh=, ?si=, ?s=20), so every pattern
+ * allows an optional trailing slash plus any query/fragment while still
+ * pinning the host and the profile path.
+ */
+const LINK_RE: Record<string, RegExp> = {
+  youtube:
+    /^(https?:\/\/)?(www\.)?(youtube\.com\/(@[\w.-]+|channel\/|c\/|user\/)[\w./-]*|youtu\.be\/[\w-]+)\/?(?:[?#][^\s]*)?$/i,
+  linkedin:
+    /^(https?:\/\/)?(www\.)?linkedin\.com\/(in|company|pub|school)\/[\w%.-]+\/?(?:[?#][^\s]*)?$/i,
+  instagram:
+    /^(https?:\/\/)?(www\.)?instagram\.com\/[a-z0-9._]+\/?(?:[?#][^\s]*)?$|^@[a-z0-9._]{1,30}$/i,
+  tiktok:
+    /^(https?:\/\/)?(www\.)?tiktok\.com\/@?[\w.-]+\/?(?:[?#][^\s]*)?$|^@[a-z0-9._]{1,30}$/i,
+  facebook: /^(https?:\/\/)?(www\.|m\.)?(facebook\.com|fb\.com|fb\.me)\/[^\s]+$/i,
+  twitter:
+    /^(https?:\/\/)?(www\.)?(twitter\.com|x\.com)\/[a-z0-9_]{1,15}\/?(?:[?#][^\s]*)?$|^@[a-z0-9_]{1,15}$/i,
+  // Website / map link: a real domain at minimum, not gibberish.
+  generic:
+    /^(https?:\/\/)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+([/?#][^\s]*)?$|^@[a-z0-9._]{1,30}$/i,
+};
+
+/** Leading glyph per probe verdict — the web renders the same three. */
+const PROBE_PREFIX: Record<string, string> = {
+  checking: '',
+  valid: '✓ ',
+  invalid: '✕ ',
+  uncertain: '⚠ ',
+};
+
+/** Maps a platform label onto its validator key. */
+function platformKey(label: string): string {
+  const s = String(label || '').toLowerCase();
+  if (s.includes('youtube')) return 'youtube';
+  if (s.includes('linkedin')) return 'linkedin';
+  if (s.includes('instagram')) return 'instagram';
+  if (s.includes('tiktok')) return 'tiktok';
+  if (s.includes('facebook')) return 'facebook';
+  if (s.includes('twitter') || s === 'x') return 'twitter';
+  return 'generic';
+}
+
+/**
+ * Error text for a filled link that doesn't belong to its platform. An empty
+ * value is fine here — "at least one link" is a separate check.
+ */
+function linkError(label: string, value: string): string {
+  const v = String(value || '').trim();
+  if (!v) {
+    return '';
+  }
+  return LINK_RE[platformKey(label)].test(v)
+    ? ''
+    : `Enter a valid ${label} link or @handle`;
+}
+
+/**
+ * Reduces a pasted Instagram link to its bare handle, so the live existence
+ * probe gets "yourbrand" whether the creator typed the handle or shared the
+ * profile URL (tracking params and /reel/ paths included).
+ */
+function instagramHandle(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
+    .replace(/^@/, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/.*$/, '')
+    .replace(/\/+$/, '');
+}
 
 const LANGUAGES = [
   'English', 'Hindi', 'Bengali', 'Marathi', 'Tamil', 'Telugu', 'Gujarati',
@@ -429,6 +508,18 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const [submitted, setSubmitted] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [videoUploading, setVideoUploading] = useState(false);
+  /**
+   * Live "does this account actually exist?" probe for the Instagram field.
+   * The format regex only proves the link is shaped right; this asks the
+   * backend to look the handle up on instagram.com. Instagram serves a login
+   * wall to servers, so `uncertain` is a normal answer and only warns.
+   */
+  const [igCheck, setIgCheck] = useState<null | {
+    status: 'checking' | 'valid' | 'invalid' | 'uncertain';
+    msg: string;
+  }>(null);
+  /** True while a probe fired from Continue is in flight, so the button spins. */
+  const [probing, setProbing] = useState(false);
   const [picker, setPicker] = useState<null | {
     field: keyof Data;
     title: string;
@@ -504,6 +595,47 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     [data.state],
   );
 
+  /** Per-platform format error, so the offending field is the one that reddens. */
+  const linkErrors = useMemo(
+    () =>
+      Object.fromEntries(
+        PLATFORMS.map(p => [p.key, linkError(p.label, data.links[p.key] || '')]),
+      ) as Record<string, string>,
+    [data.links],
+  );
+
+  /**
+   * Runs when the Instagram field loses focus. Skipped unless the value is
+   * already well-formed — there is no point asking the server about "asdf".
+   */
+  const probeInstagram = useCallback(async (): Promise<
+    'skipped' | 'valid' | 'invalid' | 'uncertain'
+  > => {
+    const value = String(data.links.instagram || '').trim();
+    if (!value || linkError('Instagram', value)) {
+      setIgCheck(null);
+      return 'skipped';
+    }
+    setIgCheck({ status: 'checking', msg: 'Checking Instagram…' });
+    const result = await checkInstagramLive(token, instagramHandle(value));
+    if (result.valid) {
+      setIgCheck({ status: 'valid', msg: 'Instagram account found.' });
+      return 'valid';
+    }
+    if (result.reason === 'not_found') {
+      setIgCheck({
+        status: 'invalid',
+        msg: "This Instagram account doesn't exist.",
+      });
+      return 'invalid';
+    }
+    setIgCheck({
+      status: 'uncertain',
+      msg: "Format looks fine, but Instagram blocks automated checks so we can't confirm it exists.",
+    });
+    return 'uncertain';
+  }, [data.links, token]);
+
   /** Which required fields on the current step are still incomplete. */
   const checksFor = useCallback(
     (which: number): Record<string, boolean> => {
@@ -521,12 +653,21 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         STEP2_FIELDS.map(key => [key, isFilled((data as any)[key])]),
       );
       base.phone = base.phone && phoneValid(data.phone, data.dialCode);
+      // Optional, but if something was typed it has to be an actual link.
+      base.mapLink =
+        !data.mapLink.trim() || LINK_RE.generic.test(data.mapLink.trim());
       return base;
     }
     if (which === 3) {
       return {
         skills: data.skills.length > 0,
         profileLink: PLATFORMS.some(p => isFilled(data.links[p.key])),
+        // "At least one link" is not enough on its own — each link that IS
+        // filled has to be a genuine profile on that network.
+        linksValid: PLATFORMS.every(p => !linkError(p.label, data.links[p.key])),
+        // Only blocks when Instagram positively said the handle is gone; a
+        // login wall answers "uncertain" and is allowed through.
+        instagramLive: igCheck?.status !== 'invalid',
         portfolio: data.portfolio.length > 0,
         languages: data.languages.length > 0,
         expectedPayout: isFilled(data.expectedPayout),
@@ -536,7 +677,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     // The web leaves the last step entirely optional.
     return {};
     },
-    [data],
+    [data, igCheck],
   );
 
   const checks = useMemo(() => checksFor(step), [checksFor, step]);
@@ -634,6 +775,87 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     setEditingId(null);
   }, [editDraft, editingId]);
 
+  /**
+   * Prefill from the profile already on file, so a creator asked for "more
+   * info" (or just re-editing) doesn't retype seven steps of answers — the same
+   * thing the web page does.
+   *
+   * submit() spreads `...data` into the saved profile, so the stored keys line
+   * up 1:1 with this form's state and a generic merge is safe; only the two
+   * chip pickers and the portfolio need mapping, because those are stored under
+   * their API names. Reads /auth/me rather than the session copy, which can be
+   * a login response older than the last edit.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let profile: Record<string, any> | null = null;
+      try {
+        const me = await getMe(token);
+        profile = (me?.profile as Record<string, any>) || null;
+      } catch {
+        profile = (session?.profile as Record<string, any>) || null;
+      }
+      if (!alive || !profile || !Object.keys(profile).length) return;
+
+      const styleValues = new Set(CONTENT_STYLES.map(option => option.value));
+      const nicheValues = new Set(NICHE_CATEGORIES.map(option => option.value));
+      // A legacy free-text value won't match a chip, so it is dropped rather
+      // than selecting nothing and looking broken.
+      const pickKnown = (value: unknown, allowed: Set<string>): string[] =>
+        (Array.isArray(value) ? value : [value])
+          .map(entry => String(entry || ''))
+          .filter(entry => allowed.has(entry));
+
+      setData(current => {
+        const merged: Data = { ...current };
+        for (const key of Object.keys(current) as Array<keyof Data>) {
+          const stored = profile![key as string];
+          if (stored !== undefined && stored !== null && stored !== '') {
+            (merged as Record<string, unknown>)[key as string] = stored;
+          }
+        }
+
+        const styles = pickKnown(
+          profile!.content_styles || profile!.content_style || profile!.category,
+          styleValues,
+        );
+        const niches = pickKnown(
+          profile!.content_categories ||
+            profile!.niche ||
+            profile!.primary_category,
+          nicheValues,
+        );
+        merged.contentStyles = styles.length ? styles : current.contentStyles;
+        merged.contentCategories = niches.length
+          ? niches
+          : current.contentCategories;
+
+        // Structured samples carry the price/category/delivery the flat
+        // `portfolio` URL list cannot. Ids are regenerated so a restored item
+        // can never collide with one added in this session.
+        const items = Array.isArray(profile!.portfolio_items)
+          ? profile!.portfolio_items
+          : [];
+        if (items.length) {
+          merged.portfolio = items
+            .filter((item: any) => item && item.videoUrl)
+            .map((item: any, index: number) => ({
+              id: `pf-saved-${index + 1}-${item.videoUrl}`,
+              price: String(item.price ?? ''),
+              category: String(item.category ?? ''),
+              delivery: String(item.delivery ?? ''),
+              videoUrl: String(item.videoUrl),
+            }));
+        }
+        return merged;
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session?.profile, token]);
+
   const addPortfolioItem = useCallback(() => {
     if (!draft.videoUrl) {
       const message =
@@ -720,10 +942,38 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     }
   }, [data, token]);
 
-  const next = useCallback(() => {
+  const next = useCallback(async () => {
+    // Tapping Continue blurs the field, but the probe it fires is async and
+    // would not have answered yet — so on the links step, ask first and let
+    // the verdict decide, rather than waving an unchecked handle through.
+    if (step === 3 && !igCheck) {
+      const value = String(data.links.instagram || '').trim();
+      if (value && !linkError('Instagram', value)) {
+        setProbing(true);
+        const verdict = await probeInstagram();
+        setProbing(false);
+        if (verdict === 'invalid') {
+          setShowErrors(true);
+          setError("That Instagram account doesn't exist — enter a real profile.");
+          return;
+        }
+        // 'valid' and 'uncertain' both fall through: Instagram's login wall
+        // must not be able to strand a creator with a real account.
+      }
+    }
     if (!stepComplete) {
       setShowErrors(true);
-      setError('Fill in the highlighted fields.');
+      // "Fill in the highlighted fields" is useless when the field IS filled
+      // and simply holds the wrong thing — say what is actually wrong.
+      setError(
+        checks.instagramLive === false
+          ? "That Instagram account doesn't exist — enter a real profile."
+          : checks.linksValid === false
+          ? 'One of your social links is not a profile on that platform.'
+          : checks.mapLink === false
+          ? 'The map link is not a valid link.'
+          : 'Fill in the highlighted fields.',
+      );
       return;
     }
     setShowErrors(false);
@@ -733,7 +983,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       return;
     }
     submit();
-  }, [step, stepComplete, submit]);
+  }, [checks, data.links, igCheck, probeInstagram, step, stepComplete, submit]);
 
   const back = useCallback(() => {
     setShowErrors(false);
@@ -1068,6 +1318,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 onChange={v => set('mapLink', v)}
                 placeholder="Google Maps link (optional)"
                 keyboard="url"
+                error={bad('mapLink')}
+                hint={
+                  bad('mapLink')
+                    ? 'Enter a valid link, for example maps.app.goo.gl/…'
+                    : undefined
+                }
               />
             </View>
           )}
@@ -1092,30 +1348,60 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
               <Text style={styles.sectionTitle}>Social profiles</Text>
               <Text style={styles.sectionNote}>
-                At least one link is required. Follower counts are optional.
+                At least one link is required, and each one must be a real
+                profile on that platform (or an @handle).
               </Text>
-              {PLATFORMS.map(platform => (
-                <View key={platform.key} style={styles.field}>
-                  <View style={styles.platformHead}>
-                    <PlatformBadge platform={platform.key} />
-                    <Text style={styles.fieldLabel}>{platform.label}</Text>
+              {PLATFORMS.map(platform => {
+                // Only surfaced once Continue has been pressed, the same as
+                // the web — nobody wants to be corrected mid-typing.
+                const formatError = showErrors ? linkErrors[platform.key] : '';
+                const isInstagram = platform.key === 'instagram';
+                const liveError = isInstagram && igCheck?.status === 'invalid';
+                return (
+                  <View key={platform.key} style={styles.field}>
+                    <View style={styles.platformHead}>
+                      <PlatformBadge platform={platform.key} />
+                      <Text style={styles.fieldLabel}>{platform.label}</Text>
+                    </View>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        (bad('profileLink') || !!formatError || liveError) &&
+                          styles.inputError,
+                      ]}
+                      value={data.links[platform.key] || ''}
+                      onChangeText={v => {
+                        set('links', { ...data.links, [platform.key]: v });
+                        if (isInstagram) {
+                          // The old verdict describes the old handle.
+                          setIgCheck(null);
+                        }
+                      }}
+                      onBlur={isInstagram ? probeInstagram : undefined}
+                      placeholder={`${platform.label} link or handle`}
+                      placeholderTextColor={PLACEHOLDER}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    {!!formatError && (
+                      <Text style={styles.fieldError}>{formatError}</Text>
+                    )}
+                    {isInstagram && !formatError && !!igCheck && (
+                      <Text
+                        style={[
+                          styles.probeLine,
+                          igCheck.status === 'valid' && styles.probeOk,
+                          igCheck.status === 'invalid' && styles.probeBad,
+                          igCheck.status === 'uncertain' && styles.probeWarn,
+                        ]}
+                      >
+                        {PROBE_PREFIX[igCheck.status]}
+                        {igCheck.msg}
+                      </Text>
+                    )}
                   </View>
-                  <TextInput
-                    style={[
-                      styles.input,
-                      bad('profileLink') && styles.inputError,
-                    ]}
-                    value={data.links[platform.key] || ''}
-                    onChangeText={v =>
-                      set('links', { ...data.links, [platform.key]: v })
-                    }
-                    placeholder={`${platform.label} link or handle`}
-                    placeholderTextColor={PLACEHOLDER}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-              ))}
+                );
+              })}
 
               <Text style={styles.sectionTitle}>Upload your best video</Text>
               <Text style={styles.sectionNote}>
@@ -1488,12 +1774,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
             </TouchableOpacity>
           )}
           <TouchableOpacity
-            style={[styles.submit, saving && styles.submitOff]}
+            style={[styles.submit, (saving || probing) && styles.submitOff]}
             onPress={next}
-            disabled={saving}
+            disabled={saving || probing}
             accessibilityRole="button"
           >
-            {saving ? (
+            {saving || probing ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={styles.submitText}>
@@ -1804,6 +2090,8 @@ function Field({
   multiline,
   keyboard,
   error,
+  hint,
+  onBlur,
 }: {
   label: string;
   value: string;
@@ -1813,6 +2101,9 @@ function Field({
   multiline?: boolean;
   keyboard?: 'default' | 'url' | 'phone-pad';
   error?: boolean;
+  /** Message shown under the input — used to explain a rejected link. */
+  hint?: string;
+  onBlur?: () => void;
 }) {
   return (
     <View style={styles.field}>
@@ -1834,7 +2125,9 @@ function Field({
         autoCapitalize={keyboard === 'url' ? 'none' : 'sentences'}
         autoCorrect={false}
         multiline={multiline}
+        onBlur={onBlur}
       />
+      {!!hint && <Text style={styles.fieldError}>{hint}</Text>}
     </View>
   );
 }
@@ -2240,6 +2533,16 @@ const styles = StyleSheet.create({
   },
   inputMultiline: { minHeight: scale(88), textAlignVertical: 'top' },
   inputError: { borderColor: '#E5484D' },
+  fieldError: {
+    marginTop: scale(5),
+    fontSize: fontScale(12),
+    color: '#F87171',
+  },
+  // The web's coloured probe line: green confirmed, red dead, amber unknown.
+  probeLine: { marginTop: scale(5), fontSize: fontScale(12), color: '#94A3B8' },
+  probeOk: { color: '#34D399' },
+  probeBad: { color: '#F87171' },
+  probeWarn: { color: '#FBBF24' },
   platformHead: {
     flexDirection: 'row',
     alignItems: 'center',

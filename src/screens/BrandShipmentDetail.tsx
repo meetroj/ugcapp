@@ -8,17 +8,19 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text } from '../components/Text';
+import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBanner, SkeletonList } from '../components/Skeleton';
-import { ApiError, getShipment } from '../api';
+import { ApiError, getShipment, updateShipment } from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -172,10 +174,15 @@ const CHECKS = [
 
 function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
   const [shipment, setShipment] = useState<Shipment | null>(null);
-  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [missing, setMissing] = useState(false);
+  // Tracking editor: open flag, the three fields, and the in-flight save.
+  const [editing, setEditing] = useState(false);
+  const [tracking, setTracking] = useState('');
+  const [courier, setCourier] = useState('');
+  const [expected, setExpected] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -198,6 +205,31 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     load();
   }, [load]);
 
+  /** Sends the three tracking fields, then refetches so the card updates. */
+  const saveTracking = useCallback(async () => {
+    if (!tracking.trim() || saving) return;
+    setSaving(true);
+    try {
+      await updateShipment(token, {
+        campaign_id: campaignId,
+        tracking_number: tracking.trim(),
+        courier_name: courier.trim() || undefined,
+        expected_delivery: expected || undefined,
+      });
+      setEditing(false);
+      await load();
+    } catch (error) {
+      Alert.alert(
+        'Could not save',
+        error instanceof Error && error.message
+          ? error.message
+          : 'Please try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [campaignId, courier, expected, load, saving, token, tracking]);
+
   const banner = bannerFor(shipment);
   const checklist = (shipment?.checklist || {}) as Record<string, unknown>;
   // `product` is the object stored by request-shipment; `product_summary` is
@@ -214,7 +246,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -392,10 +424,106 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
                   );
                 })}
               </View>
+
+              {/* The screen was read-only: a brand who had dispatched the
+                  parcel could see there was no tracking number but had no way
+                  to add one without opening the website. */}
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  setTracking(text(shipment?.tracking_number));
+                  setCourier(text(shipment?.courier_name));
+                  setExpected(text(shipment?.expected_delivery));
+                  setEditing(true);
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.actionBtnText}>
+                  {shipment?.tracking_number
+                    ? 'Update tracking details'
+                    : 'Add tracking details'}
+                </Text>
+              </TouchableOpacity>
             </>
           )}
         </ScrollView>
       )}
+
+      {/* Tracking editor. POST /api/shipment/update takes the campaign id, so
+          the same call covers both adding and correcting these three. */}
+      <Modal
+        visible={editing}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditing(false)}
+      >
+        <View style={styles.editBackdrop}>
+          <View style={styles.editSheet}>
+            <Text style={styles.editTitle}>Tracking details</Text>
+
+            <Text style={styles.editLabel}>Tracking number</Text>
+            <TextInput
+              style={styles.editInput}
+              value={tracking}
+              onChangeText={setTracking}
+              placeholder="e.g. 1234567890"
+              placeholderTextColor="#A9ADC2"
+              autoCapitalize="characters"
+            />
+
+            <Text style={styles.editLabel}>Courier</Text>
+            <TextInput
+              style={styles.editInput}
+              value={courier}
+              onChangeText={setCourier}
+              placeholder="e.g. Delhivery"
+              placeholderTextColor="#A9ADC2"
+            />
+
+            <Text style={styles.editLabel}>Expected delivery</Text>
+            <TextInput
+              style={styles.editInput}
+              value={expected}
+              onChangeText={value =>
+                // Dashes appear on their own so the value is always the ISO
+                // date the backend stores.
+                setExpected(
+                  value
+                    .replace(/\D/g, '')
+                    .slice(0, 8)
+                    .replace(/^(\d{4})(\d)/, '$1-$2')
+                    .replace(/^(\d{4}-\d{2})(\d)/, '$1-$2'),
+                )
+              }
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#A9ADC2"
+              keyboardType="number-pad"
+            />
+
+            <View style={styles.editActions}>
+              <TouchableOpacity
+                style={styles.editGhost}
+                onPress={() => setEditing(false)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.editGhostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.editSave, !tracking.trim() && styles.editSaveOff]}
+                disabled={!tracking.trim() || saving}
+                onPress={saveTracking}
+                accessibilityRole="button"
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.editSaveText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -534,6 +662,94 @@ const styles = StyleSheet.create({
   },
   boxOn: { backgroundColor: '#1FA971', borderColor: '#1FA971' },
   checkText: { flex: 1, fontSize: fontScale(13), color: '#3B3F5C' },
+
+  actionBtn: {
+    marginTop: scale(16),
+    height: scale(48),
+    borderRadius: scale(13),
+    backgroundColor: '#3D4FD8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+  editBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(11,12,38,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: scale(22),
+  },
+  editSheet: {
+    width: '100%',
+    maxWidth: scale(360),
+    borderRadius: scale(18),
+    backgroundColor: '#FFFFFF',
+    padding: scale(18),
+  },
+  editTitle: {
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-Medium',
+    color: '#15163F',
+  },
+  editLabel: {
+    marginTop: scale(13),
+    marginBottom: scale(5),
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#7E829D',
+  },
+  editInput: {
+    height: scale(46),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FBFBFE',
+    paddingHorizontal: scale(12),
+    fontSize: fontScale(13),
+    color: '#15163F',
+  },
+  editActions: {
+    flexDirection: 'row',
+    gap: scale(10),
+    marginTop: scale(18),
+  },
+  editGhost: {
+    flex: 1,
+    height: scale(46),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editGhostText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6180',
+  },
+  editSave: {
+    flex: 1,
+    height: scale(46),
+    borderRadius: scale(12),
+    backgroundColor: '#3D4FD8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editSaveOff: { opacity: 0.5 },
+  editSaveText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
 });
 
 export default BrandShipmentDetail;

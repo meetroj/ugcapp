@@ -51,6 +51,7 @@ import BrowseCampaigns from './BrowseCampaigns';
 import ActiveWork from './ActiveWork';
 import KycVerification from './KycVerification';
 import PrivacySecurity from './PrivacySecurity';
+import AccountSecurity from './AccountSecurity';
 import FollowUs from './FollowUs';
 import Earnings from './Earnings';
 import Reviews from './Reviews';
@@ -333,6 +334,8 @@ function WebShell({
   const showingLegal = mobileDashboard && !!legalDocId;
   const showingPrivacy =
     mobileDashboard && purePath === '/app/privacy-security';
+  // Password, two-factor and deactivate, reached from the Privacy screen.
+  const showingSecurity = mobileDashboard && purePath === '/app/security';
   const showingFollowUs = mobileDashboard && purePath === '/app/follow-us';
   const showingNotificationSettings =
     mobileDashboard && purePath === '/app/notification-settings';
@@ -366,6 +369,7 @@ function WebShell({
     showingCreatorSettings ||
     showingNotificationSettings ||
     showingPrivacy ||
+    showingSecurity ||
     // The public profile is full-bleed: a cover banner at the top and a pinned
     // Send Message bar at the bottom, both of which the nav would sit on.
     showingCreatorPublic ||
@@ -383,6 +387,7 @@ function WebShell({
     showingWithdrawalForm ||
     showingReviews ||
     showingPrivacy ||
+    showingSecurity ||
     showingFollowUs ||
     showingNotificationSettings ||
     showingCreatorProfile ||
@@ -641,8 +646,15 @@ function WebShell({
           onMessages={() => navigateTo('/messages')}
           onNotifications={() => setFeedOpen(true)}
         />
+      ) : showingSecurity ? (
+        <AccountSecurity
+          token={token}
+          onBack={backTo('/app/privacy-security')}
+          onLogout={onLogout}
+        />
       ) : showingPrivacy ? (
         <PrivacySecurity
+          token={token}
           onBack={backTo('/app/profile')}
           onNavigate={navigateTo}
           unread={unread}

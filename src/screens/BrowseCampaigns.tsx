@@ -595,17 +595,10 @@ function Header({
   saved?: boolean;
   onToggleSave?: () => void;
 }) {
-  // First thing under the status bar on its own white ground, so it pads
-  // itself down rather than sitting beneath the clock on iOS.
-  const insets = useSafeAreaInsets();
-
+  // No inset padding: this bar renders inside WebShell's SafeAreaView (top
+  // edge), which already clears the status bar.
   return (
-    <View
-      style={[
-        styles.subHeader,
-        { height: styles.subHeader.height + insets.top, paddingTop: insets.top },
-      ]}
-    >
+    <View style={styles.subHeader}>
       <TouchableOpacity style={styles.headerBtn} onPress={onBack}>
         <Icon name="back" color="#171943" />
       </TouchableOpacity>

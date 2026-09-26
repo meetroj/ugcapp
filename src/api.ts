@@ -501,12 +501,17 @@ export async function sendMessage(
   token: string,
   recipientId: string,
   message: string,
+  attachmentUrls: string[] = [],
 ): Promise<void> {
   await json(
     await request(`${BACKEND_URL}/api/chat/send`, {
       method: 'POST',
       headers: auth(token),
-      body: JSON.stringify({ recipient_id: recipientId, message }),
+      body: JSON.stringify({
+        recipient_id: recipientId,
+        message,
+        attachment_urls: attachmentUrls,
+      }),
     }),
   );
 }
@@ -1920,4 +1925,30 @@ export async function savePaymentInfo(
   payload: Record<string, unknown>,
 ) {
   return send(token, 'PUT', '/api/profile/payment-info', payload);
+}
+
+/**
+ * Creator privacy switches (public profile, show earnings, allow DMs).
+ *
+ * They live on the user record and are written through the same
+ * /profile/preferences endpoint the notification prefs use — the app had them
+ * marked "Coming soon" on the strength of a comment saying no endpoint
+ * existed, but the website has been saving them here all along.
+ */
+export type PrivacyPrefs = {
+  public_profile?: boolean;
+  show_earnings?: boolean;
+  allow_direct_messages?: boolean;
+};
+
+export async function getPrivacyPrefs(token: string): Promise<PrivacyPrefs> {
+  const me = (await get<Record<string, unknown>>(token, '/api/auth/me')) || {};
+  return ((me as any).privacy || {}) as PrivacyPrefs;
+}
+
+export async function savePrivacyPrefs(
+  token: string,
+  privacy: PrivacyPrefs,
+): Promise<void> {
+  await send(token, 'PUT', '/api/profile/preferences', { privacy });
 }

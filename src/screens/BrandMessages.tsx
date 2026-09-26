@@ -13,9 +13,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text, TextInput } from '../components/Text';
+} from 'react-native';import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import { BACKEND_URL, getConversations } from '../api';
@@ -113,7 +111,6 @@ function Icon({
 
 function BrandMessages({ token, onOpenThread, onBack }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -166,7 +163,7 @@ function BrandMessages({ token, onOpenThread, onBack }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         {!!onBack && (
           <TouchableOpacity
             style={styles.backBtn}

@@ -18,13 +18,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text } from '../components/Text';
+import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import Video from 'react-native-video';
 import { SkeletonList } from '../components/Skeleton';
 import WorkRevisionRequest from './WorkRevisionRequest';
-import { approveWork, BACKEND_URL, getPendingWork } from '../api';
+import { approveWork, BACKEND_URL, getPendingWork, postReview } from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -139,7 +138,6 @@ function BrandWorkReview({
   onMessages,
 }: Props) {
   const [items, setItems] = useState<Work[]>([]);
-  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // The submission whose revision composer is open.
@@ -147,6 +145,12 @@ function BrandWorkReview({
   // The submission playing in the full-screen preview player.
   const [previewing, setPreviewing] = useState<Work | null>(null);
   const [previewPaused, setPreviewPaused] = useState(false);
+  // The just-approved submission whose creator the brand is being asked to
+  // rate. Null hides the sheet.
+  const [rating, setRating] = useState<Work | null>(null);
+  const [stars, setStars] = useState(5);
+  const [reviewText, setReviewText] = useState('');
+  const [postingReview, setPostingReview] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -189,6 +193,12 @@ function BrandWorkReview({
         await approveWork(token, work.id);
         // The deal leaves AWAITING_REVIEW, so it drops off this list.
         load();
+        // Rating the creator is the web's next step after an approval, and
+        // the only moment a brand is reliably willing to do it. Skipping is
+        // fine — the review is optional on the backend too.
+        if (work.creator_id) {
+          setRating(work);
+        }
       } catch (err: any) {
         Alert.alert('Not approved', String(err?.message || err));
       } finally {
@@ -197,6 +207,27 @@ function BrandWorkReview({
     },
     [token, load],
   );
+
+  /** Posts the rating, then closes the sheet either way. */
+  const submitRating = useCallback(async () => {
+    if (!rating || postingReview) return;
+    setPostingReview(true);
+    try {
+      await postReview(token, {
+        campaign_id: rating.campaign_id || rating.id,
+        creator_id: rating.creator_id,
+        rating: stars,
+        review: reviewText.trim(),
+      });
+      setRating(null);
+      setStars(5);
+      setReviewText('');
+    } catch (err: any) {
+      Alert.alert('Could not submit', String(err?.message || err));
+    } finally {
+      setPostingReview(false);
+    }
+  }, [postingReview, rating, reviewText, stars, token]);
 
   const confirmApprove = useCallback(
     (work: Work) => {
@@ -215,7 +246,7 @@ function BrandWorkReview({
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -456,6 +487,83 @@ function BrandWorkReview({
             onDone={load}
           />
         )}
+      </Modal>
+
+      {/* Rate the creator, offered right after an approval — the web does the
+          same, and it is the one moment a brand will actually do it. */}
+      <Modal
+        visible={!!rating}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRating(null)}
+      >
+        <View style={styles.ratingBackdrop}>
+          <View style={styles.ratingSheet}>
+            <Text style={styles.ratingTitle}>
+              How was working with{' '}
+              {text(rating?.creator_name, 'this creator')}?
+            </Text>
+            <Text style={styles.ratingBody}>
+              Optional, and visible on their public profile.
+            </Text>
+
+            <View style={styles.stars}>
+              {[1, 2, 3, 4, 5].map(value => (
+                <TouchableOpacity
+                  key={value}
+                  onPress={() => setStars(value)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${value} star${value > 1 ? 's' : ''}`}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Text
+                    style={[
+                      styles.star,
+                      value <= stars && styles.starOn,
+                    ]}
+                  >
+                    ★
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TextInput
+              style={styles.ratingInput}
+              value={reviewText}
+              onChangeText={setReviewText}
+              placeholder="What stood out? (optional)"
+              placeholderTextColor="#A9ADC2"
+              multiline
+            />
+
+            <View style={styles.ratingActions}>
+              <TouchableOpacity
+                style={styles.ratingSkip}
+                onPress={() => {
+                  setRating(null);
+                  setStars(5);
+                  setReviewText('');
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.ratingSkipText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.ratingSend}
+                onPress={submitRating}
+                disabled={postingReview}
+                accessibilityRole="button"
+              >
+                {postingReview ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.ratingSendText}>Submit review</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Full-screen watermarked preview. Tap the video to pause/resume. */}
@@ -760,6 +868,86 @@ const styles = StyleSheet.create({
     fontSize: fontScale(12),
     color: '#858AA3',
     textAlign: 'center',
+  },
+
+  // Rate-the-creator sheet, shown once an approval lands.
+  ratingBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(11,12,38,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: scale(22),
+  },
+  ratingSheet: {
+    width: '100%',
+    maxWidth: scale(360),
+    borderRadius: scale(18),
+    backgroundColor: '#FFFFFF',
+    padding: scale(18),
+  },
+  ratingTitle: {
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-Medium',
+    color: '#25274C',
+  },
+  ratingBody: {
+    marginTop: scale(5),
+    fontSize: fontScale(12),
+    color: '#858AA3',
+  },
+  stars: {
+    flexDirection: 'row',
+    gap: scale(8),
+    marginTop: scale(14),
+    marginBottom: scale(4),
+  },
+  star: { fontSize: fontScale(30), color: '#DCDEEB' },
+  starOn: { color: '#F5B301' },
+  ratingInput: {
+    marginTop: scale(10),
+    minHeight: scale(78),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FBFBFE',
+    padding: scale(12),
+    fontSize: fontScale(13),
+    color: '#25274C',
+    textAlignVertical: 'top',
+  },
+  ratingActions: {
+    flexDirection: 'row',
+    gap: scale(10),
+    marginTop: scale(14),
+  },
+  ratingSkip: {
+    flex: 1,
+    height: scale(46),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ratingSkipText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6180',
+  },
+  ratingSend: {
+    flex: 1.4,
+    height: scale(46),
+    borderRadius: scale(12),
+    backgroundColor: '#3D4FD8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ratingSendText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });
 

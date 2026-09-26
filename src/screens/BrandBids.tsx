@@ -7,6 +7,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   RefreshControl,
   ScrollView,
@@ -17,7 +18,12 @@ import {
 import { Text } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
-import { declineBid, getCampaigns, selectCreator } from '../api';
+import {
+  declineBid,
+  finishHiring,
+  getCampaigns,
+  selectCreator,
+} from '../api';
 import AppHeader from '../components/AppHeader';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -51,6 +57,25 @@ const rupees = (value: unknown) =>
   `Rs. ${(Number(value) || 0).toLocaleString('en-IN', {
     maximumFractionDigits: 0,
   })}`;
+
+/**
+ * How many creators the brief hires. Briefs posted before the field existed
+ * carry no `creators_wanted`, and the backend reads those as 1 — so the same
+ * default here keeps the two in agreement.
+ */
+const wantedFor = (campaign: Record<string, any>) =>
+  Math.max(1, Number(campaign.creators_wanted) || 1);
+
+/** How many slots are already filled, however the payload reports it. */
+const hiredFor = (campaign: Record<string, any>) => {
+  if (Array.isArray(campaign.selected_creators)) {
+    return campaign.selected_creators.length;
+  }
+  if (Number.isFinite(Number(campaign.slots_filled))) {
+    return Number(campaign.slots_filled);
+  }
+  return campaign.selected_creator ? 1 : 0;
+};
 
 function Icon({
   name,
@@ -150,6 +175,46 @@ function BrandBids({
       }
     },
     [load],
+  );
+
+  /** Which campaign's finish-hiring call is in flight. */
+  const [finishing, setFinishing] = useState<string | null>(null);
+
+  const confirmFinishHiring = useCallback(
+    (campaign: Campaign) => {
+      const hired = hiredFor(campaign);
+      const wanted = wantedFor(campaign);
+      Alert.alert(
+        'Finish hiring?',
+        `The brief asked for ${wanted} creators and ${hired} ${
+          hired === 1 ? 'has' : 'have'
+        } been hired. Closing hiring stops new applications and releases the budget held for the unfilled slots.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Finish hiring',
+            onPress: async () => {
+              setFinishing(campaign.id);
+              try {
+                await finishHiring(token, campaign.id);
+                await load();
+              } catch (error) {
+                Alert.alert(
+                  'Could not finish hiring',
+                  text(
+                    error instanceof Error ? error.message : '',
+                    'Please try again.',
+                  ),
+                );
+              } finally {
+                setFinishing(null);
+              }
+            },
+          },
+        ],
+      );
+    },
+    [load, token],
   );
 
   const confirmAccept = useCallback(
@@ -342,6 +407,14 @@ function BrandBids({
                           {rupees(campaign.budget || campaign.budget_max)} ·{' '}
                           {bids.length}{' '}
                           {bids.length === 1 ? 'application' : 'applications'}
+                          {/* A multi-creator brief stays open until every slot
+                              is filled, so the count is what tells the brand
+                              whether they still have hiring to do. */}
+                          {wantedFor(campaign) > 1
+                            ? ` · ${hiredFor(campaign)} of ${wantedFor(
+                                campaign,
+                              )} hired`
+                            : ''}
                         </Text>
                       </View>
                       <Icon name="caret" color="#9498B0" size={18} />
@@ -494,6 +567,29 @@ function BrandBids({
                           </View>
                         );
                       })}
+
+                    {/* Settle for fewer creators than the brief asked for.
+                        Without this a 5-creator brief that only ever attracts
+                        3 good applicants stays open forever. */}
+                    {open &&
+                      wantedFor(campaign) > 1 &&
+                      hiredFor(campaign) > 0 &&
+                      hiredFor(campaign) < wantedFor(campaign) && (
+                        <TouchableOpacity
+                          style={styles.groupFooter}
+                          onPress={() => confirmFinishHiring(campaign)}
+                          disabled={finishing === campaign.id}
+                          accessibilityRole="button"
+                        >
+                          {finishing === campaign.id ? (
+                            <ActivityIndicator size="small" color="#4C5BF3" />
+                          ) : (
+                            <Text style={styles.groupFooterText}>
+                              Finish hiring with {hiredFor(campaign)}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      )}
 
                     {open && (
                       <TouchableOpacity

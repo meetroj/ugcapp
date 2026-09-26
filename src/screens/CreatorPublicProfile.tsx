@@ -26,10 +26,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ScrollViewInstance } from 'react-native';
 import { Text } from '../components/Text';
-import { WebView } from 'react-native-webview';
+import Video from 'react-native-video';
 import Svg, { Circle, Path } from 'react-native-svg';
 import {
   BACKEND_URL,
@@ -101,22 +100,6 @@ const asList = (value: unknown): string[] => {
   }
   return [];
 };
-
-/** Same muted, looping inline player the Creators tab tiles use. */
-const reelHtml = (src: string) => `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;padding:0;background:#0E1330;overflow:hidden}
-video{width:100vw;height:100vh;object-fit:cover;display:block}</style>
-</head><body>
-<video src="${src}" autoplay muted loop playsinline webkit-playsinline
-       preload="auto" disableremoteplayback></video>
-<script>
-  var v = document.querySelector('video');
-  v.muted = true;
-  var play = function () { var p = v.play(); if (p) { p.catch(function () {}); } };
-  play();
-  v.addEventListener('canplay', play);
-</script></body></html>`;
 
 function Icon({ name, color = '#7C819C', size = 18 }: {
   name: string;
@@ -270,17 +253,20 @@ function VideoCard({
           </View>
         ) : isVideo(item.url) ? (
           <>
-            <WebView
-              source={{ html: reelHtml(item.url) }}
+            {/* Native player, like the rest of the app. The inline-HTML
+                player this replaced was handed no baseUrl, so its document had
+                a null origin and Android refused to load the remote clip --
+                every sample rendered as an empty box that never played. */}
+            <Video
+              source={{ uri: item.url }}
               style={styles.videoMedia}
-              scrollEnabled={false}
-              pointerEvents="none"
-              bounces={false}
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled
-              domStorageEnabled={false}
-              androidLayerType="hardware"
+              resizeMode="cover"
+              repeat
+              muted
+              playInBackground={false}
+              playWhenInactive={false}
+              disableFocus
+              ignoreSilentSwitch="ignore"
               onError={() => setFailed(true)}
             />
             <View style={styles.playPill}>
@@ -327,7 +313,6 @@ function CreatorPublicProfile({
   onMessage,
   onSendBrief,
 }: Props) {
-  const insets = useSafeAreaInsets();
   const [data, setData] = useState<Record<string, any> | null>(null);
   const [reviews, setReviews] = useState<CreatorReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -822,7 +807,7 @@ function CreatorPublicProfile({
 
       {/* Send Message stays pinned; this screen hides the bottom nav, so it is
           the only bar competing for the bottom edge. */}
-      <View style={[styles.footer, { paddingBottom: scale(16) + insets.bottom }]}>
+      <View style={styles.footer}>
         <TouchableOpacity
           style={styles.messageBtn}
           onPress={onMessage}

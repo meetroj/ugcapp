@@ -8,7 +8,7 @@
  * 0.87, so the photo deliberately runs under the status bar, while a
  * SafeAreaView reserves the bottom inset to keep the card off the nav bar.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -55,7 +55,15 @@ const MAX_SPACER_RATIO = 0.34;
  * navigation), and a reported 0 would drop the card straight onto the nav bar,
  * so the larger of this and the real inset is used.
  */
-const MIN_BOTTOM_GAP = scale(48);
+const MIN_BOTTOM_GAP = scale(20);
+
+/**
+ * Smallest gap left above the card. The card is allowed to ride up over the
+ * signage until only this much of the photo shows, which is what lets a tall
+ * form (sign-up carries a role selector and three fields) sit fully on screen
+ * without scrolling.
+ */
+const MIN_SPACER = scale(72);
 
 /** Gap between the card and the left/right screen edges. */
 const CARD_INSET = scale(16);
@@ -70,6 +78,10 @@ type Props = {
 function AuthLayout({ title, subtitle, children, compact = false }: Props) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  // Measured once the card lays out, so the spacer above it can be shrunk to
+  // whatever is actually left. Without this the spacer was a fixed share of the
+  // screen and the taller sign-up card ran off the bottom, forcing a scroll.
+  const [cardHeight, setCardHeight] = useState(0);
 
   // Keep the photo's natural height when it already fills the viewport. On
   // taller devices, extend its box to the full screen and use `cover` so the
@@ -80,9 +92,19 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
   // Card starts partway down the photo and covers the rest of it. On wide
   // screens the photo grows very tall, so the start point is also capped as a
   // share of the viewport — otherwise the card would open below the fold.
-  const spacer =
+  const preferredSpacer =
     Math.min(photoHeight * CARD_OVERLAP_AT, height * MAX_SPACER_RATIO) +
     PHOTO_OFFSET_Y;
+  // SafeAreaView already reserves the top and bottom insets, so the usable box
+  // is the screen minus both. Whatever the card does not need becomes the
+  // spacer -- capped at the preferred position so a short card (log in) keeps
+  // the designed composition, and floored so the signage never disappears.
+  const usableHeight = height - insets.top - insets.bottom;
+  const roomAboveCard = usableHeight - cardHeight - MIN_BOTTOM_GAP;
+  const spacer =
+    cardHeight > 0
+      ? Math.max(MIN_SPACER, Math.min(preferredSpacer, roomAboveCard))
+      : preferredSpacer;
 
   return (
     <SafeAreaView
@@ -128,10 +150,14 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
             — and the "Sign In" row inside it — flush against the nav bar.
           */}
           <View
+            onLayout={event => setCardHeight(event.nativeEvent.layout.height)}
             style={[
               styles.card,
               compact && styles.cardCompact,
-              { marginBottom: Math.max(insets.bottom, MIN_BOTTOM_GAP) },
+              // A plain gap: SafeAreaView above already reserves the real
+              // bottom inset, so adding it again double-counted the nav bar and
+              // pushed the card's lower half off screen.
+              { marginBottom: MIN_BOTTOM_GAP },
             ]}
           >
             <Text style={[styles.title, compact && styles.titleCompact]}>

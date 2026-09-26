@@ -12,9 +12,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text } from '../components/Text';
+} from 'react-native';import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import {
@@ -205,7 +203,6 @@ function Reviews({
   unread = 0,
 }: Props) {
   const [reviews, setReviews] = useState<Review[]>([]);
-  const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<AuthUser>(session);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
@@ -290,7 +287,7 @@ function Reviews({
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
           style={styles.headerBtn}

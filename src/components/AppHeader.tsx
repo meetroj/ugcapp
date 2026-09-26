@@ -21,7 +21,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { scale, fontScale } from '../theme';
@@ -125,13 +124,15 @@ function AppHeader({
   /** Red bubble on the message icon; hidden at 0. */
   unreadMessages?: number;
 }) {
-  const insets = useSafeAreaInsets();
   // With no back arrow and no title, the logo is the only centre content, so
   // it takes the centred slot instead of sitting flush left.
   const centeredLogo = !onBack && !title;
 
+  // No inset padding here: every screen using this header renders inside
+  // WebShell's SafeAreaView (top edge), which already clears the status bar.
+  // Adding insets.top again doubled the header height on every tab.
   return (
-    <View style={[styles.header, { height: styles.header.height + insets.top, paddingTop: insets.top }]}>
+    <View style={styles.header}>
       {onBack ? (
         <TouchableOpacity
           style={styles.backBtn}

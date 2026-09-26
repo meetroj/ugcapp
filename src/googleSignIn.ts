@@ -120,7 +120,16 @@ export async function getGoogleIdToken(): Promise<string> {
       throw new GoogleSignInCancelled();
     }
     if (code === statusCodes.IN_PROGRESS) {
-      throw new Error('A Google sign-in is already in progress.');
+      // A previous attempt that died mid-flight (e.g. before the OAuth client
+      // was registered) leaves the native SDK stuck reporting IN_PROGRESS on
+      // every later tap. Reset the session so the *next* tap starts clean —
+      // without this the only way out was force-closing the app.
+      try {
+        await GoogleSignin.signOut();
+      } catch {}
+      throw new Error(
+        'A previous Google sign-in was still pending. Please tap the button again.',
+      );
     }
     if (code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
       throw new Error(

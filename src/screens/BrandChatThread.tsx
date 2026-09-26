@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -21,6 +22,7 @@ import {
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { launchImageLibrary } from 'react-native-image-picker';
 import { SkeletonBlock } from '../components/Skeleton';
 import {
   BACKEND_URL,
@@ -28,7 +30,9 @@ import {
   getMessages,
   respondToActionCard,
   sendActionCard,
+  reportUser,
   sendMessage,
+  uploadMedia,
   type ActionCardResponse,
   type ActionCardType,
   type AuthUser,
@@ -411,6 +415,9 @@ function BrandChatThread({
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  // Uploaded attachment URLs waiting to ride along with the next message.
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const insets = useSafeAreaInsets();
 
@@ -578,7 +585,9 @@ function BrandChatThread({
 
   const send = useCallback(async () => {
     const message = draft.trim();
-    if (!message || sending) return;
+    // An attachment on its own is a valid message; the backend accepts an
+    // empty body as long as attachment_urls carries something.
+    if ((!message && !attachments.length) || sending) return;
 
     setSending(true);
     setError('');
@@ -586,19 +595,77 @@ function BrandChatThread({
       // sendMessage throws carrying the backend's own `detail`, which explains
       // contact-sharing blocks and low-balance refusals — more useful than a
       // generic failure.
-      await sendMessage(token, otherUserId, message);
+      await sendMessage(token, otherUserId, message, attachments);
       setDraft('');
+      setAttachments([]);
       await load();
     } catch (err: any) {
       setError(err?.message || 'Message could not be sent.');
     } finally {
       setSending(false);
     }
-  }, [draft, load, otherUserId, sending, token]);
+  }, [attachments, draft, load, otherUserId, sending, token]);
+
+  /** Picks an image and uploads it, holding the URL until the message is sent. */
+  const attach = useCallback(async () => {
+    if (uploading || attachments.length >= 4) return;
+    const picked = await launchImageLibrary({
+      mediaType: 'mixed',
+      selectionLimit: 1,
+    }).catch(() => null);
+    const asset = picked?.assets?.[0];
+    if (!asset?.uri) return;
+
+    setUploading(true);
+    setError('');
+    try {
+      const url = await uploadMedia(token, {
+        uri: asset.uri,
+        fileName: asset.fileName,
+        type: asset.type,
+      });
+      setAttachments(current => [...current, url]);
+    } catch (err: any) {
+      setError(err?.message || 'That file could not be uploaded.');
+    } finally {
+      setUploading(false);
+    }
+  }, [attachments.length, token, uploading]);
+
+  /** Flags the other party to the moderation team. */
+  const report = useCallback(() => {
+    const who = text(title, 'this user');
+    const reasons = [
+      'Sharing contact details',
+      'Abusive or harassing',
+      'Spam or scam',
+    ];
+    Alert.alert(
+      `Report ${who}?`,
+      'Our moderation team reviews every report. The conversation stays open.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        ...reasons.map(reason => ({
+          text: reason,
+          onPress: async () => {
+            try {
+              await reportUser(token, {
+                reported_user_id: otherUserId,
+                reason,
+              });
+              Alert.alert('Reported', 'Thanks — our team will take a look.');
+            } catch (err: any) {
+              Alert.alert('Could not report', String(err?.message || err));
+            }
+          },
+        })),
+      ],
+    );
+  }, [otherUserId, title, token]);
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -628,6 +695,18 @@ function BrandChatThread({
         >
           <Icon name="brief" color="#FFFFFF" size={14} />
           <Text style={styles.briefText}>Send a Brief</Text>
+        </TouchableOpacity>
+
+        {/* Reporting was website-only, which meant the one screen where
+            harassment actually happens had no way to flag it. */}
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={report}
+          accessibilityRole="button"
+          accessibilityLabel="Report this user"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Icon name="dots" color="#7C819C" size={20} />
         </TouchableOpacity>
       </View>
 
@@ -836,21 +915,53 @@ function BrandChatThread({
               the last thing above the system gesture bar — pad by the inset so
               the send button is not sitting under it. The inset drops out while
               the keyboard covers that bar, otherwise the composer floats. */}
+          {/* Picked-but-not-yet-sent attachments. Shown above the composer so
+              it is obvious they will ride along with the next message, and
+              removable before it goes. */}
+          {attachments.length > 0 && (
+            <View style={styles.pendingRow}>
+              {attachments.map(url => (
+                <TouchableOpacity
+                  key={url}
+                  style={styles.pendingItem}
+                  onPress={() =>
+                    setAttachments(current => current.filter(u => u !== url))
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove this attachment"
+                >
+                  <Image source={{ uri: url }} style={styles.pendingThumb} />
+                  <View style={styles.pendingRemove}>
+                    <Icon name="close" color="#FFFFFF" size={11} />
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           <View
             style={[
               styles.composer,
               { paddingBottom: keyboardUp ? scale(8) : scale(8) + insets.bottom },
             ]}
           >
-            {/* Attachments need a native file picker, which this build doesn't
-                include yet. Shown disabled rather than bouncing the user to
-                the website. */}
-            <View
+            <TouchableOpacity
               style={styles.composerBtn}
-              accessibilityLabel="Attachments unavailable in the app"
+              onPress={attach}
+              disabled={uploading || attachments.length >= 4}
+              accessibilityRole="button"
+              accessibilityLabel="Attach a photo or video"
             >
-              <Icon name="clip" color="#D2D5E2" size={20} />
-            </View>
+              {uploading ? (
+                <ActivityIndicator size="small" color="#7C819C" />
+              ) : (
+                <Icon
+                  name="clip"
+                  color={attachments.length >= 4 ? '#D2D5E2' : '#7C819C'}
+                  size={20}
+                />
+              )}
+            </TouchableOpacity>
 
             <TextInput
               style={styles.input}
@@ -862,9 +973,12 @@ function BrandChatThread({
             />
 
             <TouchableOpacity
-              style={[styles.sendBtn, !draft.trim() && styles.sendBtnOff]}
+              style={[
+                styles.sendBtn,
+                !draft.trim() && !attachments.length && styles.sendBtnOff,
+              ]}
               onPress={send}
-              disabled={!draft.trim() || sending}
+              disabled={(!draft.trim() && !attachments.length) || sending}
               accessibilityRole="button"
               accessibilityLabel="Send message"
             >
@@ -1431,6 +1545,33 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#F1F2F8',
     backgroundColor: '#FFFFFF',
+  },
+
+  // Attachments picked but not yet sent.
+  pendingRow: {
+    flexDirection: 'row',
+    gap: scale(8),
+    paddingHorizontal: scale(12),
+    paddingTop: scale(10),
+    backgroundColor: '#FFFFFF',
+  },
+  pendingItem: { width: scale(54), height: scale(54) },
+  pendingThumb: {
+    width: scale(54),
+    height: scale(54),
+    borderRadius: scale(10),
+    backgroundColor: '#F1F2F8',
+  },
+  pendingRemove: {
+    position: 'absolute',
+    top: -scale(5),
+    right: -scale(5),
+    width: scale(19),
+    height: scale(19),
+    borderRadius: scale(10),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   composerBtn: {
     width: scale(38),

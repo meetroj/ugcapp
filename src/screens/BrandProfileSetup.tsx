@@ -6,11 +6,16 @@
  *
  * Submits PUT /api/profile/business, which sets profile_completed and moves
  * the account to PENDING approval.
+ *
+ * The website and Instagram fields are checked twice, exactly like the web
+ * page: a format regex as you type, then a live probe on blur that asks the
+ * backend to actually resolve the site / look the handle up. The regex alone
+ * happily accepts "asdasd.com" — only the probe catches a domain that doesn't
+ * exist.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
   Modal,
   ScrollView,
@@ -20,12 +25,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
-import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Path } from 'react-native-svg';
 import {
-  BACKEND_URL,
+  checkInstagramLive,
+  checkWebsiteLive,
   completeProfile,
-  uploadMedia,
+  getMe,
   type AuthUser,
 } from '../api';
 import { scale, fontScale } from '../theme';
@@ -115,6 +120,19 @@ const DIAL_CODES = [
   { label: 'SG', code: '+65' },
 ];
 
+/** Leading glyph per probe verdict — the web renders the same three. */
+const PROBE_PREFIX: Record<string, string> = {
+  checking: '',
+  valid: '✓ ',
+  invalid: '✕ ',
+  uncertain: '⚠ ',
+};
+
+type Probe = {
+  status: 'checking' | 'valid' | 'invalid' | 'uncertain';
+  msg: string;
+} | null;
+
 /** Same two rules the web validates with — any real website, any IG handle. */
 const URL_RE = /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/\S*)?$/i;
 const IG_HANDLE_RE = /^@?[a-z0-9._]{1,30}$/i;
@@ -146,9 +164,6 @@ function withScheme(url: string): string {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
 
-const photoUrl = (path: string) =>
-  /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
-
 function Icon({
   name,
   color = '#7C819C',
@@ -166,15 +181,6 @@ function Icon({
   };
   return (
     <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24" fill="none">
-      {name === 'camera' && (
-        <>
-          <Path d="M4 8h3l1.5-2.5h7L17 8h3v11H4z" {...line} />
-          <Path
-            d="M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
-            {...line}
-          />
-        </>
-      )}
       {name === 'chevron' && <Path d="m7.5 10 4.5 4.5L16.5 10" {...line} />}
       {name === 'check' && <Path d="m5 12.5 4.5 4.5L19 7.5" {...line} />}
     </Svg>
@@ -188,13 +194,15 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
   const insets = useSafeAreaInsets();
   // The keyboard covers the gesture bar, so the inset would only show as a gap.
   const keyboardUp = useKeyboardVisible();
-  const [logo, setLogo] = useState('');
   const [picker, setPicker] = useState<null | 'industry' | 'country' | 'dial'>(null);
   const [dial, setDial] = useState(DIAL_CODES[0]);
-  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [missing, setMissing] = useState<string[]>([]);
   const [error, setError] = useState('');
+  // Live reachability verdicts, cleared whenever the field is edited so an old
+  // answer never describes a new value.
+  const [webCheck, setWebCheck] = useState<Probe>(null);
+  const [igCheck, setIgCheck] = useState<Probe>(null);
 
   const set = useCallback(
     (key: string, value: string) =>
@@ -202,30 +210,119 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
     [],
   );
 
-  const pickLogo = useCallback(async () => {
-    const result = await launchImageLibrary({
-      mediaType: 'photo',
-      selectionLimit: 1,
-      quality: 0.8,
-    });
-    const asset = result.assets?.[0];
-    if (!asset?.uri) return;
+  /**
+   * Prefill with the profile already on file, so a brand asked for "more info"
+   * (or just re-editing) doesn't retype the whole form — the same thing the web
+   * page does. Reads /auth/me rather than the session, whose copy of `profile`
+   * can be a login response old enough to predate the last edit.
+   *
+   * The stored shape differs from this form's, so every field is mapped back
+   * explicitly: spreading would silently drop all of them.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let profile: Record<string, any> | null = null;
+      try {
+        const me = await getMe(token);
+        profile = (me?.profile as Record<string, any>) || null;
+      } catch {
+        // Never block a first-time signup on this — an empty form is the
+        // correct fallback.
+        profile = (session.profile as Record<string, any>) || null;
+      }
+      if (!alive || !profile || !Object.keys(profile).length) return;
 
-    setUploading(true);
-    setError('');
-    try {
-      const url = await uploadMedia(
-        token,
-        { uri: asset.uri, fileName: asset.fileName, type: asset.type },
-        'photo',
-      );
-      setLogo(url);
-    } catch (err: any) {
-      setError(err?.message || 'Could not upload the logo.');
-    } finally {
-      setUploading(false);
+      const industry = String(profile.industry_category || '');
+      const knownIndustry = INDUSTRIES.includes(industry);
+
+      // Phone is stored with the dial code baked in ("+91 98765 43210").
+      const storedPhone = String(profile.phone || '').trim();
+      const matchedDial =
+        DIAL_CODES.find(option => storedPhone.startsWith(`${option.code} `)) ||
+        DIAL_CODES.find(option => storedPhone.startsWith(option.code));
+      const barePhone = matchedDial
+        ? storedPhone.slice(matchedDial.code.length).trim()
+        : storedPhone;
+      if (matchedDial) setDial(matchedDial);
+
+      setForm(current => ({
+        ...current,
+        business_name: profile.business_name || current.business_name,
+        website: profile.website || current.website || '',
+        instagram:
+          instagramHandle(String((profile.social_links || {}).instagram || '')) ||
+          current.instagram ||
+          '',
+        phone: barePhone || current.phone || '',
+        country: profile.country || current.country || '',
+        industry_category: industry
+          ? knownIndustry
+            ? industry
+            : 'Other'
+          : current.industry_category || '',
+        custom_industry:
+          industry && !knownIndustry
+            ? industry
+            : current.custom_industry || '',
+        gstin: profile.gstin || current.gstin || '',
+      }));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session.profile, token]);
+
+  /**
+   * Website probe, run on blur. Skipped when the value is not even a
+   * well-formed URL — the format error already covers that case.
+   */
+  const probeWebsite = useCallback(async () => {
+    const value = String(form.website || '').trim();
+    if (!value || !URL_RE.test(value)) {
+      setWebCheck(null);
+      return;
     }
-  }, [token]);
+    setWebCheck({ status: 'checking', msg: 'Checking website…' });
+    const result = await checkWebsiteLive(token, value);
+    setWebCheck(
+      result.valid
+        ? { status: 'valid', msg: 'Website is live and reachable.' }
+        : result.uncertain
+        ? {
+            status: 'uncertain',
+            msg: "We couldn't complete the check. You can continue.",
+          }
+        : {
+            status: 'invalid',
+            msg: "We couldn't reach this website — check the address.",
+          },
+    );
+  }, [form.website, token]);
+
+  /**
+   * Instagram probe, run on blur. Instagram serves servers a login wall, so a
+   * `uncertain` verdict is normal and only warns — it never blocks the form.
+   */
+  const probeInstagram = useCallback(async () => {
+    const value = String(form.instagram || '').trim();
+    if (!value || !IG_HANDLE_RE.test(value)) {
+      setIgCheck(null);
+      return;
+    }
+    setIgCheck({ status: 'checking', msg: 'Checking Instagram…' });
+    const result = await checkInstagramLive(token, instagramHandle(value));
+    setIgCheck(
+      result.valid
+        ? { status: 'valid', msg: 'Instagram account found.' }
+        : result.reason === 'not_found'
+        ? { status: 'invalid', msg: "This Instagram username doesn't exist." }
+        : {
+            status: 'uncertain',
+            msg: "Format looks fine, but Instagram blocks automated checks so we can't confirm it exists.",
+          },
+    );
+  }, [form.instagram, token]);
 
   const save = useCallback(async () => {
     // Required set is the web's: business name, website, phone and country.
@@ -254,6 +351,47 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
       return;
     }
 
+    // The format regex passes anything domain-shaped, so a made-up address
+    // only gets caught here. If the field was never blurred there is no
+    // verdict yet — run the probe now rather than letting it through.
+    let web = webCheck;
+    if (!web || web.status === 'checking') {
+      // Takes a few seconds, so hold the button in its saving state — without
+      // this the form looks frozen and invites a second tap.
+      setSaving(true);
+      setError('');
+      setWebCheck({ status: 'checking', msg: 'Checking website…' });
+      const result = await checkWebsiteLive(token, website);
+      web = result.valid
+        ? { status: 'valid' as const, msg: 'Website is live and reachable.' }
+        : result.uncertain
+        ? {
+            status: 'uncertain' as const,
+            msg: "We couldn't complete the check. You can continue.",
+          }
+        : {
+            status: 'invalid' as const,
+            msg: "We couldn't reach this website — check the address.",
+          };
+      setWebCheck(web);
+    }
+    if (web.status === 'invalid') {
+      setSaving(false);
+      setMissing(['website']);
+      setError(
+        "That website doesn't seem to be reachable. Please enter a valid business website.",
+      );
+      return;
+    }
+    // A handle Instagram positively reported as missing blocks too; an
+    // "uncertain" verdict (login wall) does not.
+    if (igCheck?.status === 'invalid') {
+      setSaving(false);
+      setMissing(['instagram']);
+      setError("That Instagram account doesn't exist. Please check the username.");
+      return;
+    }
+
     setSaving(true);
     setError('');
     try {
@@ -278,7 +416,9 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
         country: form.country,
         phone: `${dial.code} ${String(form.phone || '').trim()}`.trim(),
         gstin: form.gstin || '',
-        logo,
+        // The logo upload was dropped from onboarding; brands add one later
+        // from Settings, and the backend treats an empty string as "none".
+        logo: '',
       });
       onDone();
     } catch (err: any) {
@@ -286,7 +426,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [dial, form, logo, onDone, token]);
+  }, [dial, form, igCheck, onDone, token, webCheck]);
 
   return (
     <View style={styles.screen}>
@@ -317,27 +457,6 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
             <Text style={styles.cardTitle}>
               Complete your business profile
             </Text>
-            <TouchableOpacity
-              style={styles.logoPicker}
-              onPress={pickLogo}
-              disabled={uploading}
-              accessibilityRole="button"
-              accessibilityLabel="Add a logo"
-            >
-              {uploading ? (
-                <ActivityIndicator color="#5B5CF6" />
-              ) : logo ? (
-                <Image
-                  source={{ uri: photoUrl(logo) }}
-                  style={styles.logoImage}
-                />
-              ) : (
-                <Icon name="camera" color="#9498B0" size={24} />
-              )}
-            </TouchableOpacity>
-            <Text style={styles.logoHint}>
-              {logo ? 'Tap to change logo' : 'Add your logo (optional)'}
-            </Text>
 
             <Text style={styles.sectionTitle}>Business Information</Text>
 
@@ -354,18 +473,29 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
               label="Website"
               required
               value={form.website || ''}
-              onChange={v => set('website', v)}
+              onChange={v => {
+                set('website', v);
+                setWebCheck(null);
+              }}
+              onBlur={probeWebsite}
               placeholder="yourbrand.com"
               keyboard="url"
-              error={missing.includes('website')}
+              error={missing.includes('website') || webCheck?.status === 'invalid'}
+              probe={webCheck}
             />
 
             <Field
               label="Instagram"
               value={form.instagram || ''}
-              onChange={v => set('instagram', v)}
+              onChange={v => {
+                set('instagram', v);
+                setIgCheck(null);
+              }}
+              onBlur={probeInstagram}
               placeholder="@yourbrand"
-              error={missing.includes('instagram')}
+              keyboard="url"
+              error={missing.includes('instagram') || igCheck?.status === 'invalid'}
+              probe={igCheck}
             />
 
             {/* Dial code + number, matching the web's split control. */}
@@ -482,7 +612,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           <TouchableOpacity
             style={[styles.submit, saving && styles.submitOff]}
             onPress={save}
-            disabled={saving || uploading}
+            disabled={saving}
             accessibilityRole="button"
           >
             {saving ? (
@@ -590,6 +720,8 @@ function Field({
   multiline,
   keyboard,
   error,
+  onBlur,
+  probe,
 }: {
   label: string;
   value: string;
@@ -599,6 +731,9 @@ function Field({
   multiline?: boolean;
   keyboard?: 'default' | 'url' | 'phone-pad';
   error?: boolean;
+  onBlur?: () => void;
+  /** Live reachability verdict, rendered as a coloured line under the input. */
+  probe?: Probe;
 }) {
   return (
     <View style={styles.field}>
@@ -620,7 +755,21 @@ function Field({
         autoCapitalize={keyboard === 'url' ? 'none' : 'sentences'}
         autoCorrect={false}
         multiline={multiline}
+        onBlur={onBlur}
       />
+      {!!probe && (
+        <Text
+          style={[
+            styles.probeLine,
+            probe.status === 'valid' && styles.probeOk,
+            probe.status === 'invalid' && styles.probeBad,
+            probe.status === 'uncertain' && styles.probeWarn,
+          ]}
+        >
+          {PROBE_PREFIX[probe.status]}
+          {probe.msg}
+        </Text>
+      )}
     </View>
   );
 }
@@ -706,26 +855,6 @@ const styles = StyleSheet.create({
     borderColor: CARD_BORDER,
   },
 
-  logoPicker: {
-    alignSelf: 'center',
-    width: scale(86),
-    height: scale(86),
-    borderRadius: scale(43),
-    backgroundColor: INK_SOFT,
-    borderWidth: 1,
-    borderColor: INK_BORDER,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  logoImage: { width: '100%', height: '100%' },
-  logoHint: {
-    marginTop: scale(8),
-    textAlign: 'center',
-    fontSize: fontScale(11),
-    color: INK_MUTED,
-  },
-
   sectionTitle: {
     marginTop: scale(20),
     fontSize: fontScale(15),
@@ -747,7 +876,9 @@ const styles = StyleSheet.create({
     minHeight: scale(46),
     borderRadius: scale(12),
     borderWidth: 1,
-    borderColor: '#E2E4F0',
+    // Same white-alpha hairline as the rest of the card. The old light-theme
+    // grey (#E2E4F0) read as bright white lines on the dark backdrop.
+    borderColor: INK_BORDER,
     backgroundColor: INK_SOFT,
     paddingHorizontal: scale(12),
     paddingVertical: scale(12),
@@ -755,14 +886,22 @@ const styles = StyleSheet.create({
     color: ACCENT_TEXT,
   },
   inputMultiline: { minHeight: scale(96), textAlignVertical: 'top' },
-  inputError: { borderColor: '#E5484D', backgroundColor: '#FFF6F6' },
+  // Red-tinted, not white: a white fill under white text made the field vanish.
+  inputError: { borderColor: '#E5484D', backgroundColor: 'rgba(229,72,77,0.14)' },
+  // The web's coloured probe line: green reachable, red dead, amber unknown.
+  probeLine: { marginTop: scale(5), fontSize: fontScale(12), color: '#94A3B8' },
+  probeOk: { color: '#34D399' },
+  probeBad: { color: '#F87171' },
+  probeWarn: { color: '#FBBF24' },
 
   select: {
     minHeight: scale(46),
     borderRadius: scale(12),
     borderWidth: 1,
-    borderColor: '#E2E4F0',
-    backgroundColor: '#FBFBFE',
+    borderColor: INK_BORDER,
+    // Dark fill like the inputs. The old near-white (#FBFBFE) under white
+    // selectText made Country/Industry unreadable white-on-white boxes.
+    backgroundColor: INK_SOFT,
     paddingHorizontal: scale(12),
     flexDirection: 'row',
     alignItems: 'center',
@@ -797,7 +936,7 @@ const styles = StyleSheet.create({
   modalRow: {
     paddingVertical: scale(14),
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F1F7',
+    borderBottomColor: 'rgba(255,255,255,0.08)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -813,13 +952,13 @@ const styles = StyleSheet.create({
     marginTop: scale(12),
     padding: scale(12),
     borderRadius: scale(12),
-    backgroundColor: '#FFE6E7',
+    backgroundColor: 'rgba(229,72,77,0.16)',
   },
   errorText: {
     fontSize: fontScale(12),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
-    color: '#C4373B',
+    color: '#FF8B8F',
   },
 
   note: {
@@ -834,7 +973,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(16),
     paddingVertical: scale(12),
     borderTopWidth: 1,
-    borderTopColor: '#EDEEF6',
+    // White-alpha hairline; the light-theme grey showed as a hard white line.
+    borderTopColor: 'rgba(255,255,255,0.08)',
     backgroundColor: BACKDROP,
   },
   submit: {
