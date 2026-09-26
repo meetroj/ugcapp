@@ -158,6 +158,44 @@ cannot recover it in the app at all.
 
 ---
 
+## Status — 26 Sep 2026
+
+Everything below is on branch `app-web-sync`.
+
+**Done**
+
+- Routing sync (section A), all rewrites plus in-WebView link normalisation
+- Brief form: `creators_wanted`, `product_type_detail`, `cta_link`,
+  `edited_by`, `script_provider`/`script_text`, 20% commission, error popup,
+  hashtag space bar, niche/city/level lists
+- Deal Room (C1): receipt, damage report, revision response, dispute,
+  escalate, archive
+- KYC (C2): real submission with the three document uploads
+- Chat (C3): attachment upload, report user
+- Brand work review (C5): rate the creator after approval
+- Shipments (C6): add/update tracking
+- Settings (C8, partial): change password, 2FA, deactivate, privacy switches
+- Auth (C9): forgot password, reset, TOTP on login
+- Finish hiring, and slot counts on the bids screen
+
+**Not done**
+
+- Brand team members and billing tabs — `api.ts` has `getTeam`,
+  `inviteTeamMember`, `updateTeamMemberRole`, `removeTeamMember`, `getBilling`,
+  `saveBilling`; no screen calls them yet
+- Admin-curated shortlist on the campaign detail (`getShortlist`,
+  `inviteShortlistedCreator`, `requestNewShortlist` are in `api.ts`, unused)
+- Disputes screen (`getMyDisputes`, `getDispute`, `respondToDispute` in
+  `api.ts`, unused) — disputes can be *raised* from the Deal Room, but the
+  detail/respond view is still WebView
+- Saved Creators, Sent Briefs, standalone Portfolio, Brand Overview
+- `image_url` / `mood_images` on the brief (optional cover art)
+- Payout receipts list (`getPayoutReceipts` in `api.ts`, unused)
+
+**Verified**: `tsc --noEmit` clean, 91/91 jest tests pass, release APK builds
+and runs on the emulator. Not verified end-to-end against a live account —
+that needs brand and creator logins.
+
 ## Proposed phases
 
 Ordered by user impact per unit of work.
