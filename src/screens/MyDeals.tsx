@@ -87,12 +87,17 @@ function MyDeals({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
+  // Returns the list it fetched so a caller can pick a deal straight out of
+  // it; reading `items` after calling this would see the pre-fetch state.
+  const load = useCallback(async (): Promise<Deal[]> => {
     try {
       setError('');
-      setItems(await getMyDeals(token));
+      const fresh = await getMyDeals(token);
+      setItems(fresh);
+      return fresh;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load your deals.');
+      return [];
     }
   }, [token]);
 
@@ -144,6 +149,18 @@ function MyDeals({
             onMessages?.();
           }
         }}
+        // A deal action (receipt, dispute, revision reply) changes the deal on
+        // the server. Refetch and hand the detail view the fresh copy, or it
+        // keeps rendering the state the action just moved past.
+        onChanged={async () => {
+          const fresh = await load();
+          setOpenDeal(current => {
+            if (!current) return current;
+            const id = String(current.deal_id);
+            return fresh.find(deal => String(deal.deal_id) === id) || current;
+          });
+        }}
+        onArchived={() => setOpenDeal(null)}
       />
     );
   }

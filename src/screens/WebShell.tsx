@@ -793,7 +793,13 @@ function WebShell({
           }}
         />
       ) : showingKycSubmit ? (
-        <KycSubmit onBack={backTo('/kyc')} />
+        <KycSubmit
+          token={token}
+          onBack={backTo('/kyc')}
+          // Land back on the status screen, which refetches and will now show
+          // the submission as pending review.
+          onSubmitted={() => navigateTo('/kyc')}
+        />
       ) : showingWithdrawalForm ? (
         <WithdrawalRequest
           token={token}

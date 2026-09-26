@@ -1429,3 +1429,474 @@ export async function getChatUnreadCount(token: string): Promise<number> {
     0,
   );
 }
+
+/**
+ * Result of a live link probe. The backend answers `{valid:true}`,
+ * `{valid:false, reason}` or `{uncertain:true, reason}` — Instagram blocks
+ * automated lookups behind a login wall, so "we can't tell" is a real outcome
+ * and must not be reported to the user as a failure.
+ */
+export type LinkProbe = {
+  valid?: boolean;
+  uncertain?: boolean;
+  reason?: string;
+  normalized?: string;
+};
+
+/**
+ * POST /api/validate/website — resolves the host and actually requests the
+ * page, so a well-formed-but-fake domain ("asdasd.com") comes back invalid.
+ * A network failure resolves to `uncertain` rather than throwing: a flaky
+ * phone connection must never block onboarding.
+ */
+export async function checkWebsiteLive(
+  token: string,
+  url: string,
+): Promise<LinkProbe> {
+  try {
+    const response = await request(`${BACKEND_URL}/api/validate/website`, {
+      method: 'POST',
+      headers: auth(token),
+      body: JSON.stringify({ url }),
+    });
+    if (!response.ok) {
+      return { uncertain: true, reason: 'unverified' };
+    }
+    return (await response.json().catch(() => ({}))) as LinkProbe;
+  } catch {
+    return { uncertain: true, reason: 'unverified' };
+  }
+}
+
+/**
+ * POST /api/validate/instagram — looks the handle up on instagram.com. Returns
+ * `{valid:false, reason:'not_found'}` only when Instagram positively says the
+ * profile is gone; a login wall comes back as `uncertain`.
+ */
+export async function checkInstagramLive(
+  token: string,
+  username: string,
+): Promise<LinkProbe> {
+  try {
+    const response = await request(`${BACKEND_URL}/api/validate/instagram`, {
+      method: 'POST',
+      headers: auth(token),
+      body: JSON.stringify({ username }),
+    });
+    if (!response.ok) {
+      return { uncertain: true, reason: 'unverified' };
+    }
+    return (await response.json().catch(() => ({}))) as LinkProbe;
+  } catch {
+    return { uncertain: true, reason: 'unverified' };
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Deal Room
+//
+// The website's deal room (pages/MyDealsPage.js) drives a deal through its
+// whole life from one screen. None of it was reachable in the app, so a
+// creator who needed to flag damaged goods, answer a revision request or
+// dispute an outcome had to leave for the website. Bodies here mirror what
+// the web posts, field for field.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Confirms the product arrived. `received_at` is stamped here, as on the web. */
+export async function confirmDealReceipt(
+  token: string,
+  dealId: string,
+  payload: {
+    unboxing_video_url?: string;
+    items_damaged?: boolean;
+    damage_report?: string | null;
+  } = {},
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/receipt`, {
+    received_at: new Date().toISOString(),
+    items_damaged: false,
+    damage_report: null,
+    ...payload,
+  });
+}
+
+/** Reports the product as damaged or wrong. Attachments are photo evidence. */
+export async function reportDealDamage(
+  token: string,
+  dealId: string,
+  attachmentUrls: string[],
+  message = 'Damaged or wrong product reported by creator',
+) {
+  return send(
+    token,
+    'POST',
+    `/api/deals/${encodeURIComponent(dealId)}/damage-report`,
+    { message, attachment_urls: attachmentUrls },
+  );
+}
+
+/** Uploads the finished deliverable set against the deal. */
+export async function submitDealContent(
+  token: string,
+  dealId: string,
+  payload: {
+    video_url: string;
+    caption_url?: string;
+    thumbnail_url?: string;
+    raw_footage_url?: string;
+    creator_note?: string;
+  },
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/content`, {
+    creator_note: 'Submitted from the app deal room',
+    ...payload,
+  });
+}
+
+/**
+ * Creator's answer to a revision request: accept it (optionally listing which
+ * changes) or flag it as out of scope.
+ */
+export async function respondToRevision(
+  token: string,
+  dealId: string,
+  response: 'accepted' | 'flagged',
+  acceptedChanges?: string[],
+) {
+  return send(
+    token,
+    'POST',
+    `/api/deals/${encodeURIComponent(dealId)}/revision-response`,
+    {
+      response,
+      accepted_changes: acceptedChanges?.length ? acceptedChanges : undefined,
+      note:
+        response === 'accepted'
+          ? acceptedChanges?.length
+            ? `Creator accepted these changes: ${acceptedChanges.join('; ')}.`
+            : 'Creator accepted the revision request.'
+          : 'Creator flagged the revision request from Deal Room.',
+    },
+  );
+}
+
+/** Opens a dispute on the deal. */
+export async function raiseDealDispute(
+  token: string,
+  dealId: string,
+  message: string,
+  attachmentUrls: string[] = [],
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/dispute`, {
+    message,
+    attachment_urls: attachmentUrls,
+  });
+}
+
+/** Escalates an existing dispute to the review team. */
+export async function escalateDeal(
+  token: string,
+  dealId: string,
+  message: string,
+  attachmentUrls: string[] = [],
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/escalate`, {
+    message,
+    attachment_urls: attachmentUrls,
+  });
+}
+
+/** Hides a finished deal from the active list. */
+export async function archiveDeal(token: string, dealId: string) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/archive`);
+}
+
+/** The brand's side of the deal list. */
+export async function getBusinessDeals(
+  token: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(await get(token, '/api/deals/business'), 'deals');
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Disputes
+// ───────────────────────────────────────────────────────────────────────────
+
+export async function getMyDisputes(
+  token: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(await get(token, '/api/disputes/my'), 'disputes');
+}
+
+export async function getDispute(
+  token: string,
+  disputeId: string,
+): Promise<Record<string, unknown>> {
+  return get(token, `/api/disputes/${encodeURIComponent(disputeId)}`);
+}
+
+/** Adds a statement (and any evidence) to an open dispute. */
+export async function respondToDispute(
+  token: string,
+  disputeId: string,
+  message: string,
+  evidenceUrls: string[] = [],
+) {
+  return send(
+    token,
+    'POST',
+    `/api/disputes/${encodeURIComponent(disputeId)}/respond`,
+    { message: message.trim(), evidence_urls: evidenceUrls },
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Account security — all of these were website-only, so a user could not
+// change their password, turn on 2FA or close their account from the app.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Password params ride in the query string, which is what the API expects. */
+export async function changePassword(
+  token: string,
+  oldPassword: string,
+  newPassword: string,
+) {
+  const query = new URLSearchParams({
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+  return send(token, 'POST', `/api/profile/change-password?${query}`);
+}
+
+export async function getTwoFactorStatus(
+  token: string,
+): Promise<{ enabled?: boolean; [key: string]: unknown }> {
+  return get(token, '/api/profile/2fa/status');
+}
+
+/** Returns the shared secret and its otpauth:// URI for the authenticator app. */
+export async function setupTwoFactor(
+  token: string,
+): Promise<{ secret?: string; otpauth_url?: string; [key: string]: unknown }> {
+  return send(token, 'POST', '/api/profile/2fa/setup');
+}
+
+/** Confirms the six-digit code, which is what actually switches 2FA on. */
+export async function verifyTwoFactor(token: string, code: string) {
+  return send(
+    token,
+    'POST',
+    `/api/profile/2fa/verify?token=${encodeURIComponent(code)}`,
+  );
+}
+
+export async function disableTwoFactor(token: string, password: string) {
+  return send(
+    token,
+    'POST',
+    `/api/profile/2fa/disable?password=${encodeURIComponent(password)}`,
+  );
+}
+
+export async function deactivateAccount(token: string) {
+  return send(token, 'POST', '/api/profile/deactivate');
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Password recovery — a user locked out of the app had no way back in except
+// the website. Three steps, same as the web's Auth page.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Unauthenticated POST: these run before there is a session to send. */
+async function anon<T>(path: string, body: unknown): Promise<T> {
+  return (await json(
+    await request(`${BACKEND_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  )) as T;
+}
+
+export async function forgotPassword(email: string) {
+  return anon<Record<string, unknown>>('/api/auth/forgot-password', { email });
+}
+
+export async function verifyResetCode(email: string, code: string) {
+  return anon<Record<string, unknown>>('/api/auth/verify-reset-code', {
+    email,
+    code,
+  });
+}
+
+export async function resetPassword(
+  email: string,
+  code: string,
+  newPassword: string,
+) {
+  return anon<Record<string, unknown>>('/api/auth/reset-password', {
+    email,
+    code,
+    new_password: newPassword,
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Brand team, billing and hiring
+// ───────────────────────────────────────────────────────────────────────────
+
+export async function getTeam(
+  token: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(await get(token, '/api/business/settings/team'), 'members');
+}
+
+export async function inviteTeamMember(
+  token: string,
+  email: string,
+  role: 'admin' | 'member' | 'viewer',
+) {
+  return send(token, 'POST', '/api/business/settings/team/invite', {
+    email,
+    role,
+  });
+}
+
+export async function updateTeamMemberRole(
+  token: string,
+  memberId: string,
+  role: 'admin' | 'member' | 'viewer',
+) {
+  return send(
+    token,
+    'PATCH',
+    `/api/business/settings/team/${encodeURIComponent(memberId)}`,
+    { role },
+  );
+}
+
+export async function removeTeamMember(token: string, memberId: string) {
+  return send(
+    token,
+    'DELETE',
+    `/api/business/settings/team/${encodeURIComponent(memberId)}`,
+  );
+}
+
+export async function getBilling(
+  token: string,
+): Promise<Record<string, unknown>> {
+  return get(token, '/api/business/settings/billing');
+}
+
+export async function saveBilling(
+  token: string,
+  payload: Record<string, unknown>,
+) {
+  return send(token, 'PUT', '/api/business/settings/billing', payload);
+}
+
+/** The bids placed on one campaign, for the brand's hiring screen. */
+export async function getCampaignBids(
+  token: string,
+  campaignId: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(
+    await get(token, `/api/campaigns/${encodeURIComponent(campaignId)}/bids`),
+    'bids',
+  );
+}
+
+/** Admin-curated creator shortlist for a campaign. */
+export async function getShortlist(
+  token: string,
+  campaignId: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(
+    await get(
+      token,
+      `/api/campaigns/${encodeURIComponent(campaignId)}/shortlist`,
+    ),
+    'shortlist',
+    'creators',
+  );
+}
+
+export async function inviteShortlistedCreator(
+  token: string,
+  campaignId: string,
+  creatorId: string,
+) {
+  return send(
+    token,
+    'POST',
+    `/api/campaigns/${encodeURIComponent(
+      campaignId,
+    )}/shortlist/${encodeURIComponent(creatorId)}/invite`,
+  );
+}
+
+export async function requestNewShortlist(token: string, campaignId: string) {
+  return send(
+    token,
+    'POST',
+    `/api/campaigns/${encodeURIComponent(campaignId)}/shortlist/request-new`,
+  );
+}
+
+/**
+ * Closes hiring early. A brief normally stays open until `creators_wanted`
+ * creators are picked; this settles for however many are on board.
+ */
+export async function finishHiring(token: string, campaignId: string) {
+  return send(
+    token,
+    'POST',
+    `/api/campaigns/${encodeURIComponent(campaignId)}/finish-hiring`,
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Reviews, reporting and payouts
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Ratings a business has received, for the creator's view of a brand. */
+export async function getBusinessReviews(
+  token: string,
+  businessId: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(
+    await get(token, `/api/reviews/business/${encodeURIComponent(businessId)}`),
+    'reviews',
+  );
+}
+
+/** Flags a user to the moderation team. */
+export async function reportUser(
+  token: string,
+  payload: { reported_user_id: string; reason: string; details?: string },
+) {
+  return send(token, 'POST', '/api/report-user', payload);
+}
+
+/** Policy strikes on the current account, shown on Privacy & Security. */
+export async function getChatWarnings(
+  token: string,
+): Promise<Record<string, unknown>> {
+  return get(token, '/api/chat/warnings');
+}
+
+/** Settled payout receipts, for the Earnings history. */
+export async function getPayoutReceipts(
+  token: string,
+): Promise<Record<string, unknown>[]> {
+  return toList(await get(token, '/api/payouts/receipts'), 'receipts');
+}
+
+/** Bank / UPI details a withdrawal pays out to. */
+export async function savePaymentInfo(
+  token: string,
+  payload: Record<string, unknown>,
+) {
+  return send(token, 'PUT', '/api/profile/payment-info', payload);
+}

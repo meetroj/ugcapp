@@ -14,16 +14,26 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Text } from '../components/Text';
+import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
-import { BACKEND_URL, submitWork, uploadMedia } from '../api';
+import {
+  archiveDeal,
+  BACKEND_URL,
+  confirmDealReceipt,
+  escalateDeal,
+  raiseDealDispute,
+  reportDealDamage,
+  respondToRevision,
+  submitWork,
+  uploadMedia,
+} from '../api';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 /** Loose shape: the backend returns a wide payload and fields vary by state. */
@@ -38,6 +48,14 @@ type Props = {
   /** Overrides the built-in submit flow when a parent wants its own. */
   onSubmitWork?: () => void;
   unread?: number;
+  /**
+   * Refetches the deal after an action that changes its state. Without it the
+   * screen would keep rendering the deal as it was before the receipt was
+   * confirmed or the dispute opened.
+   */
+  onChanged?: () => void;
+  /** Leaves the detail view — used after archiving, which removes the deal. */
+  onArchived?: () => void;
 };
 
 type Tab = 'Overview' | 'Brief' | 'Deliverables' | 'Timeline' | 'Payments';
@@ -204,6 +222,52 @@ function Glyph({ name, color = '#3B3F63' }: { name: string; color?: string }) {
 }
 
 /** Collapsible row used down the Overview tab. */
+/**
+ * One deal action, laid out like an Accordion header so the actions sit in
+ * the same rhythm as the sections above them. `warn` tints the destructive
+ * ones — dispute, damage, escalation — without making them shout.
+ */
+function ActionRow({
+  label,
+  caption,
+  onPress,
+  busy,
+  tone,
+}: {
+  label: string;
+  caption: string;
+  onPress: () => void;
+  busy?: boolean;
+  tone?: 'warn';
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.actionRow}
+      onPress={onPress}
+      disabled={busy}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}. ${caption}`}
+    >
+      <View style={styles.actionText}>
+        <Text style={[styles.actionLabel, tone === 'warn' && styles.actionWarn]}>
+          {label}
+        </Text>
+        <Text style={styles.actionCaption}>{caption}</Text>
+      </View>
+      {busy ? (
+        <ActivityIndicator size="small" color="#3D4FD8" />
+      ) : (
+        <Text
+          style={[styles.actionChevron, tone === 'warn' && styles.actionWarn]}
+        >
+          ›
+        </Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 function Accordion({
   icon,
   title,
@@ -281,10 +345,24 @@ function DealDetails({
   onChat,
   onSubmitWork,
   unread = 0,
+  onChanged,
+  onArchived,
 }: Props) {
-  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<Tab>('Overview');
   const [submitting, setSubmitting] = useState(false);
+  /** Which deal action is in flight, so only that row shows a spinner. */
+  const [busyAction, setBusyAction] = useState<string>('');
+  /**
+   * Open text prompt. Alert.prompt is iOS-only, so actions that need a
+   * sentence from the creator (dispute, escalation) render their own sheet
+   * rather than silently doing nothing on Android.
+   */
+  const [prompt, setPrompt] = useState<{
+    title: string;
+    message: string;
+    onSubmit: (value: string) => void;
+  } | null>(null);
+  const [promptText, setPromptText] = useState('');
 
   const campaign = deal.campaign || {};
   const brand = deal.brand || {};
@@ -332,14 +410,14 @@ function DealDetails({
     ? escrow.deductions
     : [];
 
+  const campaignId = String(campaign.id || deal.campaign_id || '');
+
   // Does this brief owe a finished cut on top of the raw footage? Any ONE deliverable
   // row asking for it is enough. A brief saved before the field existed reads false,
   // so its submit flow is the single-file one it has always been.
   const needsEdited =
     Array.isArray(campaign.deliverable_items) &&
     campaign.deliverable_items.some((d: any) => d && d.edited_required);
-
-  const campaignId = String(campaign.id || deal.campaign_id || '');
 
   /**
    * The built-in submit flow: pick a video, push it through the generic
@@ -356,9 +434,9 @@ function DealDetails({
     });
     const asset = picked.assets?.[0];
     if (!asset?.uri) {
-    // Only now is there something to upload, so this is where the busy state starts.
       return null;
     }
+    // Only now is there something to upload, so this is where the busy state starts.
     setSubmitting(true);
     const url = await uploadMedia(
       token as string,
@@ -456,10 +534,184 @@ function DealDetails({
   // The submit button only renders when tapping it can actually do something.
   const canSubmitWork = !!onSubmitWork || (!!token && !!campaignId);
 
+  // ── Deal actions ─────────────────────────────────────────────────────────
+  // Everything below moves the deal forward and used to live only on the
+  // website's deal room. Each wraps one endpoint, reports the backend's own
+  // refusal message, and asks the parent to refetch so the rail and the
+  // buttons reflect the new state.
+
+  const dealId = String(deal.deal_id || campaignId || '');
+
+  /** Runs one action with a spinner, an error alert and a refresh. */
+  const runAction = async (
+    key: string,
+    work: () => Promise<unknown>,
+    done?: string,
+  ) => {
+    if (!token || !dealId || busyAction) return;
+    setBusyAction(key);
+    try {
+      await work();
+      if (done) Alert.alert('Done', done);
+      onChanged?.();
+    } catch (error) {
+      Alert.alert(
+        'Could not complete',
+        error instanceof Error && error.message
+          ? error.message
+          : 'Please try again.',
+      );
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  /** Collects one line of text. Alert.prompt is iOS-only, so this is a sheet. */
+  const askForText = (
+    title: string,
+    message: string,
+    onSubmit: (value: string) => void,
+  ) => {
+    setPrompt({ title, message, onSubmit });
+  };
+
+  const handleConfirmReceipt = () =>
+    Alert.alert(
+      'Confirm receipt',
+      'Confirm the product arrived and is what the brief described? The delivery clock starts from here.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: () =>
+            runAction(
+              'receipt',
+              () => confirmDealReceipt(token!, dealId),
+              'Receipt confirmed.',
+            ),
+        },
+      ],
+    );
+
+  const handleReportDamage = () =>
+    Alert.alert(
+      'Report a problem',
+      'Tell the brand the product arrived damaged or wrong. Add a photo as evidence.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add photo',
+          onPress: async () => {
+            const url = await pickAndUpload();
+            if (!url) return;
+            runAction(
+              'damage',
+              () => reportDealDamage(token!, dealId, [url]),
+              'Reported. Our team and the brand have been notified.',
+            );
+          },
+        },
+        {
+          text: 'Report without photo',
+          onPress: () =>
+            runAction(
+              'damage',
+              () => reportDealDamage(token!, dealId, []),
+              'Reported. Our team and the brand have been notified.',
+            ),
+        },
+      ],
+    );
+
+  const handleRevisionResponse = () =>
+    Alert.alert(
+      'Revision request',
+      revisions.latest_feedback
+        ? String(revisions.latest_feedback)
+        : 'The brand has asked for changes.',
+      [
+        { text: 'Close', style: 'cancel' },
+        {
+          text: 'Flag as out of scope',
+          style: 'destructive',
+          onPress: () =>
+            runAction(
+              'revision',
+              () => respondToRevision(token!, dealId, 'flagged'),
+              'Flagged. Our team will look at whether this is inside the brief.',
+            ),
+        },
+        {
+          text: 'Accept',
+          onPress: () =>
+            runAction(
+              'revision',
+              () => respondToRevision(token!, dealId, 'accepted'),
+              'Accepted. Submit the updated cut under Deliverables.',
+            ),
+        },
+      ],
+    );
+
+  const handleDispute = () =>
+    askForText(
+      'Raise a dispute',
+      'Describe what went wrong. Our team reviews every dispute before any money moves.',
+      value =>
+        runAction(
+          'dispute',
+          () => raiseDealDispute(token!, dealId, value),
+          'Dispute opened. The review team will be in touch.',
+        ),
+    );
+
+  const handleEscalate = () =>
+    askForText(
+      'Escalate to the review team',
+      'Add anything new since the dispute was opened.',
+      value =>
+        runAction(
+          'escalate',
+          () => escalateDeal(token!, dealId, value),
+          'Escalated.',
+        ),
+    );
+
+  const handleArchive = () =>
+    Alert.alert(
+      'Archive this deal',
+      'It disappears from your active list. Nothing about the payment changes.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Archive',
+          style: 'destructive',
+          onPress: async () => {
+            await runAction('archive', () => archiveDeal(token!, dealId));
+            onArchived?.();
+          },
+        },
+      ],
+    );
+
+  // Which actions apply right now. The backend already returns the flags it
+  // knows about; the rest is read off the deal's own state so a button never
+  // appears for something the API would refuse.
+  const shipment = (deal.shipment || {}) as Record<string, any>;
+  const canConfirmReceipt =
+    !!deal.requires_shipment &&
+    !deal.receipt?.received_at &&
+    (shipment.status === 'delivered' || !!shipment.tracking_number);
+  const revisionPending =
+    state.toLowerCase().includes('revision') &&
+    !revisions.latest_response;
+  const disputeOpen = !!deal.dispute?.status && deal.dispute.status !== 'closed';
+  const dealClosed = /complete|closed|paid/i.test(state);
+
   return (
     <View style={styles.screen}>
       {/* --- dark header --- */}
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -755,6 +1007,65 @@ function DealDetails({
                 Open the Payments tab for the full breakdown.
               </Text>
             </Accordion>
+
+            {/* Everything the deal can do from here. Each row only appears
+                when the backend would actually accept it, so the card is
+                empty rather than misleading on a deal with nothing to do. */}
+            {!!token && !!dealId && (
+              <>
+                {canConfirmReceipt && (
+                  <ActionRow
+                    label="Confirm receipt"
+                    caption="The product arrived and matches the brief"
+                    busy={busyAction === 'receipt'}
+                    onPress={handleConfirmReceipt}
+                  />
+                )}
+                {canConfirmReceipt && (
+                  <ActionRow
+                    label="Report damaged or wrong product"
+                    caption="Sends photo evidence to the brand and our team"
+                    tone="warn"
+                    busy={busyAction === 'damage'}
+                    onPress={handleReportDamage}
+                  />
+                )}
+                {revisionPending && (
+                  <ActionRow
+                    label="Respond to revision request"
+                    caption="Accept the changes, or flag them as out of scope"
+                    busy={busyAction === 'revision'}
+                    onPress={handleRevisionResponse}
+                  />
+                )}
+                {!disputeOpen && !dealClosed && (
+                  <ActionRow
+                    label="Raise a dispute"
+                    caption="Escrow is held until the review team rules"
+                    tone="warn"
+                    busy={busyAction === 'dispute'}
+                    onPress={handleDispute}
+                  />
+                )}
+                {disputeOpen && (
+                  <ActionRow
+                    label="Escalate to the review team"
+                    caption="Add new information to the open dispute"
+                    tone="warn"
+                    busy={busyAction === 'escalate'}
+                    onPress={handleEscalate}
+                  />
+                )}
+                {dealClosed && (
+                  <ActionRow
+                    label="Archive this deal"
+                    caption="Hide it from your active list"
+                    busy={busyAction === 'archive'}
+                    onPress={handleArchive}
+                  />
+                )}
+              </>
+            )}
           </View>
         )}
 
@@ -1064,6 +1375,62 @@ function DealDetails({
           </>
         )}
       </ScrollView>
+
+      {/* Text prompt for the actions that need a sentence. Android has no
+          Alert.prompt, so without this the dispute and escalation buttons
+          would open a dialog with nowhere to type. */}
+      <Modal
+        visible={!!prompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPrompt(null)}
+      >
+        <View style={styles.promptBackdrop}>
+          <View style={styles.promptSheet}>
+            <Text style={styles.promptTitle}>{prompt?.title}</Text>
+            <Text style={styles.promptMessage}>{prompt?.message}</Text>
+            <TextInput
+              style={styles.promptInput}
+              value={promptText}
+              onChangeText={setPromptText}
+              placeholder="Type here…"
+              placeholderTextColor="#A9ADC2"
+              multiline
+              autoFocus
+            />
+            <View style={styles.promptActions}>
+              <TouchableOpacity
+                style={[styles.ghostBtn, styles.flex]}
+                onPress={() => {
+                  setPrompt(null);
+                  setPromptText('');
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.ghostBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.primaryBtn,
+                  styles.promptSend,
+                  !promptText.trim() && styles.promptSendOff,
+                ]}
+                disabled={!promptText.trim()}
+                onPress={() => {
+                  const value = promptText.trim();
+                  const submit = prompt?.onSubmit;
+                  setPrompt(null);
+                  setPromptText('');
+                  submit?.(value);
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryBtnText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1411,6 +1778,75 @@ const styles = StyleSheet.create({
     borderColor: '#D9DCF3',
     backgroundColor: '#FFFFFF',
   },
+
+  // Deal actions, sharing the accordion's row rhythm.
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+    paddingVertical: scale(13),
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F7',
+  },
+  actionText: { flex: 1 },
+  actionLabel: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#15163F',
+  },
+  actionCaption: {
+    marginTop: scale(2),
+    fontSize: fontScale(11),
+    color: '#8A8FA8',
+  },
+  actionChevron: { fontSize: fontScale(20), color: '#8A8FA8' },
+  actionWarn: { color: '#C0392B' },
+
+  promptBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(11,12,38,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: scale(22),
+  },
+  promptSheet: {
+    width: '100%',
+    maxWidth: scale(360),
+    borderRadius: scale(18),
+    backgroundColor: '#FFFFFF',
+    padding: scale(16),
+  },
+  promptTitle: {
+    fontSize: fontScale(16),
+    fontFamily: 'ReadexPro-Medium',
+    color: '#15163F',
+  },
+  promptMessage: {
+    marginTop: scale(6),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(18),
+    color: '#5A6072',
+  },
+  promptInput: {
+    marginTop: scale(12),
+    minHeight: scale(92),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FBFBFE',
+    padding: scale(12),
+    fontSize: fontScale(14),
+    color: '#15163F',
+    textAlignVertical: 'top',
+  },
+  promptActions: {
+    flexDirection: 'row',
+    gap: scale(10),
+    marginTop: scale(12),
+  },
+  promptSend: { flex: 1, marginTop: 0 },
+  promptSendOff: { opacity: 0.5 },
   softBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -216,6 +216,24 @@ function ActiveWork({
             onMessages?.();
           }
         }}
+        // Deal actions change the deal on the server; refetch so the rail and
+        // the remaining actions reflect what just happened.
+        onChanged={async () => {
+          const fresh = await getMyDeals(token).catch(() => null);
+          if (!fresh) return;
+          const mapped = fresh.map((deal, index) => ({
+            ...deal,
+            id: String(deal.deal_id || index),
+            status: tabStateOf(deal),
+          }));
+          setWorks(mapped);
+          setOpenDeal(current =>
+            current
+              ? mapped.find(deal => deal.id === current.id) || current
+              : current,
+          );
+        }}
+        onArchived={() => setOpenDeal(null)}
       />
     );
   }
