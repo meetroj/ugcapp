@@ -57,11 +57,24 @@ function errorDetail(data: any, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Thrown when the account has 2FA on and the request carried no code. The
+ * caller catches this to ask for the six digits and retry — the app used to
+ * treat it as a hard failure and tell the user to go to the website.
+ */
+export class TwoFactorRequired extends Error {
+  constructor() {
+    super('Enter the 6-digit code from your authenticator app.');
+    this.name = 'TwoFactorRequired';
+  }
+}
+
 async function authRequest(
   path: '/auth/login' | '/auth/signup' | '/auth/google',
   body: Record<string, string>,
+  query = '',
 ): Promise<AuthUser> {
-  const response = await request(`${BACKEND_URL}/api${path}`, {
+  const response = await request(`${BACKEND_URL}/api${path}${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -74,7 +87,7 @@ async function authRequest(
     );
   }
   if (data.requires_2fa) {
-    throw new Error('Two-factor authentication must be completed on ugcad.io.');
+    throw new TwoFactorRequired();
   }
   if (!data.token) {
     throw new Error('The backend returned an invalid authentication response.');
@@ -83,8 +96,16 @@ async function authRequest(
   return data as AuthUser;
 }
 
-export function login(email: string, password: string) {
-  return authRequest('/auth/login', { email: email.trim(), password });
+/**
+ * `totpToken` is the authenticator code, supplied only on the retry after a
+ * TwoFactorRequired. It rides in the query string, as the API expects.
+ */
+export function login(email: string, password: string, totpToken?: string) {
+  return authRequest(
+    '/auth/login',
+    { email: email.trim(), password },
+    totpToken ? `?totp_token=${encodeURIComponent(totpToken)}` : '',
+  );
 }
 
 /**

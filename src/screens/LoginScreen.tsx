@@ -1,6 +1,7 @@
 /** "Welcome back" screen: email + password, Google alternative. */
 import React, { useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from '../components/Text';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
 import {
@@ -9,6 +10,7 @@ import {
   PrimaryButton,
   SwitchPrompt,
 } from '../components/AuthParts';
+import { colors, fontScale, scale } from '../theme';
 
 type Props = {
   /** Switches the shell over to the sign-up screen. */
@@ -17,9 +19,16 @@ type Props = {
   onSubmit?: (values: { email: string; password: string }) => Promise<void>;
   /** Google sign-in. The button only renders when this is provided. */
   onGoogle?: () => void;
+  /** Opens password recovery. */
+  onForgotPassword?: () => void;
 };
 
-export function LoginForm({ onGoToSignUp, onSubmit, onGoogle }: Props) {
+export function LoginForm({
+  onGoToSignUp,
+  onSubmit,
+  onGoogle,
+  onForgotPassword,
+}: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -62,6 +71,20 @@ export function LoginForm({ onGoToSignUp, onSubmit, onGoogle }: Props) {
         onChangeText={setPassword}
       />
 
+      {/* Sits above the button, where it is found when the password has just
+          been rejected. Without it the only way back into a locked-out
+          account was the website. */}
+      {!!onForgotPassword && (
+        <View style={styles.forgotRow}>
+          <TouchableOpacity
+            onPress={onForgotPassword}
+            accessibilityRole="button"
+          >
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <PrimaryButton label="Log In" onPress={submit} loading={loading} />
 
       {/* Only rendered once a Google flow exists — a styled button that
@@ -81,6 +104,16 @@ export function LoginForm({ onGoToSignUp, onSubmit, onGoogle }: Props) {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  forgotRow: { alignItems: 'flex-end', marginBottom: scale(14) },
+  forgotText: {
+    fontSize: fontScale(12),
+    color: colors.brand,
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+  },
+});
 
 function LoginScreen(props: Props) {
   return (
