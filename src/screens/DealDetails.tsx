@@ -563,6 +563,11 @@ function DealDetails({
       );
     } finally {
       setBusyAction('');
+      // pickAndUpload() raises `submitting` when it starts an upload and only
+      // the submit-work flow lowers it again. Actions that upload first
+      // (receipt, damage report) would otherwise leave the Submit button
+      // disabled for the rest of the screen's life.
+      setSubmitting(false);
     }
   };
 
@@ -578,17 +583,24 @@ function DealDetails({
   const handleConfirmReceipt = () =>
     Alert.alert(
       'Confirm receipt',
-      'Confirm the product arrived and is what the brief described? The delivery clock starts from here.',
+      // The unboxing clip is not optional: POST /deals/{id}/receipt rejects a
+      // receipt without one, because it is the evidence the right item turned
+      // up undamaged. So the picker opens as part of confirming, rather than
+      // the confirm failing afterwards with a validation error.
+      'Pick your unboxing video to confirm the product arrived. The delivery clock starts from here.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Confirm',
-          onPress: () =>
+          text: 'Choose video',
+          onPress: async () => {
+            const url = await pickAndUpload();
+            if (!url) return;
             runAction(
               'receipt',
-              () => confirmDealReceipt(token!, dealId),
+              () => confirmDealReceipt(token!, dealId, url),
               'Receipt confirmed.',
-            ),
+            );
+          },
         },
       ],
     );

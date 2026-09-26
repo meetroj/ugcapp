@@ -1402,11 +1402,35 @@ export async function getShipment(
   return get(token, `/api/shipment/${encodeURIComponent(shipmentId)}`);
 }
 
+/**
+ * Records dispatch against a campaign.
+ *
+ * ShipmentUpdate requires `tracking_number`, `courier_slip`,
+ * `expected_delivery` and `shipment_checklist` — the last two are easy to
+ * forget because the web form fills them from its own state. Defaults are
+ * supplied for the checklist so a caller that only has tracking details is
+ * not rejected with a 422.
+ */
 export async function updateShipment(
   token: string,
-  payload: Record<string, unknown>,
+  payload: {
+    campaign_id: string;
+    tracking_number: string;
+    courier_slip: string;
+    expected_delivery: string;
+    creator_id?: string;
+    courier_name?: string;
+    shipment_checklist?: Record<string, boolean>;
+  },
 ) {
-  return send(token, 'POST', '/api/shipment/update', payload);
+  return send(token, 'POST', '/api/shipment/update', {
+    shipment_checklist: {
+      package_sealed: true,
+      correct_item: true,
+      working_condition: true,
+    },
+    ...payload,
+  });
 }
 
 export async function confirmShipmentReceived(
@@ -1528,18 +1552,25 @@ export async function checkInstagramLive(
 // the web posts, field for field.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Confirms the product arrived. `received_at` is stamped here, as on the web. */
+/**
+ * Confirms the product arrived.
+ *
+ * `unboxing_video_url` is REQUIRED by DealReceiptSubmit — the unboxing clip is
+ * the evidence the right item turned up undamaged, so the server rejects a
+ * receipt without one. Callers must upload the video first.
+ */
 export async function confirmDealReceipt(
   token: string,
   dealId: string,
+  unboxingVideoUrl: string,
   payload: {
-    unboxing_video_url?: string;
     items_damaged?: boolean;
     damage_report?: string | null;
   } = {},
 ) {
   return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/receipt`, {
     received_at: new Date().toISOString(),
+    unboxing_video_url: unboxingVideoUrl,
     items_damaged: false,
     damage_report: null,
     ...payload,
@@ -1763,7 +1794,10 @@ export async function resetPassword(
   return anon<Record<string, unknown>>('/api/auth/reset-password', {
     email,
     code,
-    new_password: newPassword,
+    // ResetPasswordRequest declares this as `password`. Sending
+    // `new_password` (the name the change-password route uses) was rejected
+    // with a 422, so the last step of recovery always failed.
+    password: newPassword,
   });
 }
 
@@ -1822,15 +1856,20 @@ export async function saveBilling(
   return send(token, 'PUT', '/api/business/settings/billing', payload);
 }
 
-/** The bids placed on one campaign, for the brand's hiring screen. */
+/**
+ * The bids placed on one campaign, for the brand's hiring screen.
+ *
+ * There is no GET /campaigns/{id}/bids — that route 404s. The backend returns
+ * the bids nested on the campaign document itself, which is also where the
+ * bids screen reads them from.
+ */
 export async function getCampaignBids(
   token: string,
   campaignId: string,
 ): Promise<Record<string, unknown>[]> {
-  return toList(
-    await get(token, `/api/campaigns/${encodeURIComponent(campaignId)}/bids`),
-    'bids',
-  );
+  const campaign = await getCampaign(token, campaignId);
+  const bids = (campaign as Record<string, unknown>).bids;
+  return Array.isArray(bids) ? (bids as Record<string, unknown>[]) : [];
 }
 
 /** Admin-curated creator shortlist for a campaign. */

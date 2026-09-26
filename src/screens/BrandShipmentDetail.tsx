@@ -20,7 +20,8 @@ import {
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBanner, SkeletonList } from '../components/Skeleton';
-import { ApiError, getShipment, updateShipment } from '../api';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { ApiError, getShipment, updateShipment, uploadMedia } from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -182,6 +183,10 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
   const [tracking, setTracking] = useState('');
   const [courier, setCourier] = useState('');
   const [expected, setExpected] = useState('');
+  // The courier slip is a required field on ShipmentUpdate, so it is uploaded
+  // before the save rather than being an optional extra.
+  const [slip, setSlip] = useState('');
+  const [uploadingSlip, setUploadingSlip] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -205,16 +210,50 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     load();
   }, [load]);
 
-  /** Sends the three tracking fields, then refetches so the card updates. */
+  /** Uploads the courier slip; the server requires one on every update. */
+  const pickSlip = useCallback(async () => {
+    if (uploadingSlip) return;
+    const picked = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+      maxWidth: 2000,
+      maxHeight: 2000,
+      quality: 0.8,
+    }).catch(() => null);
+    const asset = picked?.assets?.[0];
+    if (!asset?.uri) return;
+    setUploadingSlip(true);
+    try {
+      setSlip(
+        await uploadMedia(token, {
+          uri: asset.uri,
+          fileName: asset.fileName,
+          type: asset.type,
+        }),
+      );
+    } catch (error) {
+      Alert.alert(
+        'Upload failed',
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not upload the slip.',
+      );
+    } finally {
+      setUploadingSlip(false);
+    }
+  }, [token, uploadingSlip]);
+
+  /** Sends the tracking details, then refetches so the card updates. */
   const saveTracking = useCallback(async () => {
-    if (!tracking.trim() || saving) return;
+    if (!tracking.trim() || !slip || !expected || saving) return;
     setSaving(true);
     try {
       await updateShipment(token, {
         campaign_id: campaignId,
         tracking_number: tracking.trim(),
+        courier_slip: slip,
+        expected_delivery: expected,
         courier_name: courier.trim() || undefined,
-        expected_delivery: expected || undefined,
       });
       setEditing(false);
       await load();
@@ -228,7 +267,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [campaignId, courier, expected, load, saving, token, tracking]);
+  }, [campaignId, courier, expected, load, saving, slip, token, tracking]);
 
   const banner = bannerFor(shipment);
   const checklist = (shipment?.checklist || {}) as Record<string, unknown>;
@@ -500,6 +539,25 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
               keyboardType="number-pad"
             />
 
+            <Text style={styles.editLabel}>Courier slip</Text>
+            <TouchableOpacity
+              style={styles.slipBtn}
+              onPress={pickSlip}
+              disabled={uploadingSlip}
+              accessibilityRole="button"
+              accessibilityLabel={
+                slip ? 'Courier slip attached, tap to replace' : 'Attach the courier slip'
+              }
+            >
+              {uploadingSlip ? (
+                <ActivityIndicator size="small" color="#3D4FD8" />
+              ) : (
+                <Text style={styles.slipText}>
+                  {slip ? 'Slip attached — tap to replace' : 'Attach a photo of the slip'}
+                </Text>
+              )}
+            </TouchableOpacity>
+
             <View style={styles.editActions}>
               <TouchableOpacity
                 style={styles.editGhost}
@@ -509,8 +567,13 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
                 <Text style={styles.editGhostText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.editSave, !tracking.trim() && styles.editSaveOff]}
-                disabled={!tracking.trim() || saving}
+                // The server requires all three, so the button stays off until
+                // it would actually be accepted rather than failing on send.
+                style={[
+                  styles.editSave,
+                  (!tracking.trim() || !slip || !expected) && styles.editSaveOff,
+                ]}
+                disabled={!tracking.trim() || !slip || !expected || saving}
                 onPress={saveTracking}
                 accessibilityRole="button"
               >
@@ -714,6 +777,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(12),
     fontSize: fontScale(13),
     color: '#15163F',
+  },
+  slipBtn: {
+    height: scale(46),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#C6CBE8',
+    backgroundColor: '#F7F8FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  slipText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#3D4FD8',
   },
   editActions: {
     flexDirection: 'row',
