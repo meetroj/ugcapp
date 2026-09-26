@@ -121,6 +121,14 @@ const icons = {
       />
     </Svg>
   ),
+  messages: () => (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M4.5 6.2a1.7 1.7 0 0 1 1.7-1.7h11.6a1.7 1.7 0 0 1 1.7 1.7v8a1.7 1.7 0 0 1-1.7 1.7H9.2L5 19.5V6.2Z"
+        {...S}
+      />
+    </Svg>
+  ),
 };
 
 type Item = {
@@ -219,6 +227,14 @@ const brandSections: Section[] = [
         sub: 'Manage your brand account',
         path: '/settings',
         icon: 'settings',
+      },
+      {
+        // The brand's only other route into chat was the header icon, which is
+        // not on every screen — the creator menu has carried this row all along.
+        label: 'Messages',
+        sub: 'Talk to creators',
+        path: '/messages',
+        icon: 'messages',
       },
       {
         label: 'Reviews',

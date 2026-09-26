@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   ScrollView,
@@ -37,8 +38,13 @@ type Props = {
   onDone: (campaignId: string | null) => void;
 };
 
-/** Web parity: same rates used on the review section's cost breakdown. */
-const COMMISSION_RATE = 0.25;
+/**
+ * Web parity: same rates used on the review section's cost breakdown.
+ * 20% matches COMMISSION_RATE in the web wizard and commission_rate in the
+ * backend's Settings — the backend is what actually debits the wallet, so a
+ * different number here only mis-quotes the brand.
+ */
+const COMMISSION_RATE = 0.2;
 
 /**
  * One-time listing fee, tiered by the size of the brief. Mirrors listingFeeFor()
@@ -74,18 +80,78 @@ const STEPS = [
  * Option lists copied verbatim from the web wizard. These strings are stored
  * as-is on the campaign, so they must not drift from the web's values.
  */
-const CATEGORIES = [
-  'Beauty',
-  'Tech',
-  'Fitness',
-  'Fashion',
-  'Travel',
-  'Food',
-  'Gaming',
-  'Lifestyle',
-  'Home Decor',
-  'Wellness',
+const CATEGORY_GROUPS: { group: string; items: string[] }[] = [
+  {
+    group: 'Beauty & Personal Care',
+    items: ['Beauty', 'Skincare', 'Haircare', 'Makeup', 'Personal Care', 'Fragrance'],
+  },
+  {
+    group: 'Fashion & Accessories',
+    items: ['Fashion', 'Footwear', 'Jewellery & Accessories', 'Watches & Eyewear', 'Bags & Luggage'],
+  },
+  {
+    group: 'Health & Fitness',
+    items: ['Fitness', 'Wellness', 'Health & Supplements', 'Sports & Outdoors', 'Healthcare & Clinics'],
+  },
+  {
+    group: 'Food & Beverage',
+    items: ['Food', 'Beverages', 'Restaurants & Cafes', 'Packaged Food & Snacks'],
+  },
+  {
+    group: 'Home & Living',
+    items: ['Home Decor', 'Kitchen & Appliances', 'Furniture', 'Cleaning & Household', 'Garden & Outdoor'],
+  },
+  {
+    group: 'Tech & Digital',
+    items: ['Tech', 'Mobile & Gadgets', 'Apps & Software', 'SaaS & B2B', 'Gaming', 'AI Tools'],
+  },
+  {
+    group: 'Money & Learning',
+    items: ['Finance & Fintech', 'Insurance', 'Education & Edtech', 'Courses & Coaching', 'Books & Stationery', 'Jobs & Careers'],
+  },
+  {
+    group: 'Travel & Auto',
+    items: ['Travel', 'Hotels & Stays', 'Automotive', 'Bikes & EV'],
+  },
+  {
+    group: 'Family & Pets',
+    items: ['Baby & Kids', 'Parenting', 'Toys & Games', 'Pets'],
+  },
+  {
+    group: 'Lifestyle & Services',
+    items: ['Lifestyle', 'Entertainment & Media', 'Events & Experiences', 'Real Estate', 'Astrology & Spiritual', 'NGO & Social Causes', 'Local Services'],
+  },
 ];
+const OTHER_CATEGORY = 'Other';
+const CATEGORIES = [
+  ...CATEGORY_GROUPS.reduce<string[]>((all, g) => all.concat(g.items), []),
+  OTHER_CATEGORY,
+];
+/** What gets stored / sent: the typed text when "Other" is picked. */
+const resolvedCategory = (f: { category: string; customCategory: string }) =>
+  f.category === OTHER_CATEGORY ? f.customCategory.trim() : f.category;
+/** Map a stored category (any case / phrasing) onto one of ours, like the web. */
+const matchCategory = (...raws: any[]): string => {
+  const pool = CATEGORIES.filter(c => c !== OTHER_CATEGORY);
+  for (const raw of raws) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (!v) continue;
+    const hit =
+      pool.find(c => c.toLowerCase() === v) ||
+      (v.length >= 3
+        ? pool.find(c => v.includes(c.toLowerCase()) || c.toLowerCase().includes(v))
+        : undefined);
+    if (hit) return hit;
+  }
+  return '';
+};
+/**
+ * The name a campaign is published under. Mirrors the backend, which always
+ * writes brand_name from the business profile — so the wizard shows exactly what
+ * creators will see, instead of whatever an old draft happened to save.
+ */
+const brandNameOf = (profile: any): string =>
+  String(profile?.brand_name || profile?.business_name || '').trim().replace(/^@+/, '');
 const OBJECTIVES = [
   'Awareness',
   'Product launch',
@@ -109,6 +175,42 @@ const DELIVERABLE_TYPES = [
 ];
 const ASPECTS = ['9:16', '1:1', '16:9', '4:5'];
 const CTAS = ['Visit website', 'Use code', 'Swipe up', 'Follow brand', 'None'];
+/**
+ * CTAs that need a destination. "Use code" has its own promoCode field and
+ * "None" needs nothing, so neither appears here. Mirrors CTA_INPUT in the web
+ * wizard — the value is stored as `cta_link` and shown to the creator.
+ */
+const CTA_INPUT: Record<
+  string,
+  { label: string; ph: string; type: 'url' | 'handle' }
+> = {
+  'Visit website': {
+    label: 'Website link',
+    ph: 'https://yourbrand.com',
+    type: 'url',
+  },
+  'Swipe up': {
+    label: 'Swipe-up link',
+    ph: 'https://yourbrand.com/offer',
+    type: 'url',
+  },
+  'Follow brand': {
+    label: 'Brand handle to follow',
+    ph: '@yourbrand',
+    type: 'handle',
+  },
+};
+/** Only proper links / handles allowed — no random text. Same rules as the web. */
+const CTA_URL_RE = /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/[^\s]*)?$/i;
+const CTA_HANDLE_RE = /^@?[a-z0-9._]{2,30}$/i;
+const ctaLinkValid = (cta: string, value: string): boolean => {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  const type = CTA_INPUT[cta]?.type;
+  if (type === 'url') return CTA_URL_RE.test(v);
+  if (type === 'handle') return CTA_HANDLE_RE.test(v) || CTA_URL_RE.test(v);
+  return true;
+};
 const TONES = [
   'Casual',
   'Energetic',
@@ -126,9 +228,16 @@ const MUSIC = [
   'Brand-provided audio file',
   'No preference',
 ];
-const CREATOR_LEVELS = ['New', 'Verified', 'L1', 'L2', 'Elite'];
+/**
+ * "Any" is the no-minimum option: the brief accepts bids from every level.
+ * Listed first because it is the widest reach, and the field is required — so
+ * without it a brand with no level preference had to invent one.
+ */
+const CREATOR_LEVELS = ['Any', 'New', 'Verified', 'L1', 'L2', 'Elite'];
 const QUALITY_TIERS = ['A', 'A+', 'A++'];
 const GENDER_OPTIONS = ['No Preference', 'Female', 'Male', 'Non-binary'];
+// Same list the web wizard offers — a shorter one here meant a brand could
+// not target most of the cities creators actually sign up from.
 const CITIES = [
   'Any City',
   'Mumbai',
@@ -136,24 +245,83 @@ const CITIES = [
   'Bengaluru',
   'Hyderabad',
   'Chennai',
-  'Pune',
   'Kolkata',
+  'Pune',
   'Ahmedabad',
   'Jaipur',
+  'Surat',
+  'Lucknow',
+  'Kanpur',
+  'Nagpur',
+  'Indore',
+  'Thane',
+  'Bhopal',
+  'Visakhapatnam',
+  'Patna',
+  'Vadodara',
+  'Ghaziabad',
+  'Ludhiana',
+  'Agra',
+  'Nashik',
+  'Faridabad',
+  'Meerut',
+  'Rajkot',
+  'Varanasi',
+  'Srinagar',
+  'Aurangabad',
+  'Amritsar',
+  'Navi Mumbai',
+  'Prayagraj',
+  'Ranchi',
+  'Coimbatore',
+  'Jabalpur',
+  'Gwalior',
+  'Vijayawada',
+  'Jodhpur',
+  'Madurai',
+  'Raipur',
+  'Kota',
+  'Guwahati',
+  'Chandigarh',
+  'Noida',
+  'Gurugram',
+  'Thiruvananthapuram',
+  'Kochi',
+  'Mysuru',
+  'Bhubaneswar',
+  'Dehradun',
+  'Mangaluru',
+  'Tiruchirappalli',
+  'Jamshedpur',
+  'Panaji (Goa)',
+  'Puducherry',
+  'Udaipur',
+  'Salem',
+  'Warangal',
+  'Guntur',
+  'Bhilai',
+  'Jalandhar',
+  'Bikaner',
+  'Siliguri',
+  'Nellore',
+  'Ajmer',
+  'Shimla',
+  'Other',
 ];
+/**
+ * Picking "Any" means the brief is not niche-restricted. It is stored as the
+ * only tag rather than as an empty list so the brand's choice is explicit —
+ * "they didn't pick" and "they picked anyone" read the same otherwise.
+ */
+const ANY_NICHE = 'Any';
+/**
+ * Niches follow the same taxonomy as the campaign category above, so a brand
+ * targeting "Skincare" creators and a brief filed under "Skincare" use one
+ * vocabulary. Too long for a chip wall, so Section G renders it as a sheet.
+ */
 const NICHE_TAGS = [
-  'Beauty',
-  'Skincare',
-  'Fashion',
-  'Fitness',
-  'Food',
-  'Lifestyle',
-  'Tech',
-  'Travel',
-  'Home Decor',
-  'Wellness',
-  'Parenting',
-  'Gaming',
+  ANY_NICHE,
+  ...CATEGORY_GROUPS.reduce<string[]>((all, g) => all.concat(g.items), []),
 ];
 const RIGHTS_DURATIONS = [
   '3 months',
@@ -303,6 +471,12 @@ type Deliverable = {
    * it is what gives the creator a second upload step when they submit.
    */
   editedRequired: boolean;
+  /**
+   * Who cuts the edited version: the creator, or UGC.ad's own team. Sent as
+   * `edited_by`; 'ugc' is what tells the admin team this brief needs an editor
+   * assigned once it is submitted.
+   */
+  editedBy: 'creator' | 'ugc';
 };
 
 let deliverableSeq = 0;
@@ -313,12 +487,15 @@ const createDeliverable = (): Deliverable => ({
   duration: '',
   aspectRatios: ['9:16'],
   editedRequired: false,
+  editedBy: 'creator',
 });
 
 type FormState = {
   campaignName: string;
   brandName: string;
   category: string;
+  /** Free text when category === 'Other'. */
+  customCategory: string;
   productName: string;
   productDescription: string;
   campaignHook: string;
@@ -334,6 +511,8 @@ type FormState = {
   requiredPhrases: string[];
   requiredShots: string[];
   callToAction: string;
+  /** Destination for the CTA — a URL, or an @handle for "Follow brand". */
+  ctaLink: string;
   promoCode: string;
   hashtags: string;
   brandHandleTag: boolean;
@@ -349,6 +528,13 @@ type FormState = {
   pacing: string;
   referenceVideos: string[];
   musicPreference: string;
+  /**
+   * Who writes the script. 'brand' means scriptText below is what the creator
+   * gets; 'ugc' means our admin team writes it during brief review and the
+   * brand leaves it blank.
+   */
+  scriptProvider: 'brand' | 'ugc';
+  scriptText: string;
   platforms: string[];
   rightsDuration: string;
   exclusivity: string;
@@ -364,6 +550,8 @@ type FormState = {
   fixedBudget: string;
   budgetMin: string;
   budgetMax: string;
+  /** How many creators this brief hires. Sent as `creators_wanted`. */
+  creatorsWanted: number;
   creatorLevel: string;
   qualityTier: string;
   genderPreference: string;
@@ -376,6 +564,7 @@ const initialForm: FormState = {
   campaignName: '',
   brandName: '',
   category: '',
+  customCategory: '',
   productName: '',
   productDescription: '',
   campaignHook: '',
@@ -391,6 +580,7 @@ const initialForm: FormState = {
   requiredPhrases: [''],
   requiredShots: [''],
   callToAction: 'Visit website',
+  ctaLink: '',
   promoCode: '',
   hashtags: '',
   brandHandleTag: true,
@@ -406,6 +596,8 @@ const initialForm: FormState = {
   pacing: 'No preference',
   referenceVideos: [''],
   musicPreference: 'No preference',
+  scriptProvider: 'brand',
+  scriptText: '',
   platforms: [],
   rightsDuration: '',
   exclusivity: 'None',
@@ -421,6 +613,7 @@ const initialForm: FormState = {
   fixedBudget: '',
   budgetMin: '',
   budgetMax: '',
+  creatorsWanted: 1,
   creatorLevel: '',
   qualityTier: '',
   genderPreference: 'No Preference',
@@ -493,6 +686,7 @@ function Field({
   max,
   maxWords,
   wordNoun,
+  editable = true,
 }: {
   label: string;
   value: string;
@@ -509,6 +703,8 @@ function Field({
   maxWords?: number;
   /** What maxWords counts, for the copy: "hashtags", "words". */
   wordNoun?: string;
+  /** false = shown but locked (value owned elsewhere, e.g. the brand profile). */
+  editable?: boolean;
 }) {
   const noun = wordNoun || 'words';
   const words = value.split(/\s+/).filter(Boolean).length;
@@ -540,9 +736,14 @@ function Field({
         {required ? <Text style={styles.required}> *</Text> : null}
       </Text>
       <TextInput
-        style={[styles.input, multiline && styles.inputMultiline]}
+        style={[
+          styles.input,
+          multiline && styles.inputMultiline,
+          !editable && styles.inputLocked,
+        ]}
         value={value}
         onChangeText={onChange}
+        editable={editable}
         placeholder={withRule}
         placeholderTextColor="#A9ADC2"
         keyboardType={keyboard || 'default'}
@@ -759,6 +960,7 @@ function ChipGroup({
   onToggle,
   required,
   compact,
+  hint,
 }: {
   label?: string;
   options: string[];
@@ -766,6 +968,8 @@ function ChipGroup({
   onToggle: (value: string) => void;
   required?: boolean;
   compact?: boolean;
+  /** Explanatory line under the row, for choices whose effect isn't obvious. */
+  hint?: string;
 }) {
   return (
     <View style={styles.field}>
@@ -797,6 +1001,119 @@ function ChipGroup({
           );
         })}
       </View>
+      {!!hint && <Text style={styles.hint}>{hint}</Text>}
+    </View>
+  );
+}
+
+/**
+ * Multi-select behind a sheet, for lists too long to lay out as a chip wall.
+ * Reads as a normal field: the row shows what is picked, tapping it opens the
+ * same modal sheet the onboarding pickers use.
+ *
+ * `exclusive` is an option that cannot coexist with the others — picking "Any"
+ * clears the rest, and picking anything else clears "Any".
+ */
+function MultiSelectField({
+  label,
+  options,
+  selected,
+  onChange,
+  exclusive,
+  placeholder,
+  hint,
+  single,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  exclusive?: string;
+  placeholder?: string;
+  hint?: string;
+  /** Pick one and close, instead of accumulating a set. */
+  single?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const summary = selected.length ? selected.join(', ') : '';
+
+  const toggle = (option: string) => {
+    if (single) {
+      onChange([option]);
+      setOpen(false);
+      return;
+    }
+    if (exclusive && option === exclusive) {
+      // Tapping the exclusive option is a reset to just that option.
+      onChange(selected.includes(option) ? [] : [option]);
+      return;
+    }
+    const without = selected.filter(v => v !== option && v !== exclusive);
+    onChange(selected.includes(option) ? without : [...without, option]);
+  };
+
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TouchableOpacity
+        style={styles.input}
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}. ${summary || 'none selected'}`}
+      >
+        <Text style={summary ? styles.selectValue : styles.selectPlaceholder}>
+          {summary || placeholder || `Select ${label.toLowerCase()}`}
+        </Text>
+      </TouchableOpacity>
+      {!!hint && <Text style={styles.hint}>{hint}</Text>}
+
+      <Modal
+        visible={open}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setOpen(false)}
+        >
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>{label}</Text>
+            <ScrollView>
+              {options.map(option => {
+                const active = selected.includes(option);
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.modalRow}
+                    onPress={() => toggle(option)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text
+                      style={[
+                        styles.modalRowText,
+                        active && styles.modalRowTextOn,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                    {active && <Text style={styles.modalTick}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalDone}
+              onPress={() => setOpen(false)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.modalDoneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -953,14 +1270,20 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
     getBusinessProfile(token)
       .then((profile: any) => {
         if (!alive || !profile) return;
+        const fromProfile = brandNameOf(profile);
         setForm(current => ({
           ...current,
-          brandName: current.brandName || profile.brand_name || '',
+          // Profile wins: a saved draft holding an older brand name is exactly
+          // what made this field disagree with the published campaign.
+          brandName: fromProfile || current.brandName,
           category:
             current.category ||
-            profile.primary_category ||
-            profile.business_category ||
-            '',
+            matchCategory(
+              profile.primary_category,
+              profile.business_category,
+              profile.industry_category,
+              profile.category,
+            ),
         }));
       })
       .catch(() => {});
@@ -969,19 +1292,23 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
     };
   }, [token]);
 
+  // `budget` is what ONE creator is paid — it feeds per_video_budget/budget_max.
+  // The wallet holds it for every creator the brief hires, so everything below
+  // multiplies by the count, exactly as the web wizard does.
   const budget =
     Number(form.budgetMode === 'fixed' ? form.fixedBudget : form.budgetMax) ||
     0;
-  const commission = Math.round(budget * COMMISSION_RATE);
-  // Total assets requested = sum of every deliverable row's quantity. The app form
-  // is single-creator (it sends no creators_wanted, so the backend treats it as 1),
-  // so only the deliverable count moves the tier here.
+  const creatorsCount = Math.max(1, Number(form.creatorsWanted) || 1);
+  const totalBudget = budget * creatorsCount;
+  const commission = Math.round(totalBudget * COMMISSION_RATE);
+  // Total assets requested = sum of every deliverable row's quantity, the same
+  // count escrow uses, so the tier shown here matches the debit.
   const totalDeliverables = form.deliverables.reduce(
     (sum, item) => sum + Math.max(1, Number(item.quantity) || 1),
     0,
   );
-  const listingFee = listingFeeFor(1, totalDeliverables);
-  const totalDebit = budget + commission + listingFee;
+  const listingFee = listingFeeFor(creatorsCount, totalDeliverables);
+  const totalDebit = totalBudget + commission + listingFee;
   const paidAdsSelected = form.platforms.some(p =>
     p.toLowerCase().includes('paid ads'),
   );
@@ -1092,7 +1419,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           form.productDescription.trim().length >= 20 &&
           form.campaignHook.trim().length >= 10 &&
           form.keyMessage.trim().length >= 10 &&
-          !!form.category &&
+          !!resolvedCategory(form) &&
           form.objectives.length > 0 &&
           form.targetAudience.trim().length >= 20 &&
           form.targetAudience.trim().length <= 200
@@ -1114,7 +1441,9 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           (!form.productVisible || !!form.visibilitySeconds) &&
           (!form.verbalMention || !!form.productNames) &&
           !!form.callToAction &&
-          (form.callToAction !== 'Use code' || !!form.promoCode)
+          (form.callToAction !== 'Use code' || !!form.promoCode) &&
+          (!CTA_INPUT[form.callToAction] ||
+            ctaLinkValid(form.callToAction, form.ctaLink))
         );
       if (target === 4) return form.avoidText.length <= 200;
       if (target === 5) return form.tones.length > 0 && !!form.pacing;
@@ -1137,6 +1466,82 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
       return true;
     },
     [budget, form],
+  );
+
+  /**
+   * What is still blocking a section, named field by field. The inline error
+   * line alone was easy to miss halfway down a long form, so this list is what
+   * the Continue alert reads out — the same copy the web toasts.
+   */
+  const stepIssues = useCallback(
+    (target: number): string[] => {
+      const m: string[] = [];
+      if (target === 1) {
+        if (form.campaignName.trim().length < 3)
+          m.push('Campaign name (min 3 characters)');
+        if (form.productType === 'other' && !form.productTypeOther.trim())
+          m.push('Describe your product type');
+        if (form.productName.trim().length < 2) m.push('Product name');
+        if (form.productDescription.trim().length < 20)
+          m.push('Product description (min 20 characters)');
+        if (form.campaignHook.trim().length < 10)
+          m.push('Campaign hook (min 10 characters)');
+        if (form.keyMessage.trim().length < 10)
+          m.push('Key message (min 10 characters)');
+        if (!form.category) m.push('Category');
+        else if (form.category === OTHER_CATEGORY && !form.customCategory.trim())
+          m.push('Type your category');
+        if (form.objectives.length === 0) m.push('Campaign objective');
+        const audience = form.targetAudience.trim().length;
+        if (audience < 20 || audience > 200)
+          m.push('Target audience (20–200 characters)');
+      } else if (target === 2) {
+        if (!isStepValid(2))
+          m.push(
+            'Each deliverable: type, quantity 1–5, aspect ratio (+ duration for video)',
+          );
+      } else if (target === 3) {
+        if (form.productVisible && !form.visibilitySeconds)
+          m.push('Product visibility seconds');
+        if (form.verbalMention && !form.productNames)
+          m.push('Product names to mention');
+        if (!form.callToAction) m.push('Call to action');
+        if (form.callToAction === 'Use code' && !form.promoCode)
+          m.push('Promo code');
+        if (
+          CTA_INPUT[form.callToAction] &&
+          !ctaLinkValid(form.callToAction, form.ctaLink)
+        )
+          m.push(
+            `${CTA_INPUT[form.callToAction].label} (valid ${
+              CTA_INPUT[form.callToAction].type === 'handle'
+                ? 'handle or link'
+                : 'link'
+            })`,
+          );
+      } else if (target === 4) {
+        if (form.avoidText.length > 200)
+          m.push('Things to avoid (max 200 characters)');
+      } else if (target === 5) {
+        if (form.tones.length === 0) m.push('Tone tags');
+        if (!form.pacing) m.push('Pacing reference');
+      } else if (target === 6) {
+        if (form.platforms.length === 0) m.push('Platforms');
+        if (!form.rightsDuration) m.push('Rights duration');
+        if (!form.exclusivity) m.push('Exclusivity');
+        if (!form.modificationRights) m.push('Modification rights');
+      } else if (target === 7) {
+        if (typeNeedsShipping(form.productType) && !form.productShippingBy)
+          m.push('Product shipping date');
+        if (!form.draftDeliveryBy) m.push('Draft delivery date');
+        if (!form.finalDeliveryBy) m.push('Final delivery date');
+        if (!(budget > 0)) m.push('Budget');
+        if (!form.creatorLevel) m.push('Creator level');
+        if (!form.qualityTier) m.push('Quality tier');
+      }
+      return m;
+    },
+    [budget, form, isStepValid],
   );
 
   /** The Must-Avoid rules, flattened the same way the web flattens them. */
@@ -1172,7 +1577,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
       [
         `Campaign: ${form.campaignName}`,
         `Brand: ${form.brandName}`,
-        `Category: ${form.category}`,
+        `Category: ${resolvedCategory(form)}`,
         `Product: ${form.productName}`,
         `Product description: ${form.productDescription}`,
         `Hook: ${form.campaignHook}`,
@@ -1274,7 +1679,8 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         deadline: form.finalDeliveryBy,
         revision_limit: Number(form.revisions || 0),
         product_name: form.productName,
-        product_category: form.category,
+        product_category: resolvedCategory(form),
+        category: resolvedCategory(form),
         product_description: form.productDescription,
         brief_type: primary.type,
         campaign_hook: form.campaignHook,
@@ -1294,8 +1700,13 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         gender_preference: form.genderPreference,
         city_filter: form.cityFilter,
         creator_niche_tags: form.nicheTags,
+        // How many creators this brief hires. The backend multiplies the slot
+        // budget by this for the escrow hold and keeps the brief open until all
+        // of them are picked; omitting it silently made every app brief a
+        // one-creator brief.
+        creators_wanted: creatorsCount,
         per_video_budget: budget,
-        total_budget: budget,
+        total_budget: totalBudget,
         currency: 'INR',
         brand_name: form.brandName,
 
@@ -1313,7 +1724,12 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
           // backend model and the creator-facing brief both read this field.
           raw_required: true,
           edited_required: item.editedRequired,
+          edited_by: item.editedBy,
         })),
+        script_provider: form.scriptProvider,
+        // 'ugc' means our team writes it later, so anything typed before the
+        // brand switched over must not travel as if it were the final script.
+        script_text: form.scriptProvider === 'ugc' ? '' : form.scriptText,
         product_visible: form.productVisible,
         product_visible_seconds: form.visibilitySeconds,
         verbal_mention: form.verbalMention,
@@ -1321,6 +1737,9 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         required_phrases: form.requiredPhrases.filter(Boolean),
         required_shots: form.requiredShots.filter(Boolean),
         call_to_action: form.callToAction,
+        // Only the CTAs that take a destination carry one; "Use code" uses
+        // promo_code and "None" needs nothing.
+        cta_link: CTA_INPUT[form.callToAction] ? form.ctaLink.trim() : '',
         promo_code: form.promoCode,
         hashtags: form.hashtags,
         brand_handle_tag: form.brandHandleTag,
@@ -1341,8 +1760,11 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         whitelisting: form.whitelisting,
         modification_rights: form.modificationRights,
         product_type: form.productType,
-        product_type_other:
-          form.productType === 'other' ? form.productTypeOther : '',
+        // `product_type_detail` is the key the web sends and the backend model
+        // declares. The app used to send `product_type_other`, which nothing
+        // read — so a brand typing their own product type lost it on save.
+        product_type_detail:
+          form.productType === 'other' ? form.productTypeOther.trim() : '',
         // Only a physical product ships; sending a stale date for the others
         // would make the deal ask the creator to wait for a parcel.
         product_shipping_by: needsShipping ? form.productShippingBy : '',
@@ -1351,7 +1773,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         budget_mode: form.budgetMode,
       };
     },
-    [avoidRules, briefText, budget, form, needsShipping],
+    [avoidRules, briefText, budget, creatorsCount, form, needsShipping, totalBudget],
   );
 
   const submit = useCallback(
@@ -1360,8 +1782,15 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
       if (mode === 'publish') {
         const firstBad = STEPS.findIndex((_, index) => !isStepValid(index + 1));
         if (firstBad >= 0) {
+          const issues = stepIssues(firstBad + 1);
+          const message = issues.length
+            ? issues.map(issue => `•  ${issue}`).join('\n')
+            : STEP_HINTS[firstBad] || 'Please complete this section.';
           setStep(firstBad + 1);
-          setError(STEP_HINTS[firstBad] || 'Please complete this section.');
+          setError(issues.length ? issues.join(', ') : message);
+          // Publishing jumps the brand back several sections; without the alert
+          // it is not obvious why the page moved.
+          Alert.alert(`Finish ${STEPS[firstBad]}`, message, [{ text: 'OK' }]);
           return;
         }
       }
@@ -1386,17 +1815,25 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         setBusy(null);
       }
     },
-    [buildPayload, isStepValid, onDone, token],
+    [buildPayload, isStepValid, onDone, stepIssues, token],
   );
 
   const goNext = useCallback(() => {
-    if (!isStepValid(step)) {
-      setError(STEP_HINTS[step - 1] || 'Please complete this section.');
+    const issues = stepIssues(step);
+    if (issues.length || !isStepValid(step)) {
+      const message = issues.length
+        ? issues.map(issue => `•  ${issue}`).join('\n')
+        : STEP_HINTS[step - 1] || 'Please complete this section.';
+      // The inline line stays for anyone already looking at the footer, but the
+      // alert is what actually reaches a brand who is mid-form and nowhere near
+      // the bottom of the page.
+      setError(issues.length ? issues.join(', ') : message);
+      Alert.alert(`Finish ${STEPS[step - 1]}`, message, [{ text: 'OK' }]);
       return;
     }
     setError('');
     setStep(current => Math.min(STEPS.length, current + 1));
-  }, [isStepValid, step]);
+  }, [isStepValid, step, stepIssues]);
 
   const goBack = useCallback(() => {
     setError('');
@@ -1440,7 +1877,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={step === 1 ? onBack : goBack}
@@ -1564,16 +2001,44 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                 <Field
                   label="Brand name"
                   value={form.brandName}
-                  onChange={v => set('brandName', v)}
+                  onChange={() => {}}
+                  editable={false}
                   placeholder="Your brand"
+                  hint={
+                    form.brandName
+                      ? 'Comes from your brand profile — every campaign is published under this name. Change it in Profile > Brand profile.'
+                      : 'Add a brand name in Profile > Brand profile and it will fill in here.'
+                  }
                 />
+                <Text style={styles.fieldLabel}>
+                  Category<Text style={styles.required}> *</Text>
+                </Text>
+                {CATEGORY_GROUPS.map(g => (
+                  <ChipGroup
+                    key={g.group}
+                    label={g.group}
+                    compact
+                    options={g.items}
+                    selected={form.category ? [form.category] : []}
+                    onToggle={v => set('category', v)}
+                  />
+                ))}
                 <ChipGroup
-                  label="Category"
-                  required
-                  options={CATEGORIES}
+                  label="Something else"
+                  compact
+                  options={[OTHER_CATEGORY]}
                   selected={form.category ? [form.category] : []}
                   onToggle={v => set('category', v)}
                 />
+                {form.category === OTHER_CATEGORY && (
+                  <Field
+                    label="Your category"
+                    required
+                    value={form.customCategory}
+                    onChange={v => set('customCategory', v.slice(0, 40))}
+                    placeholder="e.g. Drones, Stationery, Solar"
+                  />
+                )}
                 <Field
                   label="Product name"
                   required
@@ -1728,6 +2193,28 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                     }
                   />
 
+                  {/* Who cuts it. Only asked once an edited file is actually
+                      wanted — on a raw-only deliverable there is nothing to
+                      edit, and the web hides the row the same way. */}
+                  {item.editedRequired && (
+                    <ChipGroup
+                      label="Edited by"
+                      compact
+                      options={['Creator', 'UGC.ad']}
+                      selected={[item.editedBy === 'ugc' ? 'UGC.ad' : 'Creator']}
+                      onToggle={v =>
+                        updateDeliverable(item.id, {
+                          editedBy: v === 'UGC.ad' ? 'ugc' : 'creator',
+                        })
+                      }
+                      hint={
+                        item.editedBy === 'ugc'
+                          ? "UGC.ad's team edits this deliverable — our admin team is notified once you submit the brief."
+                          : 'The creator edits and delivers the finished cut themselves.'
+                      }
+                    />
+                  )}
+
                   {index === form.deliverables.length - 1 &&
                     form.deliverables.length < 5 && (
                       <TouchableOpacity
@@ -1741,6 +2228,38 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                     )}
                 </View>
               ))}
+
+            {/* Script — one per brief, not per deliverable, so it sits after
+                the rows rather than inside them. Same place the web puts it. */}
+            {step === 2 && (
+              <>
+                <ChipGroup
+                  label="Script written by"
+                  required
+                  options={['Brand', 'UGC.ad']}
+                  selected={[
+                    form.scriptProvider === 'ugc' ? 'UGC.ad' : 'Brand',
+                  ]}
+                  onToggle={v =>
+                    set('scriptProvider', v === 'UGC.ad' ? 'ugc' : 'brand')
+                  }
+                  hint={
+                    form.scriptProvider === 'ugc'
+                      ? "UGC.ad's team writes the script during brief review — our admin team is notified once you submit, and the script appears in the brief before the creator starts."
+                      : 'Enter the script below. It will be shown to the creator as part of the brief.'
+                  }
+                />
+                {form.scriptProvider !== 'ugc' && (
+                  <Field
+                    label="Script"
+                    multiline
+                    value={form.scriptText}
+                    onChange={v => set('scriptText', v)}
+                    placeholder="Hook, body, call to action…"
+                  />
+                )}
+              </>
+            )}
 
             {step === 3 && (
               <>
@@ -1805,14 +2324,40 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                     placeholder="GLOW20"
                   />
                 )}
+                {/* Where the CTA points. Without it a "Visit website" brief
+                    reached the creator with no address to visit. */}
+                {!!CTA_INPUT[form.callToAction] && (
+                  <Field
+                    label={CTA_INPUT[form.callToAction].label}
+                    required
+                    value={form.ctaLink}
+                    onChange={v => set('ctaLink', v)}
+                    placeholder={CTA_INPUT[form.callToAction].ph}
+                    hint={
+                      form.ctaLink &&
+                      !ctaLinkValid(form.callToAction, form.ctaLink)
+                        ? CTA_INPUT[form.callToAction].type === 'handle'
+                          ? 'Enter a valid @handle or profile link — no random text.'
+                          : 'Enter a valid link (e.g. https://yourbrand.com) — no random text.'
+                        : undefined
+                    }
+                  />
+                )}
                 <Field
                   label="Required hashtags"
                   value={form.hashtags}
                   onChange={v =>
                     // Web parity: whitespace-separated, capped at 10 tags.
+                    // The trailing space is deliberately preserved — collapsing
+                    // it on every keystroke ate the space bar, so a second
+                    // hashtag could never be started.
                     set(
                       'hashtags',
-                      v.split(/\s+/).filter(Boolean).slice(0, 10).join(' '),
+                      v
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 10)
+                        .join(' ') + (/\s$/.test(v) ? ' ' : ''),
                     )
                   }
                   placeholder="#brand #launch"
@@ -1968,6 +2513,42 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
 
             {step === 7 && (
               <>
+                {/* How many creators this brief hires. Uses the same stepper
+                    as the deliverable quantity rows, so the two counts that
+                    drive the wallet debit are entered the same way. */}
+                <View style={styles.field}>
+                  <Text style={styles.fieldLabel}>
+                    Creators wanted<Text style={styles.required}> *</Text>
+                  </Text>
+                  <View style={styles.stepper}>
+                    <TouchableOpacity
+                      style={styles.stepBtn}
+                      onPress={() =>
+                        set('creatorsWanted', Math.max(1, creatorsCount - 1))
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel="One fewer creator"
+                    >
+                      <Icon name="minus" color="#15163F" size={16} />
+                    </TouchableOpacity>
+                    <Text style={styles.stepValue}>{creatorsCount}</Text>
+                    <TouchableOpacity
+                      style={styles.stepBtn}
+                      onPress={() =>
+                        set('creatorsWanted', Math.min(20, creatorsCount + 1))
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel="One more creator"
+                    >
+                      <Icon name="plus" color="#15163F" size={16} />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.hint}>
+                    {creatorsCount === 1
+                      ? 'The budget below is held for one creator.'
+                      : `The budget below is held for each of the ${creatorsCount} creators. The brief stays open until all ${creatorsCount} are picked.`}
+                  </Text>
+                </View>
                 <ChipGroup
                   label="Minimum creator level"
                   required
@@ -1990,18 +2571,22 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                   }
                   onToggle={v => set('genderPreference', v)}
                 />
-                <ChipGroup
+                <MultiSelectField
                   label="City filter"
-                  compact
+                  single
                   options={CITIES}
                   selected={form.cityFilter ? [form.cityFilter] : []}
-                  onToggle={v => set('cityFilter', v)}
+                  onChange={next => set('cityFilter', next[0] || 'Any City')}
+                  placeholder="Any City"
                 />
-                <ChipGroup
+                <MultiSelectField
                   label="Creator niche tags"
                   options={NICHE_TAGS}
                   selected={form.nicheTags}
-                  onToggle={v => toggleArray('nicheTags', v)}
+                  onChange={next => set('nicheTags', next)}
+                  exclusive={ANY_NICHE}
+                  placeholder="Any niche"
+                  hint="Pick as many as fit, or Any to accept every niche."
                 />
 
                 {needsShipping && (
@@ -2089,7 +2674,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                 <Text style={styles.sectionTitle}>Review your brief</Text>
                 <ReviewRow label="Campaign" value={form.campaignName} />
                 <ReviewRow label="Brand" value={form.brandName} />
-                <ReviewRow label="Category" value={form.category} />
+                <ReviewRow label="Category" value={resolvedCategory(form)} />
                 <ReviewRow label="Product" value={form.productName} />
                 <ReviewRow
                   label="Objectives"
@@ -2433,6 +3018,70 @@ const styles = StyleSheet.create({
     paddingVertical: scale(12),
   },
   inputStacked: { marginTop: scale(8) },
+  // The picked-value / placeholder line inside a tap-to-open field. Line height
+  // keeps a one-line summary vertically centred in the same box a TextInput
+  // would fill, so a select row and a text row sit on the same rhythm.
+  selectValue: { fontSize: fontScale(15), color: '#15163F', lineHeight: fontScale(22) },
+  selectPlaceholder: {
+    fontSize: fontScale(15),
+    color: '#A9ADC2',
+    lineHeight: fontScale(22),
+  },
+
+  // Bottom-sheet picker, matching the onboarding forms' sheets.
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(11,12,38,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: scale(22),
+  },
+  modalSheet: {
+    width: '100%',
+    maxWidth: scale(340),
+    maxHeight: '75%',
+    borderRadius: scale(18),
+    backgroundColor: '#FFFFFF',
+    padding: scale(14),
+  },
+  modalTitle: {
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-Medium',
+    color: '#15163F',
+    marginBottom: scale(6),
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: scale(11),
+    paddingHorizontal: scale(4),
+  },
+  modalRowText: { fontSize: fontScale(14), color: '#5C6180' },
+  modalRowTextOn: {
+    color: '#15163F',
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+  },
+  modalTick: { fontSize: fontScale(14), color: '#4C5BF3' },
+  modalDone: {
+    marginTop: scale(8),
+    height: scale(44),
+    borderRadius: scale(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4C5BF3',
+  },
+  modalDoneText: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  inputLocked: {
+    backgroundColor: '#F1F2F7',
+    color: '#5A5F76',
+  },
   inputMultiline: { minHeight: scale(86), textAlignVertical: 'top' },
 
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },

@@ -98,15 +98,73 @@ const NOTCH_RADIUS = FAB_SIZE / 2 + NOTCH_GAP;
  * replaced. Rewriting them here keeps every entry point — tab, card, or
  * notification tap — landing on the native screen instead of the WebView.
  */
+/**
+ * Folds every path the website links to onto the path the native router
+ * listens on.
+ *
+ * The two grew apart: the site's nav and its in-page links use one set of URLs,
+ * the native screens match on another, and anything that missed fell through to
+ * the WebView — so tapping "Saved" in the header handed the brand the desktop
+ * site inside the app. Every rewrite below is a real link that exists on the
+ * website today; keep it in step when either side adds a route.
+ */
 function normalizePath(path: string): string {
   const cut = path.search(/[?#]/);
   const pure = cut === -1 ? path : path.slice(0, cut);
+  const query = cut === -1 ? '' : path.slice(cut);
+
+  // ── Chat ──────────────────────────────────────────────────────────────────
   if (pure === '/chat') return '/messages';
+  // The web's thread route is '/chat/<userId>'; the app's is '/messages/<id>'.
+  const chat = /^\/chat\/([^/]+)$/.exec(pure);
+  if (chat) return `/messages/${chat[1]}`;
+  // BusinessDashboard, MyBids and CampaignDetails all open a thread as
+  // '/messages?conv=<id>'. Without this the query was dropped and the user
+  // landed on the conversation list instead of the conversation.
+  if (pure === '/messages') {
+    const conv = /[?&]conv=([^&]+)/.exec(query);
+    if (conv) return `/messages/${decodeURIComponent(conv[1])}`;
+  }
+
+  // ── Creator ───────────────────────────────────────────────────────────────
+  // The creator nav says '/saved'; the native screen is '/saved-briefs'.
+  if (pure === '/saved') return '/saved-briefs';
+  // '/profile' is the web's creator profile page; the app's lives under /app.
+  if (pure === '/profile') return '/app/profile';
+  // Notification deep links carry the deal: '/my-deals?campaign=<id>'.
+  // The native list reads the id off the path, so move it there.
+  if (pure === '/my-deals') {
+    const deal = /[?&](?:campaign|deal)=([^&]+)/.exec(query);
+    if (deal) return `/my-deals/${decodeURIComponent(deal[1])}`;
+  }
+  // MyActiveWork's "Submit work" button.
+  if (pure === '/work/submit') {
+    const campaign = /[?&]campaign=([^&]+)/.exec(query);
+    if (campaign) return `/my-deals/${decodeURIComponent(campaign[1])}`;
+  }
+
+  // ── Brand ─────────────────────────────────────────────────────────────────
   if (pure === '/dashboard/business') return '/dashboard/business/browse-creator';
   // '/dashboard/business/campaign/<id>' (and .../campaigns/<id>/shortlist)
   // are the web's campaign detail; the app's is '/campaigns/<id>'.
   const campaign = /^\/dashboard\/business\/campaigns?\/([^/]+)/.exec(pure);
   if (campaign) return `/campaigns/${campaign[1]}`;
+  // BrandCampaignDetail, BrandCreators and BrandReviewsPage all link a creator
+  // as '/dashboard/business/creator/<id>'; the app's is '/creator/<id>'.
+  const creator = /^\/dashboard\/business\/creator\/([^/]+)/.exec(pure);
+  if (creator) return `/creator/${creator[1]}`;
+  // The brand nav's Reviews tab. The native Reviews screen is role-aware and
+  // serves both, so point the brand at the same one the creator gets.
+  if (pure === '/dashboard/business/reviews') return '/reviews';
+  // The web's public campaign page, linked from SavedBriefs and the dashboard.
+  const publicCampaign = /^\/campaign\/([^/]+)$/.exec(pure);
+  if (publicCampaign) return `/campaigns/${publicCampaign[1]}`;
+  // '/shipment?campaign=<id>' is the web's tracking page.
+  if (pure === '/shipment') {
+    const shipment = /[?&]campaign=([^&]+)/.exec(query);
+    if (shipment) return `/shipment/${decodeURIComponent(shipment[1])}`;
+  }
+
   return path;
 }
 
@@ -256,7 +314,11 @@ function WebShell({
   // directory record as a seed so the header paints without waiting.
   const creatorMatch = /^\/creator\/([^/]+)$/.exec(purePath);
   const showingCreatorPublic = brandApp && !!creatorMatch;
-  const showingMyDeals = creatorApp && purePath === '/my-deals';
+  // '/my-deals' is the list; '/my-deals/<id>' opens that deal's detail, which
+  // is where a notification or a website link naming a deal now lands.
+  const myDealMatch = /^\/my-deals\/([^/]+)$/.exec(purePath);
+  const showingMyDeals =
+    creatorApp && (purePath === '/my-deals' || !!myDealMatch);
   const showingMyBids = creatorApp && purePath === '/my-bids';
   const showingSaved = creatorApp && purePath === '/saved-briefs';
   // Static policy pages — the last routes that used to drop the user onto the
@@ -370,6 +432,14 @@ function WebShell({
         target = target.replace(/^https?:\/\/[^/]*/i, '') || '/';
       }
       const path = normalizePath(target);
+      // '/notifications' is a page on the website but an overlay in the app.
+      // Opening the feed over whatever is on screen keeps the bell and a
+      // website link behaving the same, and stops the desktop page loading in
+      // the WebView.
+      if (path.split(/[?#]/)[0] === '/notifications') {
+        setFeedOpen(true);
+        return;
+      }
       if (currentPath !== path) {
         setHistory(stack => [...stack, currentPath]);
       }
@@ -442,7 +512,11 @@ function WebShell({
   const onNavStateChange = useCallback((nav: WebViewNavigation) => {
     canGoBack.current = nav.canGoBack;
     try {
-      const path = new URL(nav.url).pathname;
+      const url = new URL(nav.url);
+      // Links followed inside the WebView are normalised too: a link tapped on
+      // a web page must reach the same native screen the bottom nav would, or
+      // the app drifts back onto the desktop site one tap at a time.
+      const path = normalizePath(url.pathname + url.search);
       if (goingBack.current) {
         goingBack.current = false;
         setCurrentPath(path);
@@ -710,6 +784,7 @@ function WebShell({
         <MyDeals
           token={token}
           unread={unread}
+          focusDealId={myDealMatch ? myDealMatch[1] : undefined}
           onBack={backTo('/app/profile')}
           onMessages={() => navigateTo('/messages')}
           onOpenThread={(userId, name) => {

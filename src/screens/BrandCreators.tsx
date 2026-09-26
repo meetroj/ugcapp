@@ -7,9 +7,10 @@
  * opposite directions) and can also be dragged by hand — see ReelRow.
  * Read-only: inviting a creator still opens the existing web flow.
  *
- * Video playback goes through a tiny inline-HTML WebView rather than
- * react-native-video, because the app has no native video dependency and
- * adding one would force a rebuild; react-native-webview is already linked.
+ * Video playback uses react-native-video, the same native player the deal and
+ * work-review screens use. It replaced an inline-HTML web player, which was
+ * subject to the browser autoplay policy: on device the tiles sat on their
+ * loading spinner instead of ever playing.
  */
 import React, {
   useCallback,
@@ -34,7 +35,7 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '../components/Text';
 import type { ScrollViewInstance } from 'react-native';
-import { WebView } from 'react-native-webview';
+import Video from 'react-native-video';
 import Svg, { Circle, Path } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonReelRow } from '../components/Skeleton';
@@ -89,47 +90,6 @@ const photoUrl = (path: unknown) => {
 const isVideo = (uri: string | null) =>
   !!uri &&
   (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
-
-/**
- * Origin of the clip itself, handed to the WebView as `baseUrl`.
- *
- * Without it the inline document has a null origin, and Android refuses to load
- * the remote <video> from it — the tile renders as a black box with no error.
- * It must also match the video's own scheme: an http page pulling an https clip
- * is mixed content, which Android blocks for the same silent result.
- */
-const videoOrigin = (uri: string) => {
-  const match = /^(https?:\/\/[^/]+)/i.exec(uri);
-  return match ? match[1] : BACKEND_URL;
-};
-
-/**
- * Inline player for a reel tile. A WebView <video> is used rather than a
- * native player because the tiles are small, autoplay muted, and loop — and
- * Android blocks autoplay until the element is explicitly told to play.
- * Accepts 'play' / 'pause' messages from ReelTile so off-screen reels stop.
- */
-const reelHtml = (src: string) => `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;padding:0;background:#DBDDF0;overflow:hidden}
-video{width:100vw;height:100vh;object-fit:cover;display:block}</style>
-</head><body>
-<video src="${src}" autoplay muted loop playsinline webkit-playsinline
-       preload="auto" disableremoteplayback></video>
-<script>
-  // Android blocks autoplay until the element is explicitly told to play, and
-  // silently ignores the attribute when the WebView had no user gesture.
-  var v = document.querySelector('video');
-  v.muted = true;
-  var play = function () { var p = v.play(); if (p) { p.catch(function () {}); } };
-  play();
-  document.addEventListener('visibilitychange', play);
-  v.addEventListener('canplay', play);
-  // ReelTile posts 'play'/'pause' as tiles scroll in and out of view.
-  function handle(e){ if (e.data === 'play') { play(); } else if (e.data === 'pause') { v.pause(); } }
-  document.addEventListener('message', handle);
-  window.addEventListener('message', handle);
-</script></body></html>`;
 
 function Icon({
   name,
@@ -218,8 +178,17 @@ function ReelTile({
   active: boolean;
   onPress: () => void;
 }) {
-  const webRef = useRef<WebView>(null);
   const [ready, setReady] = useState(false);
+
+  // onReadyForDisplay is the only signal that clears the spinner, and it does
+  // not fire for every source — a slow CDN, an audio-less track or a codec the
+  // decoder gives up on all left the tile spinning forever. After this long the
+  // poster/first frame is the better thing to show, even if playback never
+  // starts, so the grid is never a wall of spinners.
+  useEffect(() => {
+    const timer = setTimeout(() => setReady(true), 6000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const media = photoUrl(creator.portfolio_preview);
   const avatar = photoUrl(creator.profile_photo);
@@ -227,12 +196,6 @@ function ReelTile({
   const category = text(creator.primary_category);
   const rate = text(creator.budget_range);
   const video = isVideo(media);
-
-  // Pause off-screen reels so a long list doesn't decode a dozen videos at once.
-  useEffect(() => {
-    if (!video || !ready) return;
-    webRef.current?.postMessage(active ? 'play' : 'pause');
-  }, [active, ready, video]);
 
   return (
     <TouchableOpacity
@@ -245,22 +208,27 @@ function ReelTile({
       <View style={styles.reel}>
         {video && media ? (
           <>
-            <WebView
-              ref={webRef}
-              source={{ html: reelHtml(media), baseUrl: videoOrigin(media) }}
+            <Video
+              source={{ uri: media }}
               style={styles.reelMedia}
-              onLoadEnd={() => setReady(true)}
-              // The tile is a play surface, not a browser: no scrolling, no
-              // zoom, and taps fall through to the card's onPress.
-              scrollEnabled={false}
-              pointerEvents="none"
-              bounces={false}
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled
-              domStorageEnabled={false}
-              mixedContentMode="always"
-              androidLayerType="hardware"
+              resizeMode="cover"
+              repeat
+              muted
+              // Only the reels on screen decode; a long list would otherwise
+              // run a dozen videos at once.
+              paused={!active}
+              playInBackground={false}
+              playWhenInactive={false}
+              disableFocus
+              ignoreSilentSwitch="ignore"
+              onReadyForDisplay={() => setReady(true)}
+              // Fires once the track is decoded even when the first frame is
+              // never presented (paused tiles, audio-less clips), which
+              // onReadyForDisplay alone can miss.
+              onLoad={() => setReady(true)}
+              // A dead link must clear the spinner too, or the tile sits on a
+              // loading state that will never finish.
+              onError={() => setReady(true)}
             />
             {!ready && (
               <View style={styles.reelLoading}>
@@ -608,21 +576,16 @@ function CreatorPeekSheet({
                   >
                     {isVideo(uri) ? (
                       <>
-                        <WebView
-                          source={{
-                            html: reelHtml(uri),
-                            baseUrl: videoOrigin(uri),
-                          }}
+                        <Video
+                          source={{ uri }}
                           style={styles.peekClipMedia}
-                          scrollEnabled={false}
-                          pointerEvents="none"
-                          bounces={false}
-                          allowsInlineMediaPlayback
-                          mediaPlaybackRequiresUserAction={false}
-                          javaScriptEnabled
-                          domStorageEnabled={false}
-                          mixedContentMode="always"
-                          androidLayerType="hardware"
+                          resizeMode="cover"
+                          repeat
+                          muted
+                          playInBackground={false}
+                          playWhenInactive={false}
+                          disableFocus
+                          ignoreSilentSwitch="ignore"
                         />
                         <View style={styles.peekPlay}>
                           <Icon name="play" color="#FFFFFF" size={11} />

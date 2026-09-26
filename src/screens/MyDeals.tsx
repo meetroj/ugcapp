@@ -30,6 +30,12 @@ type Props = {
    */
   onOpenThread?: (userId: string, name: string) => void;
   unread?: number;
+  /**
+   * Open straight into this deal's detail once the list loads. Set when the
+   * user arrived from a notification or a website link that named a deal
+   * ('/my-deals?campaign=<id>'), which used to drop them on the bare list.
+   */
+  focusDealId?: string;
 };
 
 const money = (value: unknown) =>
@@ -63,8 +69,19 @@ function countdown(hours: unknown): string {
   return `in ${Math.round(n / 24)}d`;
 }
 
-function MyDeals({ token, onBack, onMessages, onOpenThread, unread }: Props) {
+function MyDeals({
+  token,
+  onBack,
+  onMessages,
+  onOpenThread,
+  unread,
+  focusDealId,
+}: Props) {
   const [openDeal, setOpenDeal] = useState<Deal | null>(null);
+  // A deep link names the deal before the list exists, so the open is deferred
+  // until the fetch lands. Cleared once used so closing the detail returns to
+  // the list rather than immediately reopening it.
+  const [pendingFocus, setPendingFocus] = useState(focusDealId);
   const [items, setItems] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -89,6 +106,18 @@ function MyDeals({ token, onBack, onMessages, onOpenThread, unread }: Props) {
       active = false;
     };
   }, [load]);
+
+  // The link can name either id the backend exposes for a deal, so match both.
+  useEffect(() => {
+    if (!pendingFocus || !items.length) return;
+    const hit = items.find(
+      deal =>
+        String(deal.deal_id) === pendingFocus ||
+        String((deal as Record<string, any>).campaign_id) === pendingFocus,
+    );
+    setPendingFocus(undefined);
+    if (hit) setOpenDeal(hit);
+  }, [items, pendingFocus]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
