@@ -324,6 +324,7 @@ const NICHE_TAGS = [
   ...CATEGORY_GROUPS.reduce<string[]>((all, g) => all.concat(g.items), []),
 ];
 const RIGHTS_DURATIONS = [
+  '1 month',
   '3 months',
   '6 months',
   '1 year',
@@ -979,7 +980,13 @@ function ChipGroup({
           {required ? <Text style={styles.required}> *</Text> : null}
         </Text>
       )}
-      <View style={styles.chipWrap}>
+      {/* One swipable line instead of a wrapping wall — short option sets stay
+          scannable and the form stops growing vertically with every list. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipScrollRow}
+      >
         {options.map(option => {
           const active = selected.includes(option);
           return (
@@ -1000,7 +1007,7 @@ function ChipGroup({
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
       {!!hint && <Text style={styles.hint}>{hint}</Text>}
     </View>
   );
@@ -1023,6 +1030,7 @@ function MultiSelectField({
   placeholder,
   hint,
   single,
+  required,
 }: {
   label: string;
   options: string[];
@@ -1033,6 +1041,7 @@ function MultiSelectField({
   hint?: string;
   /** Pick one and close, instead of accumulating a set. */
   single?: boolean;
+  required?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const summary = selected.length ? selected.join(', ') : '';
@@ -1054,7 +1063,10 @@ function MultiSelectField({
 
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={styles.fieldLabel}>
+        {label}
+        {required ? <Text style={styles.required}> *</Text> : null}
+      </Text>
       <TouchableOpacity
         style={styles.input}
         onPress={() => setOpen(true)}
@@ -1252,18 +1264,6 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
     [],
   );
 
-  const toggleArray = useCallback((field: keyof FormState, value: string) => {
-    setForm(current => {
-      const values = (current[field] as string[]) || [];
-      return {
-        ...current,
-        [field]: values.includes(value)
-          ? values.filter(item => item !== value)
-          : [...values, value],
-      };
-    });
-  }, []);
-
   /** Prefill the brand name and default category from the business profile. */
   useEffect(() => {
     let alive = true;
@@ -1317,6 +1317,11 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
   // cannot promise to ship on a date that has already begun.
   const tomorrowISO = useMemo(() => addDays(todayISO(), 1), []);
   const needsShipping = typeNeedsShipping(form.productType);
+
+  // Whether ANY deliverable wants an edited cut. Without one there is no
+  // separate "final" hand-off — the draft IS the final — so the "Final content
+  // delivery by" field is hidden and the draft date doubles as the deadline.
+  const anyEdited = form.deliverables.some(d => d.editedRequired);
 
   const draftDeliverySuggestion = useMemo(
     () => addDays(form.productShippingBy, 7),
@@ -1458,14 +1463,14 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         return (
           (!typeNeedsShipping(form.productType) || !!form.productShippingBy) &&
           !!form.draftDeliveryBy &&
-          !!form.finalDeliveryBy &&
+          (!anyEdited || !!form.finalDeliveryBy) &&
           budget > 0 &&
           !!form.creatorLevel &&
           !!form.qualityTier
         );
       return true;
     },
-    [budget, form],
+    [budget, form, anyEdited],
   );
 
   /**
@@ -1534,7 +1539,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         if (typeNeedsShipping(form.productType) && !form.productShippingBy)
           m.push('Product shipping date');
         if (!form.draftDeliveryBy) m.push('Draft delivery date');
-        if (!form.finalDeliveryBy) m.push('Final delivery date');
+        if (anyEdited && !form.finalDeliveryBy) m.push('Final delivery date');
         if (!(budget > 0)) m.push('Budget');
         if (!form.creatorLevel) m.push('Creator level');
         if (!form.qualityTier) m.push('Quality tier');
@@ -1643,13 +1648,13 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         }; gender ${form.genderPreference}; city ${form.cityFilter}; niches ${
           form.nicheTags.join(', ') || 'none'
         }`,
-        `Timeline: ship by ${form.productShippingBy}; draft by ${form.draftDeliveryBy}; revisions ${form.revisions}; final by ${form.finalDeliveryBy}`,
+        `Timeline: ship by ${form.productShippingBy}; draft by ${form.draftDeliveryBy}; revisions ${form.revisions}; final by ${(anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy}`,
         `Budget: ${
           form.budgetMode === 'fixed'
             ? `fixed Rs. ${form.fixedBudget}`
             : `range Rs. ${form.budgetMin} - Rs. ${form.budgetMax}`
         }`,
-        `Commission: platform 25%, total wallet debit Rs. ${totalDebit}, creator receives Rs. ${budget} pre-tax`,
+        `Commission: platform ${COMMISSION_RATE * 100}%, total wallet debit Rs. ${totalDebit}, creator receives Rs. ${budget} pre-tax`,
       ].join('\n'),
     [budget, form, totalDebit],
   );
@@ -1675,8 +1680,10 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         requires_shipment: needsShipping,
         shipment_required: needsShipping,
         shipment_option: needsShipping ? 'yes' : 'no',
-        due_date: form.finalDeliveryBy,
-        deadline: form.finalDeliveryBy,
+        // No edited cut -> the draft IS the final hand-off, so the draft date
+        // is the deal deadline (the Final field isn't even shown then).
+        due_date: (anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy,
+        deadline: (anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy,
         revision_limit: Number(form.revisions || 0),
         product_name: form.productName,
         product_category: resolvedCategory(form),
@@ -1769,7 +1776,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         // would make the deal ask the creator to wait for a parcel.
         product_shipping_by: needsShipping ? form.productShippingBy : '',
         draft_delivery_by: form.draftDeliveryBy,
-        final_delivery_by: form.finalDeliveryBy,
+        final_delivery_by: (anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy,
         budget_mode: form.budgetMode,
       };
     },
@@ -2010,25 +2017,14 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                       : 'Add a brand name in Profile > Brand profile and it will fill in here.'
                   }
                 />
-                <Text style={styles.fieldLabel}>
-                  Category<Text style={styles.required}> *</Text>
-                </Text>
-                {CATEGORY_GROUPS.map(g => (
-                  <ChipGroup
-                    key={g.group}
-                    label={g.group}
-                    compact
-                    options={g.items}
-                    selected={form.category ? [form.category] : []}
-                    onToggle={v => set('category', v)}
-                  />
-                ))}
-                <ChipGroup
-                  label="Something else"
-                  compact
-                  options={[OTHER_CATEGORY]}
+                <MultiSelectField
+                  label="Category"
+                  required
+                  single
+                  options={CATEGORIES}
                   selected={form.category ? [form.category] : []}
-                  onToggle={v => set('category', v)}
+                  onChange={next => set('category', next[0] || '')}
+                  placeholder="Select your product's category"
                 />
                 {form.category === OTHER_CATEGORY && (
                   <Field
@@ -2074,12 +2070,14 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                   placeholder="The one message every video should communicate"
                   min={10}
                 />
-                <ChipGroup
+                <MultiSelectField
                   label="Campaign objective"
                   required
+                  single
                   options={OBJECTIVES}
                   selected={form.objectives}
-                  onToggle={v => set('objectives', [v])}
+                  onChange={next => set('objectives', next)}
+                  placeholder="What should this campaign achieve?"
                 />
                 <Field
                   label="Target audience"
@@ -2118,13 +2116,15 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                     )}
                   </View>
 
-                  <ChipGroup
+                  <MultiSelectField
                     label="Deliverable type"
                     required
-                    compact
+                    single
                     options={DELIVERABLE_TYPES}
                     selected={item.type ? [item.type] : []}
-                    onToggle={v => updateDeliverable(item.id, { type: v })}
+                    onChange={next =>
+                      updateDeliverable(item.id, { type: next[0] || '' })
+                    }
                   />
 
                   <View style={styles.field}>
@@ -2434,12 +2434,13 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
 
             {step === 5 && (
               <>
-                <ChipGroup
+                <MultiSelectField
                   label="Tone"
                   required
                   options={TONES}
                   selected={form.tones}
-                  onToggle={v => toggleArray('tones', v)}
+                  onChange={next => set('tones', next)}
+                  placeholder="Pick one or more tones"
                 />
                 <ChipGroup
                   label="Pacing preference"
@@ -2469,13 +2470,13 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
 
             {step === 6 && (
               <>
-                <ChipGroup
+                <MultiSelectField
                   label="Platforms where content can be posted"
                   required
-                  compact
                   options={PLATFORMS}
                   selected={form.platforms}
-                  onToggle={v => toggleArray('platforms', v)}
+                  onChange={next => set('platforms', next)}
+                  placeholder="Where will this content run?"
                 />
                 <ChipGroup
                   label="Duration of rights"
@@ -2619,13 +2620,15 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                   onChange={v => set('revisions', Number(v) || 0)}
                   hint="Extra revisions: Rs. 500 each (Rs. 300 creator, Rs. 200 platform)"
                 />
-                <DateField
-                  label="Final content delivery by"
-                  required
-                  value={form.finalDeliveryBy}
-                  onChange={v => set('finalDeliveryBy', v)}
-                  min={form.draftDeliveryBy || tomorrowISO}
-                />
+                {anyEdited && (
+                  <DateField
+                    label="Final content delivery by"
+                    required
+                    value={form.finalDeliveryBy}
+                    onChange={v => set('finalDeliveryBy', v)}
+                    min={form.draftDeliveryBy || tomorrowISO}
+                  />
+                )}
 
                 <ChipGroup
                   label="Budget"
@@ -2702,7 +2705,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                 />
                 <ReviewRow label="Ship by" value={form.productShippingBy} />
                 <ReviewRow label="Draft by" value={form.draftDeliveryBy} />
-                <ReviewRow label="Final by" value={form.finalDeliveryBy} />
+                {anyEdited && <ReviewRow label="Final by" value={form.finalDeliveryBy} />}
 
                 <View style={styles.summary}>
                   <View style={styles.summaryRow}>
@@ -2713,7 +2716,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
                   </View>
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>
-                      Platform commission (25%)
+                      Platform commission ({COMMISSION_RATE * 100}%)
                     </Text>
                     <Text style={styles.summaryValue}>
                       ₹{commission.toLocaleString('en-IN')}
@@ -3085,6 +3088,8 @@ const styles = StyleSheet.create({
   inputMultiline: { minHeight: scale(86), textAlignVertical: 'top' },
 
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
+  // Single-line variant: chips ride one horizontal swipe row, never wrap.
+  chipScrollRow: { flexDirection: 'row', gap: scale(8), paddingRight: scale(8) },
   chip: {
     height: scale(36),
     paddingHorizontal: scale(14),

@@ -81,16 +81,25 @@ const inr = (value: number) => `₹${Number(value).toLocaleString('en-IN')}`;
  */
 const itemUrl = (item: any): string => {
   if (!item) return '';
-  if (typeof item === 'string') return /^https?:|^\//.test(item) ? item : '';
-  return (
-    item.url ||
-    item.video ||
-    item.videoUrl ||
-    item.link ||
-    item.original_url ||
-    (Array.isArray(item.urls) && item.urls[0]) ||
-    ''
-  );
+  // `video` goes LAST: signup stores {video: <raw file NAME>, videoUrl: <real
+  // uploaded URL>} — preferring `video` handed the bare filename to the
+  // player, which can never load, so every clip showed "Media unavailable".
+  // Only strings that look like a URL (absolute or server-relative) count.
+  const candidates =
+    typeof item === 'string'
+      ? [item]
+      : [
+          item.url,
+          item.videoUrl,
+          item.link,
+          item.original_url,
+          Array.isArray(item.urls) ? item.urls[0] : '',
+          item.video,
+        ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && /^https?:|^\//.test(c)) return c;
+  }
+  return '';
 };
 
 const asList = (value: unknown): string[] => {
