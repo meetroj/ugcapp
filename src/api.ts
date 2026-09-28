@@ -930,6 +930,9 @@ export async function getCampaigns(
   params: { status?: string; creatorId?: string } = {},
 ): Promise<Campaign[]> {
   const query = new URLSearchParams();
+  // Without this the backend drops status='draft' briefs for brands, so the
+  // Campaigns screen's Draft tab was always empty (web passes it too).
+  query.set('include_drafts', 'true');
   if (params.status) {
     query.set('status', params.status);
   }
