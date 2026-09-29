@@ -26,8 +26,9 @@ import {
 import AppHeader from '../components/AppHeader';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
-// Mirrors GET /api/business/creator-directory in the live Node backend
-// (ugc-b/Backend/server.js). That route returns a FLAT array of these.
+// Normalized shape for the home screen's "top creators" rail, populated from
+// getTopEarners() (GET /api/home/top-earners) below — see the normalization
+// in the effect's results[2] branch. Not the business creator-directory.
 type Creator = {
   [key: string]: unknown;
   id?: string;

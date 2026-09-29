@@ -74,6 +74,22 @@ export function googleSignInAvailable() {
   return Platform.OS !== 'ios' || !!GOOGLE_IOS_CLIENT_ID;
 }
 
+/**
+ * True when the native error carries Google's `access_denied` response. On iOS
+ * the SDK surfaces it as an "unknown" GIDSignIn error whose description is the
+ * literal string; the RN bridge forwards that as `userInfo`.
+ */
+function isAccessDenied(error: unknown): boolean {
+  const anyError = error as {
+    message?: string;
+    userInfo?: { NSLocalizedDescription?: string };
+  };
+  return (
+    anyError?.userInfo?.NSLocalizedDescription === 'access_denied' ||
+    /access_denied/i.test(anyError?.message ?? '')
+  );
+}
+
 /** Raised when the user backs out of the Google sheet — not a real failure. */
 export class GoogleSignInCancelled extends Error {
   constructor() {
@@ -113,6 +129,16 @@ export async function getGoogleIdToken(): Promise<string> {
     return idToken;
   } catch (error) {
     const code = (error as { code?: string })?.code;
+    // Google answers "access_denied" when the OAuth consent screen is still in
+    // Testing mode and this account is not a listed test user (or the user hit
+    // Cancel on the consent page). The iOS SDK reports that with the same code
+    // as a dismissed sheet, so it would otherwise fail silently. Tell the user
+    // instead: from their side the picker closed and nothing happened.
+    if (isAccessDenied(error)) {
+      throw new Error(
+        'Google refused the sign-in (access_denied). If the app is still in testing on Google Cloud, this Google account must be added as a test user, or the OAuth consent screen must be published.',
+      );
+    }
     if (
       code === statusCodes.SIGN_IN_CANCELLED ||
       error instanceof GoogleSignInCancelled
