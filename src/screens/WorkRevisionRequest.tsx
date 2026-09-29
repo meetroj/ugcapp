@@ -310,7 +310,10 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
         behavior="padding"
       >
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: scale(36) + insets.bottom },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
