@@ -5,10 +5,9 @@ import { Text } from '../components/Text';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
 import {
-  AppleButton,
-  GoogleButton,
   OrDivider,
   PrimaryButton,
+  SocialRow,
   SwitchPrompt,
 } from '../components/AuthParts';
 import { colors, fontScale, scale } from '../theme';
@@ -96,15 +95,9 @@ export function LoginForm({
       {(!!onGoogle || !!onApple) && (
         <>
           <OrDivider />
-          {!!onGoogle && <GoogleButton onPress={onGoogle} />}
-          {/* App Store guideline 4.8: where a third-party login is offered,
-              Sign in with Apple has to sit alongside it with equivalent
-              prominence. Stacked under Google, same width and height. */}
-          {!!onApple && (
-            <View style={onGoogle ? styles.appleGap : undefined}>
-              <AppleButton onPress={onApple} />
-            </View>
-          )}
+          {/* On iPhone both sit side by side at equal width; on Android the
+              Google button keeps its full-width labelled form. */}
+          <SocialRow onGoogle={onGoogle} onApple={onApple} />
         </>
       )}
 
@@ -118,7 +111,6 @@ export function LoginForm({
 }
 
 const styles = StyleSheet.create({
-  appleGap: { marginTop: scale(10) },
   forgotRow: { alignItems: 'flex-end', marginBottom: scale(14) },
   forgotText: {
     fontSize: fontScale(12),

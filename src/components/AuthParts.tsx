@@ -58,9 +58,12 @@ export function OrDivider({ compact = false }: { compact?: boolean }) {
 export function GoogleButton({
   onPress,
   compact = false,
+  iconOnly = false,
 }: {
   onPress: () => void;
   compact?: boolean;
+  /** Drops the label so the button can share a row. See SocialRow. */
+  iconOnly?: boolean;
 }) {
   return (
     <TouchableOpacity
@@ -68,9 +71,12 @@ export function GoogleButton({
       onPress={onPress}
       activeOpacity={0.85}
       accessibilityRole="button"
+      accessibilityLabel="Continue with Google"
     >
       <GoogleIcon size={20} />
-      <Text style={styles.googleText}>Continue with Google</Text>
+      {!iconOnly && (
+        <Text style={styles.googleText}>Continue with Google</Text>
+      )}
     </TouchableOpacity>
   );
 }
@@ -87,9 +93,16 @@ export function GoogleButton({
 export function AppleButton({
   onPress,
   compact = false,
+  iconOnly = false,
 }: {
   onPress: () => void;
   compact?: boolean;
+  /**
+   * Drops the label. Apple permits a logo-only button, but NOT a shortened
+   * title — "Apple" on its own is not one of the sanctioned strings, so this
+   * is the only compliant way to fit the button into a shared row.
+   */
+  iconOnly?: boolean;
 }) {
   return (
     <TouchableOpacity
@@ -99,9 +112,47 @@ export function AppleButton({
       accessibilityRole="button"
       accessibilityLabel="Sign in with Apple"
     >
-      <AppleIcon size={18} />
-      <Text style={styles.appleText}>Sign in with Apple</Text>
+      <AppleIcon size={iconOnly ? 20 : 18} />
+      {!iconOnly && <Text style={styles.appleText}>Sign in with Apple</Text>}
     </TouchableOpacity>
+  );
+}
+
+/**
+ * Google and Apple side by side, one line, equal width.
+ *
+ * Only used when both are on offer — that is iPhone, since Apple sign-in is
+ * iOS-only. On Android the Google button keeps the full-width labelled form,
+ * because there is nothing to share the row with.
+ *
+ * Equal flex matters beyond looks: guideline 4.8 asks for the Apple option to
+ * be presented as an equivalent, so neither may be visually subordinate.
+ */
+export function SocialRow({
+  onGoogle,
+  onApple,
+  compact = false,
+}: {
+  onGoogle?: () => void;
+  onApple?: () => void;
+  compact?: boolean;
+}) {
+  const both = !!onGoogle && !!onApple;
+  if (!onGoogle && !onApple) return null;
+
+  return (
+    <View style={both ? styles.socialRow : undefined}>
+      {!!onGoogle && (
+        <View style={both ? styles.socialItem : undefined}>
+          <GoogleButton onPress={onGoogle} compact={compact} iconOnly={both} />
+        </View>
+      )}
+      {!!onApple && (
+        <View style={both ? styles.socialItem : undefined}>
+          <AppleButton onPress={onApple} compact={compact} iconOnly={both} />
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -191,6 +242,10 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   appleCompact: { height: scale(46) },
+
+  socialRow: { flexDirection: 'row', gap: scale(10) },
+  // Equal flex, so neither provider reads as the lesser option.
+  socialItem: { flex: 1 },
 
   switchRow: {
     flexDirection: 'row',

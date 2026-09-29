@@ -49,7 +49,7 @@ const TABS: Tab[] = [
   {
     key: 'review',
     label: 'In Review',
-    statuses: ['pending_approval', 'work_submitted'],
+    statuses: ['pending_approval', 'awaiting_brand_confirmation', 'work_submitted'],
     dot: '#F5A623',
   },
   {
@@ -67,6 +67,7 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> =
     active: { bg: '#DCFCE7', fg: '#15803D', label: 'ACTIVE' },
     in_progress: { bg: '#DCFCE7', fg: '#15803D', label: 'ACTIVE' },
     pending_approval: { bg: '#EDE9FE', fg: '#6D28D9', label: 'IN REVIEW' },
+    awaiting_brand_confirmation: { bg: '#FEF3C7', fg: '#B45309', label: 'CONFIRM SCRIPT' },
     work_submitted: { bg: '#EDE9FE', fg: '#6D28D9', label: 'IN REVIEW' },
     completed: { bg: '#DBEAFE', fg: '#1D4ED8', label: 'COMPLETED' },
     draft: { bg: '#EEEFF4', fg: '#6E7391', label: 'DRAFT' },

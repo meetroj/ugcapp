@@ -7,10 +7,9 @@ import RoleSelector, { type Role } from '../components/RoleSelector';
 import { SIGNUP_DIAL_CODE } from '../api';
 import { scale } from '../theme';
 import {
-  AppleButton,
-  GoogleButton,
   OrDivider,
   PrimaryButton,
+  SocialRow,
   SwitchPrompt,
 } from '../components/AuthParts';
 
@@ -148,15 +147,13 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) 
       {(!!onGoogle || !!onApple) && (
         <>
           <OrDivider compact />
-          {!!onGoogle && <GoogleButton onPress={() => onGoogle(role)} compact />}
-          {/* Guideline 4.8 wants Apple at equivalent prominence next to any
-              third-party login, so it sits directly under Google. The role
-              selected above carries through to whichever is tapped. */}
-          {!!onApple && (
-            <View style={onGoogle ? styles.appleGap : undefined}>
-              <AppleButton onPress={() => onApple(role)} compact />
-            </View>
-          )}
+          {/* Side by side on iPhone, full-width Google alone on Android. The
+              role chosen above carries through to whichever is tapped. */}
+          <SocialRow
+            onGoogle={onGoogle ? () => onGoogle(role) : undefined}
+            onApple={onApple ? () => onApple(role) : undefined}
+            compact
+          />
         </>
       )}
 
