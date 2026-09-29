@@ -405,6 +405,7 @@ export default function BrowseCampaigns({
         token={token}
         session={session}
         onBack={() => setScreen('details')}
+        onSubmitted={() => setScreen('browse')}
       />
     );
 
@@ -866,11 +867,14 @@ function SubmitBid({
   campaign,
   token,
   onBack,
+  onSubmitted,
 }: {
   campaign: Campaign;
   token: string;
   session: AuthUser;
   onBack: () => void;
+  /** Go straight back to the campaigns list after a successful bid. */
+  onSubmitted: () => void;
 }) {
   const [amount, setAmount] = useState('');
   const [days, setDays] = useState('');
@@ -895,10 +899,9 @@ function SubmitBid({
         proposal,
         message: proposal,
       });
-      setMessage('Your bid was submitted successfully.');
-      // Return to the campaign list so the creator isn't stranded on the form
-      // after a successful bid.
-      setTimeout(() => onBack(), 900);
+      // Straight back to the campaigns list — instant, no delay, and past the
+      // campaign-detail screen the bid was opened from.
+      onSubmitted();
     } catch (error) {
       // Show what the server actually said (e.g. "You already bid on this
       // campaign") rather than a blanket retry prompt.
