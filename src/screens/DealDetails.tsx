@@ -141,6 +141,18 @@ const mediaUrl = (path: unknown) => {
   return /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
 };
 
+// Poster frame for a submitted video, so the version card shows the clip
+// instead of a blank tile when the backend sent no thumbnail (an <Image>
+// can't render an .mp4). Cloudinary videos get a `so_0` JPG.
+const posterFrom = (u: string | null): string | null => {
+  if (!u) return null;
+  const isVid = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(u) || /\/video\/upload\//i.test(u);
+  if (!isVid) return u;
+  const m = u.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
+  if (m) return `${m[1]}so_0/${m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg')}`;
+  return null;
+};
+
 function Glyph({ name, color = '#3B3F63' }: { name: string; color?: string }) {
   const line = {
     stroke: color,
@@ -515,9 +527,12 @@ function DealDetails({
         }
         await submitWork(token, campaignId, { work_files: [url] });
       }
+      // Refresh the deal so the submitted version card appears immediately,
+      // instead of asking the creator to pull-to-refresh.
+      onChanged?.();
       Alert.alert(
         'Work submitted',
-        'Your work was sent to the brand for review. It appears under Deliverables once the deal refreshes.',
+        'Your work was sent to the brand for review — it now shows under Deliverables.',
       );
     } catch (error) {
       Alert.alert(
@@ -1211,13 +1226,25 @@ function DealDetails({
                     </View>
                   </View>
 
-                  {mediaUrl(version.thumbnail_url) && (
-                    <Image
-                      source={{ uri: mediaUrl(version.thumbnail_url)! }}
-                      style={styles.thumb}
-                      resizeMode="cover"
-                    />
-                  )}
+                  {(() => {
+                    // Prefer a real thumbnail; otherwise a poster frame of the
+                    // submitted video so the card isn't blank.
+                    const poster =
+                      mediaUrl(version.thumbnail_url) ||
+                      posterFrom(mediaUrl(version.video_url));
+                    return poster ? (
+                      <View style={styles.thumbWrap}>
+                        <Image
+                          source={{ uri: poster }}
+                          style={styles.thumb}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.thumbPlay}>
+                          <Glyph name="play" color="#FFFFFF" />
+                        </View>
+                      </View>
+                    ) : null;
+                  })()}
 
                   {!!version.submitted_at && (
                     <>
@@ -1795,12 +1822,21 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#11123D',
   },
+  thumbWrap: { marginTop: scale(12), position: 'relative' },
   thumb: {
-    marginTop: scale(12),
     width: '100%',
     height: scale(170),
     borderRadius: scale(12),
     backgroundColor: '#E7E8F4',
+  },
+  thumbPlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   uploadLabel: { marginTop: scale(11), fontSize: fontScale(10), color: '#9295AA' },
   uploadDate: {
