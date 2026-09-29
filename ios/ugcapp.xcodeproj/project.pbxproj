@@ -308,6 +308,7 @@
 					"-ObjC",
 					"-lc++",
 				);
+				CODE_SIGN_ENTITLEMENTS = ugcapp/ugcapp.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = io.ugcad.app;
 				PRODUCT_NAME = ugcapp;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -337,6 +338,7 @@
 					"-ObjC",
 					"-lc++",
 				);
+				CODE_SIGN_ENTITLEMENTS = ugcapp/ugcapp.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = io.ugcad.app;
 				PRODUCT_NAME = ugcapp;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

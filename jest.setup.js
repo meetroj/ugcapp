@@ -9,6 +9,20 @@ jest.mock('react-native-video');
 jest.mock('@react-native-async-storage/async-storage');
 // Google Sign-In reaches for Play Services on import and ships ESM; route it too.
 jest.mock('@react-native-google-signin/google-signin');
+// Apple Authentication ships untranspiled ESM and touches the native
+// ASAuthorization APIs on import. `isSupported` is false here, which is what
+// a non-iOS environment reports anyway, so the button stays hidden in tests.
+jest.mock('@invertase/react-native-apple-authentication', () => ({
+  __esModule: true,
+  default: {
+    isSupported: false,
+    performRequest: jest.fn(),
+    Operation: {LOGIN: 1},
+    Scope: {FULL_NAME: 0, EMAIL: 1},
+    Error: {CANCELED: '1001'},
+  },
+  appleAuthAndroid: {isSupported: false},
+}));
 // SafeAreaProvider withholds children until it gets native layout metrics,
 // which never arrive under the test renderer; the shipped mock supplies them.
 // That mock omits SafeAreaView, so add a plain View stand-in for it.

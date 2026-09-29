@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import { colors, radius, scale, fontScale } from '../theme';
-import { GoogleIcon } from './icons';
+import { AppleIcon, GoogleIcon } from './icons';
 
 /** Filled navy call-to-action ("Create Account" / "Log In"). */
 export function PrimaryButton({
@@ -71,6 +71,36 @@ export function GoogleButton({
     >
       <GoogleIcon size={20} />
       <Text style={styles.googleText}>Continue with Google</Text>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * Sign in with Apple.
+ *
+ * Apple's Human Interface Guidelines require the black-on-white or
+ * white-on-black treatment, the official mark, and the exact wording "Sign in
+ * with Apple" — a restyled button is itself a review rejection. Black fill is
+ * used so it reads as at least as prominent as the Google button above it,
+ * which guideline 4.8 requires ("equivalent" placement).
+ */
+export function AppleButton({
+  onPress,
+  compact = false,
+}: {
+  onPress: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.apple, compact && styles.appleCompact]}
+      onPress={onPress}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel="Sign in with Apple"
+    >
+      <AppleIcon size={18} />
+      <Text style={styles.appleText}>Sign in with Apple</Text>
     </TouchableOpacity>
   );
 }
@@ -144,6 +174,23 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   googleCompact: { height: scale(46) },
+
+  apple: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: scale(50),
+    borderRadius: radius.button,
+    backgroundColor: '#000000',
+  },
+  appleText: {
+    marginLeft: scale(8),
+    fontSize: fontScale(15),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  appleCompact: { height: scale(46) },
 
   switchRow: {
     flexDirection: 'row',

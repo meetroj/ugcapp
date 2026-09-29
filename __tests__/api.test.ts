@@ -198,3 +198,51 @@ test('checkInstagramLive posts the bare handle to the validate endpoint', async 
   expect(String(url)).toContain('/api/validate/instagram');
   expect(JSON.parse(String(init.body))).toEqual({username: 'yourbrand'});
 });
+
+/**
+ * Sign in with Apple. App Store guideline 4.8 rejected submission 1.1 (2) for
+ * its absence, so the call has to reach the right route with the field names
+ * the backend declares — `identity_token`, not `credential` or `identityToken`.
+ * A rename here fails this test rather than a review.
+ */
+test('appleAuth posts the identity token and role the backend declares', async () => {
+  const fetchMock = jest.fn(async (_url: string, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({token: 't', user_id: 'u', role: 'creator'}),
+  }));
+  (globalThis as any).fetch = fetchMock;
+
+  const {appleAuth} = require('../src/api');
+  await appleAuth('apple.identity.jwt', 'brand', 'Ada Lovelace');
+
+  const [url, init] = fetchMock.mock.calls[0] as unknown as [
+    string,
+    RequestInit,
+  ];
+  expect(String(url)).toContain('/api/auth/apple');
+  expect(JSON.parse(String(init.body))).toEqual({
+    identity_token: 'apple.identity.jwt',
+    // 'brand' is the app's word for the role the backend calls 'business'.
+    role: 'business',
+    full_name: 'Ada Lovelace',
+  });
+});
+
+test('appleAuth omits the name on later sign-ins, when Apple sends none', async () => {
+  const fetchMock = jest.fn(async (_url: string, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({token: 't', user_id: 'u', role: 'creator'}),
+  }));
+  (globalThis as any).fetch = fetchMock;
+
+  const {appleAuth} = require('../src/api');
+  await appleAuth('apple.identity.jwt');
+
+  const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  const body = JSON.parse(String(init.body));
+  // Sending full_name:"" would blank a name the user already has.
+  expect('full_name' in body).toBe(false);
+  expect(body.role).toBe('creator');
+});

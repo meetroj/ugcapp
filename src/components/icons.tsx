@@ -172,3 +172,32 @@ export function GoogleIcon({ size = 18 }: { size?: number }) {
     </Svg>
   );
 }
+
+/**
+ * The Apple mark, for the Sign in with Apple button.
+ *
+ * Apple's guidelines require their own glyph at these proportions — a
+ * substitute or a restyled logo is grounds for rejection on its own. Drawn as
+ * a path so it inherits the button's tint rather than shipping a bitmap that
+ * would need a second asset for the dark treatment.
+ */
+export function AppleIcon({
+  size = 18,
+  color = '#FFFFFF',
+}: {
+  size?: number;
+  color?: string;
+}) {
+  return (
+    <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24">
+      <Path
+        fill={color}
+        d="M17.05 12.66c-.03-2.53 2.07-3.75 2.16-3.81-1.18-1.72-3.01-1.96-3.66-1.99-1.56-.16-3.04.92-3.83.92-.79 0-2.01-.9-3.3-.87-1.7.02-3.26.99-4.14 2.51-1.76 3.06-.45 7.59 1.27 10.07.84 1.21 1.84 2.57 3.15 2.52 1.26-.05 1.74-.82 3.27-.82 1.52 0 1.96.82 3.3.79 1.36-.02 2.22-1.23 3.05-2.45.96-1.4 1.36-2.76 1.38-2.83-.03-.01-2.64-1.01-2.65-4.04z"
+      />
+      <Path
+        fill={color}
+        d="M14.72 5.09c.7-.85 1.17-2.02 1.04-3.19-1.01.04-2.23.67-2.95 1.51-.65.75-1.21 1.95-1.06 3.1 1.12.09 2.27-.57 2.97-1.42z"
+      />
+    </Svg>
+  );
+}

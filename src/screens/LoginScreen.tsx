@@ -5,6 +5,7 @@ import { Text } from '../components/Text';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
 import {
+  AppleButton,
   GoogleButton,
   OrDivider,
   PrimaryButton,
@@ -21,6 +22,8 @@ type Props = {
   onGoogle?: () => void;
   /** Opens password recovery. */
   onForgotPassword?: () => void;
+  /** Sign in with Apple. iOS only; the button hides when absent. */
+  onApple?: () => void;
 };
 
 export function LoginForm({
@@ -28,6 +31,7 @@ export function LoginForm({
   onSubmit,
   onGoogle,
   onForgotPassword,
+  onApple,
 }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -89,10 +93,18 @@ export function LoginForm({
 
       {/* Only rendered once a Google flow exists — a styled button that
           silently does nothing reads as the app being broken. */}
-      {!!onGoogle && (
+      {(!!onGoogle || !!onApple) && (
         <>
           <OrDivider />
-          <GoogleButton onPress={onGoogle} />
+          {!!onGoogle && <GoogleButton onPress={onGoogle} />}
+          {/* App Store guideline 4.8: where a third-party login is offered,
+              Sign in with Apple has to sit alongside it with equivalent
+              prominence. Stacked under Google, same width and height. */}
+          {!!onApple && (
+            <View style={onGoogle ? styles.appleGap : undefined}>
+              <AppleButton onPress={onApple} />
+            </View>
+          )}
         </>
       )}
 
@@ -106,6 +118,7 @@ export function LoginForm({
 }
 
 const styles = StyleSheet.create({
+  appleGap: { marginTop: scale(10) },
   forgotRow: { alignItems: 'flex-end', marginBottom: scale(14) },
   forgotText: {
     fontSize: fontScale(12),

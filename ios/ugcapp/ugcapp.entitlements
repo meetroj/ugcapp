@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sign in with Apple. Required by App Store guideline 4.8 because the app
+	     also offers Google sign-in; submission 1.1 (2) was rejected without it.
+	     The matching capability must also be enabled on the App ID
+	     (io.ugcad.app) in the Apple Developer portal, and the provisioning
+	     profile regenerated, or the build fails to sign. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+</dict>
+</plist>

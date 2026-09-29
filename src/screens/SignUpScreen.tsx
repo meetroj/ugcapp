@@ -1,11 +1,13 @@
 /** "Create account" screen: role choice, email + mobile + password, Google alternative. */
 import React, { useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
 import RoleSelector, { type Role } from '../components/RoleSelector';
 import { SIGNUP_DIAL_CODE } from '../api';
+import { scale } from '../theme';
 import {
+  AppleButton,
   GoogleButton,
   OrDivider,
   PrimaryButton,
@@ -60,9 +62,11 @@ type Props = {
    * lives in this form's own state.
    */
   onGoogle?: (role: Role) => void;
+  /** Sign in with Apple. iOS only; the button hides when absent. */
+  onApple?: (role: Role) => void;
 };
 
-export function SignUpForm({ onGoToLogin, onSubmit, onGoogle }: Props) {
+export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) {
   const [role, setRole] = useState<Role>('creator');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -141,10 +145,18 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle }: Props) {
 
       {/* Only rendered once a Google flow exists — a styled button that
           silently does nothing reads as the app being broken. */}
-      {!!onGoogle && (
+      {(!!onGoogle || !!onApple) && (
         <>
           <OrDivider compact />
-          <GoogleButton onPress={() => onGoogle(role)} compact />
+          {!!onGoogle && <GoogleButton onPress={() => onGoogle(role)} compact />}
+          {/* Guideline 4.8 wants Apple at equivalent prominence next to any
+              third-party login, so it sits directly under Google. The role
+              selected above carries through to whichever is tapped. */}
+          {!!onApple && (
+            <View style={onGoogle ? styles.appleGap : undefined}>
+              <AppleButton onPress={() => onApple(role)} compact />
+            </View>
+          )}
         </>
       )}
 
@@ -169,5 +181,9 @@ function SignUpScreen(props: Props) {
     </AuthLayout>
   );
 }
+
+const styles = StyleSheet.create({
+  appleGap: { marginTop: scale(10) },
+});
 
 export default SignUpScreen;

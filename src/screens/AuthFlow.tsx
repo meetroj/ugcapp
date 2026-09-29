@@ -23,6 +23,7 @@ import ForgotPasswordForm from './ForgotPasswordScreen';
 import AuthLayout from '../components/AuthLayout';
 import type { Role } from '../components/RoleSelector';
 import {
+  appleAuth,
   googleAuth,
   login,
   signUp,
@@ -34,6 +35,11 @@ import {
   getGoogleIdToken,
   googleSignInAvailable,
 } from '../googleSignIn';
+import {
+  AppleSignInCancelled,
+  appleSignInAvailable,
+  getAppleCredential,
+} from '../appleSignIn';
 import { colors, fontScale, scale } from '../theme';
 
 // LayoutAnimation is opt-in on old-architecture Android. Harmless elsewhere:
@@ -139,6 +145,25 @@ function AuthFlow({ onAuthenticated }: Props) {
   };
 
   /**
+   * Sign in with Apple. Same shape as the Google handler — one endpoint signs
+   * in and signs up — but the display name only exists on the very first
+   * authorization, so it is forwarded when present and never again.
+   */
+  const handleApple = async (role: Role = 'creator') => {
+    try {
+      const { identityToken, fullName } = await getAppleCredential();
+      onAuthenticated(await appleAuth(identityToken, role, fullName));
+    } catch (error) {
+      // Dismissing the Apple sheet is a deliberate action, not a failure.
+      if (error instanceof AppleSignInCancelled) return;
+      Alert.alert(
+        'Could not continue with Apple',
+        error instanceof Error ? error.message : 'Please try again.',
+      );
+    }
+  };
+
+  /**
    * Google sign-in. One handler for both modes: /api/auth/google signs in an
    * existing account and creates a new one, so the only difference is the role
    * carried over from the sign-up form's selector.
@@ -186,6 +211,7 @@ function AuthFlow({ onAuthenticated }: Props) {
               onGoToLogin={() => switchTo('login')}
               onSubmit={handleSignUp}
               onGoogle={googleSignInAvailable() ? handleGoogle : undefined}
+              onApple={appleSignInAvailable() ? handleApple : undefined}
             />
           ) : mode === 'forgot' ? (
             <ForgotPasswordForm onDone={() => switchTo('login')} />
@@ -194,6 +220,7 @@ function AuthFlow({ onAuthenticated }: Props) {
               onGoToSignUp={() => switchTo('signup')}
               onSubmit={handleLogin}
               onGoogle={googleSignInAvailable() ? () => handleGoogle() : undefined}
+              onApple={appleSignInAvailable() ? () => handleApple() : undefined}
               onForgotPassword={() => switchTo('forgot')}
             />
           )}

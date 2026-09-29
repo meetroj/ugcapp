@@ -70,7 +70,7 @@ export class TwoFactorRequired extends Error {
 }
 
 async function authRequest(
-  path: '/auth/login' | '/auth/signup' | '/auth/google',
+  path: '/auth/login' | '/auth/signup' | '/auth/google' | '/auth/apple',
   body: Record<string, string>,
   query = '',
 ): Promise<AuthUser> {
@@ -155,6 +155,26 @@ export function googleAuth(
   return authRequest('/auth/google', {
     credential,
     role: role === 'brand' ? 'business' : 'creator',
+  });
+}
+
+/**
+ * Sign in with Apple. Same contract as googleAuth: one endpoint signs in and
+ * signs up, and `role` is read only when the account is new.
+ *
+ * `fullName` is sent because Apple hands the name to the client exactly once,
+ * at first authorization, and never puts it in the identity token — so if the
+ * app does not forward it, the account is created without a name for good.
+ */
+export function appleAuth(
+  identityToken: string,
+  role: 'creator' | 'brand' = 'creator',
+  fullName?: string,
+) {
+  return authRequest('/auth/apple', {
+    identity_token: identityToken,
+    role: role === 'brand' ? 'business' : 'creator',
+    ...(fullName ? { full_name: fullName } : null),
   });
 }
 
