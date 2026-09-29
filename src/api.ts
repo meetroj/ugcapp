@@ -1047,11 +1047,12 @@ export async function selectCreator(
   campaignId: string,
   creatorId: string,
 ): Promise<void> {
+  // The backend takes creator_id as a QUERY param, not a body field — sending
+  // it in the body left it missing, so every "Accept" 422'd as "request failed".
   await send(
     token,
     'POST',
-    `/api/campaigns/${encodeURIComponent(campaignId)}/select-creator`,
-    { creator_id: creatorId },
+    `/api/campaigns/${encodeURIComponent(campaignId)}/select-creator?creator_id=${encodeURIComponent(creatorId)}`,
   );
 }
 
@@ -1887,6 +1888,26 @@ export async function getCampaignBids(
   const campaign = await getCampaign(token, campaignId);
   const bids = (campaign as Record<string, unknown>).bids;
   return Array.isArray(bids) ? (bids as Record<string, unknown>[]) : [];
+}
+
+/**
+ * Brand confirms (or requests changes to) a UGC.ad-written script. The brief
+ * parks at awaiting_brand_confirmation after admin approval; confirming
+ * publishes it to creators, requesting changes sends it back to the admin
+ * queue with the brand's note.
+ */
+export async function confirmScript(
+  token: string,
+  campaignId: string,
+  action: 'confirm' | 'request_changes',
+  note?: string,
+): Promise<{ message?: string; status?: string }> {
+  return send(
+    token,
+    'POST',
+    `/api/campaigns/${encodeURIComponent(campaignId)}/script-confirmation`,
+    { action, note },
+  ) as Promise<{ message?: string; status?: string }>;
 }
 
 /** Admin-curated creator shortlist for a campaign. */

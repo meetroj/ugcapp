@@ -6,12 +6,15 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Image,
   LayoutAnimation,
   Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  TextInput,
   TouchableOpacity,
   UIManager,
   View,
@@ -22,7 +25,7 @@ import {
   SkeletonChips,
   SkeletonList,
 } from '../components/Skeleton';
-import { BACKEND_URL, getCampaign, getCampaignWork } from '../api';
+import { BACKEND_URL, confirmScript, getCampaign, getCampaignWork } from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -271,6 +274,10 @@ function BrandCampaignDetail({
   const [progressOpen, setProgressOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // UGC.ad script review (status === awaiting_brand_confirmation).
+  const [scriptBusy, setScriptBusy] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [changeNote, setChangeNote] = useState('');
 
   const load = useCallback(async () => {
     // The brief and its submissions fail independently: a campaign with no
@@ -299,6 +306,28 @@ function BrandCampaignDetail({
     setLoading(false);
     setRefreshing(false);
   }, [campaignId, token]);
+
+  const handleScript = useCallback(
+    async (action: 'confirm' | 'request_changes') => {
+      if (action === 'request_changes' && !changeNote.trim()) {
+        Alert.alert('Add a note', 'Tell the team what to change in the script.');
+        return;
+      }
+      setScriptBusy(true);
+      try {
+        const res = await confirmScript(token, campaignId, action, changeNote.trim() || undefined);
+        Alert.alert('Done', res?.message || (action === 'confirm' ? 'Your brief is now live.' : 'Change request sent.'));
+        setChangesOpen(false);
+        setChangeNote('');
+        load();
+      } catch (e) {
+        Alert.alert('Could not submit', e instanceof Error ? e.message : 'Please try again.');
+      } finally {
+        setScriptBusy(false);
+      }
+    },
+    [campaignId, changeNote, load, token],
+  );
 
   useEffect(() => {
     load();
@@ -466,6 +495,78 @@ function BrandCampaignDetail({
         >
           {tab === 0 && (
             <>
+              {String(campaign.status) === 'awaiting_brand_confirmation' && (
+                <View style={styles.scriptCard}>
+                  <Text style={styles.scriptTitle}>📝 Your script is ready — review it</Text>
+                  <Text style={styles.scriptSub}>
+                    UGC.ad wrote this script for your campaign. Creators only see the brief after you confirm.
+                  </Text>
+                  <ScrollView style={styles.scriptBox} nestedScrollEnabled>
+                    <Text style={styles.scriptText}>
+                      {text(campaign.script_text, 'No script text attached — contact support.')}
+                    </Text>
+                  </ScrollView>
+                  {changesOpen && (
+                    <TextInput
+                      style={styles.scriptInput}
+                      value={changeNote}
+                      onChangeText={setChangeNote}
+                      placeholder="What should the team change? Be specific — tone, hook, product points…"
+                      placeholderTextColor="#9498B0"
+                      multiline
+                    />
+                  )}
+                  <View style={styles.scriptActions}>
+                    {!changesOpen ? (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.scriptBtn, styles.scriptBtnPrimary]}
+                          onPress={() => handleScript('confirm')}
+                          disabled={scriptBusy}
+                          accessibilityRole="button"
+                        >
+                          {scriptBusy ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Text style={styles.scriptBtnPrimaryText}>Confirm — send to creators</Text>
+                          )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.scriptBtn, styles.scriptBtnGhost]}
+                          onPress={() => setChangesOpen(true)}
+                          disabled={scriptBusy}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.scriptBtnGhostText}>Request changes</Text>
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.scriptBtn, styles.scriptBtnPrimary]}
+                          onPress={() => handleScript('request_changes')}
+                          disabled={scriptBusy}
+                          accessibilityRole="button"
+                        >
+                          {scriptBusy ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Text style={styles.scriptBtnPrimaryText}>Send change request</Text>
+                          )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.scriptBtn, styles.scriptBtnGhost]}
+                          onPress={() => { setChangesOpen(false); setChangeNote(''); }}
+                          disabled={scriptBusy}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.scriptBtnGhostText}>Back</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                  </View>
+                </View>
+              )}
               <View style={styles.card}>
                 {/* Tapping the row (or the arrow) folds the stage rail away, so
                   the creator and deliverables cards come up without a scroll. */}
@@ -932,6 +1033,70 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EDEEF6',
   },
+  scriptCard: {
+    marginBottom: scale(12),
+    padding: scale(16),
+    borderRadius: scale(14),
+    backgroundColor: '#FFFDF4',
+    borderWidth: 1,
+    borderColor: '#E7D9A0',
+  },
+  scriptTitle: {
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#1F2340',
+    marginBottom: scale(6),
+  },
+  scriptSub: {
+    fontSize: fontScale(12.5),
+    color: '#6B6236',
+    lineHeight: fontScale(18),
+    marginBottom: scale(12),
+  },
+  scriptBox: {
+    maxHeight: scale(200),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE4BD',
+    borderRadius: scale(10),
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(10),
+  },
+  scriptText: { fontSize: fontScale(13.5), color: '#2A2E4A', lineHeight: fontScale(20) },
+  scriptInput: {
+    marginTop: scale(12),
+    minHeight: scale(72),
+    borderWidth: 1,
+    borderColor: '#DDDDDD',
+    borderRadius: scale(10),
+    padding: scale(10),
+    fontSize: fontScale(13.5),
+    color: '#15163F',
+    textAlignVertical: 'top',
+  },
+  scriptActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
+  scriptBtn: {
+    flex: 1,
+    height: scale(46),
+    borderRadius: scale(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scriptBtnPrimary: { backgroundColor: '#15163F' },
+  scriptBtnPrimaryText: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  scriptBtnGhost: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E7D9A0' },
+  scriptBtnGhostText: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#8A7A2E',
+  },
   cardTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
@@ -1106,12 +1271,25 @@ const styles = StyleSheet.create({
   },
   deliverableText: { flex: 1, fontSize: fontScale(12), color: '#3B3F5C' },
 
-  detailRow: { marginBottom: scale(12) },
-  detailLabel: { fontSize: fontScale(10), color: '#9498B0' },
+  // Each point gets clear separation: a hairline divider + generous gap, so the
+  // About tab reads as a list rather than a compact wall of text.
+  detailRow: {
+    paddingVertical: scale(12),
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F8',
+  },
+  detailLabel: {
+    fontSize: fontScale(10.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#9498B0',
+  },
   detailValue: {
-    marginTop: scale(3),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    marginTop: scale(5),
+    fontSize: fontScale(13.5),
+    lineHeight: fontScale(20),
     color: '#25274C',
   },
 

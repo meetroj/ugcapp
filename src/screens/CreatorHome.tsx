@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -173,10 +174,11 @@ function CreatorHome({
   const [creators, setCreators] = useState<Creator[]>([]);
   const [completedDeals, setCompletedDeals] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 1).
   const [notifications, setNotifications] = useState(0);
 
-  useEffect(() => {
+  const loadData = useCallback(() => {
     let active = true;
 
     // Each card fails independently: a stalled directory must not hide the
@@ -214,6 +216,7 @@ function CreatorHome({
         );
       }
       setLoading(false);
+      setRefreshing(false);
     });
 
     // Badge only — a failure here must not affect the rest of the screen.
@@ -227,6 +230,8 @@ function CreatorHome({
       active = false;
     };
   }, [session.user_id, token]);
+
+  useEffect(() => loadData(), [loadData]);
 
   // Only ever show what the backend actually returned. (Previously this fell
   // back to the signed-in user's own profile, which made a failed request look
@@ -314,6 +319,15 @@ function CreatorHome({
         style={styles.body}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              loadData();
+            }}
+          />
+        }
       >
         <View style={styles.hero}>
           <View style={styles.heroIntro}>

@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -120,12 +121,13 @@ function ActiveWork({
   const [openDeal, setOpenDeal] = useState<Work | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   // Distinguishes "you have no deals" from "we could not load them".
   const [failed, setFailed] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 7).
   const [notifications, setNotifications] = useState(0);
 
-  useEffect(() => {
+  const loadDeals = useCallback(() => {
     let cancelled = false;
     // GET /api/deals/my — the backend derives the creator from the token and
     // serializes each deal for this viewer. The previous call
@@ -154,6 +156,7 @@ function ActiveWork({
       .finally(() => {
         if (!cancelled) {
           setLoading(false);
+          setRefreshing(false);
         }
       });
     // The bell badge is decorative — a failure here must not blank the screen.
@@ -169,6 +172,8 @@ function ActiveWork({
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => loadDeals(), [loadDeals]);
 
   const groups = useMemo(
     () => ({
@@ -251,6 +256,15 @@ function ActiveWork({
         style={styles.body}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              loadDeals();
+            }}
+          />
+        }
       >
         <View style={styles.toolsWrap}>
         <View style={styles.tools}>

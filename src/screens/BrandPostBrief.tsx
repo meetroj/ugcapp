@@ -13,7 +13,7 @@
  *   - "Publish"     -> status 'pending_approval'; an admin reviews it before
  *                      creators ever see it, so publishing is not going live.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -1825,6 +1825,14 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
     [buildPayload, isStepValid, onDone, stepIssues, token],
   );
 
+  // Reset scroll to the top whenever the step changes — otherwise the next
+  // section opens scrolled to wherever the previous one ended (usually the
+  // bottom, at the Continue button).
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [step]);
+
   const goNext = useCallback(() => {
     const issues = stepIssues(step);
     if (issues.length || !isStepValid(step)) {
@@ -1925,6 +1933,7 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
         behavior="padding"
       >
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"

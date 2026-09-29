@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -287,6 +288,7 @@ export default function BrowseCampaigns({
   const [selected, setSelected] = useState<Campaign | null>(null);
   const [screen, setScreen] = useState<Screen>('browse');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   // Separates "nothing matches your filters" from "the list failed to load".
   const [failed, setFailed] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 7).
@@ -299,7 +301,7 @@ export default function BrowseCampaigns({
   });
   const [openFilter, setOpenFilter] = useState<FilterKey | null>(null);
 
-  useEffect(() => {
+  const loadCampaigns = useCallback(() => {
     getCampaigns(token, { status: 'active' })
       .then(list => {
         setCampaigns(
@@ -311,13 +313,18 @@ export default function BrowseCampaigns({
         setFailed(false);
       })
       .catch(() => setFailed(true))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
 
     // Badge only — a failure here must not affect the campaign list.
     getUnreadCount(token)
       .then(setNotifications)
       .catch(() => {});
   }, [token]);
+
+  useEffect(() => loadCampaigns(), [loadCampaigns]);
 
   // Which campaigns are already saved. Separate from the list fetch so a
   // failure here only costs the filled bookmarks, not the campaigns.
@@ -415,6 +422,15 @@ export default function BrowseCampaigns({
         contentContainerStyle={styles.browseContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              loadCampaigns();
+            }}
+          />
+        }
       >
         <View style={styles.filters}>
           {FILTERS.map(group => {
@@ -880,6 +896,9 @@ function SubmitBid({
         message: proposal,
       });
       setMessage('Your bid was submitted successfully.');
+      // Return to the campaign list so the creator isn't stranded on the form
+      // after a successful bid.
+      setTimeout(() => onBack(), 900);
     } catch (error) {
       // Show what the server actually said (e.g. "You already bid on this
       // campaign") rather than a blanket retry prompt.
