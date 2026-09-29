@@ -1477,6 +1477,24 @@ export async function requestShipment(
   );
 }
 
+/**
+ * Generate a prepaid shipping label DIRECTLY (Delhivery), skipping the admin
+ * queue. Same body as request-shipment; returns the AWB + label URL. The
+ * creator's delivery address is pulled server-side and never exposed here.
+ */
+export async function createShipLabel(
+  token: string,
+  dealId: string,
+  payload: Record<string, unknown>,
+): Promise<{ tracking_number?: string; label_url?: string; courier_name?: string; status?: string }> {
+  return send(
+    token,
+    'POST',
+    `/api/deals/${encodeURIComponent(dealId)}/ship-label`,
+    payload,
+  ) as Promise<{ tracking_number?: string; label_url?: string; courier_name?: string; status?: string }>;
+}
+
 /* ============================ Misc lookups ============================= */
 
 export async function getCategories(

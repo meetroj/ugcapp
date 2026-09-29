@@ -26,6 +26,7 @@ import {
   getBusinessCompany,
   getBusinessProfile,
   getShipment,
+  createShipLabel,
   requestShipment,
   updateShipment,
   uploadMedia,
@@ -318,30 +319,56 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
       return;
     }
     setSaving(true);
+    // The bare campaign id addresses the first (or only) hired creator,
+    // which is the same id every other call on this screen uses.
+    const payload = {
+      description: ship.description.trim(),
+      weight: Number(ship.weight),
+      dimensions: {
+        length: ship.length ? Number(ship.length) : null,
+        width: ship.width ? Number(ship.width) : null,
+        height: ship.height ? Number(ship.height) : null,
+      },
+      pickup_address: {
+        full_name: ship.full_name.trim(),
+        phone: ship.phone.replace(/\D/g, ''),
+        line1: ship.line1.trim(),
+        line2: ship.line2.trim(),
+        city: ship.city.trim(),
+        state: ship.state.trim(),
+        pincode: ship.pincode,
+        country: 'India',
+      },
+    };
     try {
-      // The bare campaign id addresses the first (or only) hired creator,
-      // which is the same id every other call on this screen uses.
-      await requestShipment(token, campaignId, {
-        description: ship.description.trim(),
-        weight: Number(ship.weight),
-        dimensions: {
-          length: ship.length ? Number(ship.length) : null,
-          width: ship.width ? Number(ship.width) : null,
-          height: ship.height ? Number(ship.height) : null,
-        },
-        pickup_address: {
-          full_name: ship.full_name.trim(),
-          phone: ship.phone.replace(/\D/g, ''),
-          line1: ship.line1.trim(),
-          line2: ship.line2.trim(),
-          city: ship.city.trim(),
-          state: ship.state.trim(),
-          pincode: ship.pincode,
-          country: 'India',
-        },
-      });
-      setRequesting(false);
-      await load();
+      // Try the DIRECT Delhivery label first — the brand gets an instant AWB
+      // and doesn't wait on the ops queue. If the courier can't (e.g. the
+      // creator hasn't confirmed their address yet), fall back to the manual
+      // request queue so the shipment still gets moving.
+      try {
+        const res = await createShipLabel(token, campaignId, payload);
+        setRequesting(false);
+        await load();
+        Alert.alert(
+          'Label generated',
+          res?.tracking_number
+            ? `Tracking number: ${res.tracking_number}. The courier will pick it up from your address.`
+            : 'Your shipping label is ready.',
+        );
+        return;
+      } catch (labelErr) {
+        // Courier declined — queue it for the ops team instead.
+        await requestShipment(token, campaignId, payload);
+        setRequesting(false);
+        await load();
+        Alert.alert(
+          'Shipment requested',
+          labelErr instanceof Error && labelErr.message
+            ? `We couldn't auto-generate a label (${labelErr.message}). Our team will arrange the label and update tracking.`
+            : 'Our team will arrange the label and update tracking.',
+        );
+        return;
+      }
     } catch (error) {
       Alert.alert(
         'Could not request',

@@ -764,6 +764,20 @@ function BrandCampaignDetail({
                 </View>
               )}
 
+              {/* Ship Product — only for a physical brief with a creator hired.
+                  Opens the native shipment screen (pickup address + Delhivery
+                  label), so the brand can ship straight from the app. */}
+              {!!creatorName &&
+                (campaign.requires_shipment || campaign.shipment_required) && (
+                  <TouchableOpacity
+                    style={styles.shipBtn}
+                    onPress={() => onNavigate(`/shipment/${campaignId}`)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.shipBtnText}>📦  Ship Product</Text>
+                  </TouchableOpacity>
+                )}
+
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Deliverables</Text>
                 {(Array.isArray(campaign.deliverable_items)
@@ -1096,6 +1110,20 @@ const styles = StyleSheet.create({
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#8A7A2E',
+  },
+  shipBtn: {
+    height: scale(50),
+    borderRadius: scale(14),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: scale(12),
+  },
+  shipBtnText: {
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   cardTitle: {
     fontSize: fontScale(14),
