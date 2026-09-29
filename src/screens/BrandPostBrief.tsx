@@ -28,7 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
-import { createCampaign, getBusinessProfile } from '../api';
+import { createCampaign, getBusinessProfile, getCampaign } from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -36,6 +36,8 @@ type Props = {
   onBack: () => void;
   /** Called after a successful create so the caller can leave the form. */
   onDone: (campaignId: string | null) => void;
+  /** Campaign id to duplicate: its fields prefill a fresh draft to edit. */
+  duplicateFrom?: string;
 };
 
 /**
@@ -1211,7 +1213,7 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BrandPostBrief({ token, onBack, onDone }: Props) {
+function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(initialForm);
@@ -1250,6 +1252,61 @@ function BrandPostBrief({ token, onBack, onDone }: Props) {
       active = false;
     };
   }, []);
+
+  // Duplicate: fetch the source campaign and prefill a fresh draft. Best-effort
+  // per field — anything that doesn't map cleanly stays default, and the brand
+  // reviews before publishing. The title gets a "(Copy)" suffix.
+  useEffect(() => {
+    if (!duplicateFrom) return;
+    let active = true;
+    (async () => {
+      try {
+        const c: any = await getCampaign(token, duplicateFrom);
+        if (!active || !c) return;
+        const str = (v: any) => (v == null ? '' : String(v));
+        const arr = (v: any) => (Array.isArray(v) ? v : []);
+        const dels = arr(c.deliverable_items);
+        setForm(cur => ({
+          ...cur,
+          campaignName: (str(c.title) ? `${str(c.title)} (Copy)` : '').slice(0, 120),
+          category: str(c.product_category || c.category),
+          productName: str(c.product_name),
+          productDescription: str(c.product_description),
+          campaignHook: str(c.campaign_hook),
+          keyMessage: str(c.key_message),
+          objectives: arr(c.objectives).map(String),
+          targetAudience: str(c.target_audience),
+          productType: str(c.product_type) === 'digital' ? 'digital' : 'physical',
+          platforms: arr(c.platforms).map(String),
+          rightsDuration: str(c.rights_duration),
+          exclusivity: str(c.exclusivity) || 'None',
+          modificationRights: str(c.modification_rights),
+          tones: arr(c.tones).map(String),
+          pacing: str(c.pacing) || 'No preference',
+          scriptProvider: str(c.script_provider) === 'ugc' ? 'ugc' : 'brand',
+          revisions: Number(c.revision_limit ?? c.free_revisions ?? 2) || 2,
+          budgetMode: 'fixed',
+          fixedBudget: str(c.budget || c.budget_max || c.budget_min),
+          deliverables: dels.length
+            ? dels.map((d: any) => ({
+                ...createDeliverable(),
+                type: str(d.type),
+                quantity: Number(d.quantity) || 1,
+                duration: str(d.duration),
+                aspectRatios: arr(d.aspect_ratios).length ? arr(d.aspect_ratios).map(String) : ['9:16'],
+                editedRequired: !!d.edited_required,
+                editedBy: d.edited_by === 'ugc' ? 'ugc' : 'creator',
+              }))
+            : cur.deliverables,
+        }));
+      } catch {
+        // Couldn't load the source — leave the blank form; not fatal.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [duplicateFrom, token]);
 
   useEffect(() => {
     if (!restored) return;

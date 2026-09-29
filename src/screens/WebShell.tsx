@@ -749,6 +749,11 @@ function WebShell({
       ) : showingBrandPostBrief ? (
         <BrandPostBrief
           token={token}
+          duplicateFrom={
+            /[?&]from=([^&]+)/.exec(currentPath)?.[1]
+              ? decodeURIComponent(/[?&]from=([^&]+)/.exec(currentPath)![1])
+              : undefined
+          }
           onBack={backTo('/dashboard/business/all-campaigns')}
           onDone={id =>
             navigateTo(

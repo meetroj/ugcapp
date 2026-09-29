@@ -25,7 +25,14 @@ import {
   SkeletonChips,
   SkeletonList,
 } from '../components/Skeleton';
-import { BACKEND_URL, confirmScript, getCampaign, getCampaignWork } from '../api';
+import {
+  BACKEND_URL,
+  confirmScript,
+  declineBid,
+  getCampaign,
+  getCampaignWork,
+  selectCreator,
+} from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -278,6 +285,8 @@ function BrandCampaignDetail({
   const [scriptBusy, setScriptBusy] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [changeNote, setChangeNote] = useState('');
+  // Which bid (by creator id) is being accepted/declined right now.
+  const [bidBusy, setBidBusy] = useState('');
 
   const load = useCallback(async () => {
     // The brief and its submissions fail independently: a campaign with no
@@ -306,6 +315,58 @@ function BrandCampaignDetail({
     setLoading(false);
     setRefreshing(false);
   }, [campaignId, token]);
+
+  const handleAcceptBid = useCallback(
+    (creatorId: string, who: string) => {
+      Alert.alert(
+        `Hire ${who}?`,
+        'Their bid amount moves into escrow and they are hired for this campaign. This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Hire',
+            onPress: async () => {
+              setBidBusy(creatorId);
+              try {
+                await selectCreator(token, campaignId, creatorId);
+                Alert.alert('Hired', `${who} is now hired. Ship the product to get started.`);
+                load();
+              } catch (e) {
+                Alert.alert('Could not hire', e instanceof Error ? e.message : 'Please try again.');
+              } finally {
+                setBidBusy('');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [campaignId, load, token],
+  );
+
+  const handleDeclineBid = useCallback(
+    (creatorId: string, who: string) => {
+      Alert.alert(`Decline ${who}?`, "They'll be told this bid wasn't selected.", [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Decline',
+          style: 'destructive',
+          onPress: async () => {
+            setBidBusy(creatorId);
+            try {
+              await declineBid(token, campaignId, creatorId);
+              load();
+            } catch (e) {
+              Alert.alert('Could not decline', e instanceof Error ? e.message : 'Please try again.');
+            } finally {
+              setBidBusy('');
+            }
+          },
+        },
+      ]);
+    },
+    [campaignId, load, token],
+  );
 
   const handleScript = useCallback(
     async (action: 'confirm' | 'request_changes') => {
@@ -567,6 +628,64 @@ function BrandCampaignDetail({
                   </View>
                 </View>
               )}
+              {(() => {
+                const bids = Array.isArray(campaign.bids) ? campaign.bids : [];
+                const open = bids.filter(
+                  (b: any) => String(b?.status || 'pending').toLowerCase() !== 'declined',
+                );
+                if (!open.length) return null;
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Creator Bids ({open.length})</Text>
+                    {open.map((b: any, i: number) => {
+                      const cid = String(b.creator_id ?? '');
+                      const who = text(b.creator_name || b.creator_nickname, 'Creator');
+                      const busy = bidBusy === cid;
+                      return (
+                        <View key={cid || i} style={styles.bidRow}>
+                          <View style={styles.bidTop}>
+                            <Text style={styles.bidName} numberOfLines={1}>{who}</Text>
+                            <Text style={styles.bidAmount}>{rupees(b.amount || b.price)}</Text>
+                          </View>
+                          {!!text(b.proposal || b.message) && (
+                            <Text style={styles.bidProposal} numberOfLines={3}>
+                              {text(b.proposal || b.message)}
+                            </Text>
+                          )}
+                          {!!(b.estimated_delivery_days || b.delivery_days) && (
+                            <Text style={styles.bidMeta}>
+                              Delivery in {Number(b.estimated_delivery_days || b.delivery_days)} days
+                            </Text>
+                          )}
+                          <View style={styles.bidActions}>
+                            <TouchableOpacity
+                              style={[styles.bidBtn, styles.bidDecline]}
+                              onPress={() => handleDeclineBid(cid, who)}
+                              disabled={busy || !cid}
+                              accessibilityRole="button"
+                            >
+                              <Text style={styles.bidDeclineText}>Decline</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.bidBtn, styles.bidAccept]}
+                              onPress={() => handleAcceptBid(cid, who)}
+                              disabled={busy || !cid}
+                              accessibilityRole="button"
+                            >
+                              {busy ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <Text style={styles.bidAcceptText}>Accept &amp; Hire</Text>
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+
               <View style={styles.card}>
                 {/* Tapping the row (or the arrow) folds the stage rail away, so
                   the creator and deliverables cards come up without a scroll. */}
@@ -841,6 +960,21 @@ function BrandCampaignDetail({
                     : ''
                 }
               />
+
+              {/* Duplicate: opens the post-brief wizard prefilled from this
+                  campaign as a fresh draft to edit and republish. */}
+              <TouchableOpacity
+                style={styles.dupBtn}
+                onPress={() =>
+                  onNavigate(
+                    `/dashboard/business/post-brief?from=${encodeURIComponent(campaignId)}`,
+                  )
+                }
+                accessibilityRole="button"
+              >
+                <Icon name="copy" color="#4C4DD6" size={15} />
+                <Text style={styles.dupBtnText}>Duplicate this campaign</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1111,6 +1245,34 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#8A7A2E',
   },
+  bidRow: {
+    paddingTop: scale(12),
+    marginTop: scale(10),
+    borderTopWidth: 1,
+    borderTopColor: '#F0F1F8',
+  },
+  bidTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: scale(8) },
+  bidName: {
+    flex: 1,
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  bidAmount: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4C4DD6',
+  },
+  bidProposal: { marginTop: scale(5), fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#5C6079' },
+  bidMeta: { marginTop: scale(4), fontSize: fontScale(11.5), color: '#9498B0' },
+  bidActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(10) },
+  bidBtn: { flex: 1, height: scale(42), borderRadius: scale(11), alignItems: 'center', justifyContent: 'center' },
+  bidDecline: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E4E5F2' },
+  bidDeclineText: { fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#6E7391' },
+  bidAccept: { backgroundColor: '#15163F' },
+  bidAcceptText: { fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#FFFFFF' },
   shipBtn: {
     height: scale(50),
     borderRadius: scale(14),
@@ -1118,6 +1280,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: scale(12),
+  },
+  dupBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: scale(7),
+    height: scale(46),
+    borderRadius: scale(12),
+    borderWidth: 1.5,
+    borderColor: '#DCDDF6',
+    marginTop: scale(14),
+  },
+  dupBtnText: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#4C4DD6',
   },
   shipBtnText: {
     fontSize: fontScale(14),
