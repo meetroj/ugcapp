@@ -1104,7 +1104,17 @@ export async function getCampaignWork(
     token,
     `/api/work/campaign/${encodeURIComponent(campaignId)}`,
   );
-  return toList<WorkSubmission>(data, 'submissions');
+  // This endpoint returns a SINGLE work-submission object (or {} when there's
+  // none), NOT a list or a {submissions:[...]} wrapper — so toList() alone
+  // always yielded [] and the campaign's Work Review tab showed "No submissions
+  // yet" even when a submission existed. Wrap the bare object into a list.
+  const listed = toList<WorkSubmission>(data, 'submissions');
+  if (listed.length) return listed;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>;
+    if (obj.id) return [obj as WorkSubmission];
+  }
+  return [];
 }
 
 export async function approveWork(token: string, workId: string) {

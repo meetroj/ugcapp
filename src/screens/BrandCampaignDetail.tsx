@@ -10,6 +10,7 @@ import {
   Alert,
   Image,
   LayoutAnimation,
+  Modal,
   Platform,
   RefreshControl,
   ScrollView,
@@ -26,6 +27,7 @@ import {
   SkeletonList,
 } from '../components/Skeleton';
 import {
+  approveWork,
   BACKEND_URL,
   confirmScript,
   declineBid,
@@ -33,6 +35,7 @@ import {
   getCampaignWork,
   selectCreator,
 } from '../api';
+import WorkRevisionRequest from './WorkRevisionRequest';
 import { scale, fontScale, NAV_CLEARANCE } from '../theme';
 
 type Props = {
@@ -276,6 +279,12 @@ function BrandCampaignDetail({
 }: Props) {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [work, setWork] = useState<Work[]>([]);
+  // The submission whose Request-Revision composer is open, and the id of the
+  // one being approved (blocks a double-tap + shows progress). Mirrors the
+  // standalone BrandWorkReview screen so a brand can review right here on the
+  // campaign's Work Review tab instead of being bounced to another screen.
+  const [revising, setRevising] = useState<Work | null>(null);
+  const [approving, setApproving] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
   /** Campaign Progress starts open; the header arrow folds it away. */
   const [progressOpen, setProgressOpen] = useState(true);
@@ -315,6 +324,38 @@ function BrandCampaignDetail({
     setLoading(false);
     setRefreshing(false);
   }, [campaignId, token]);
+
+  // Approving releases escrow to the creator and can't be undone, so confirm
+  // first. Uses the work-submission id (what /api/work/campaign/{id} returns),
+  // which /api/work/{id}/approve expects.
+  const runApprove = useCallback(
+    async (item: Work) => {
+      setApproving(item.id);
+      try {
+        await approveWork(token, item.id);
+        load();
+      } catch (err: any) {
+        Alert.alert('Not approved', String(err?.message || err));
+      } finally {
+        setApproving(null);
+      }
+    },
+    [token, load],
+  );
+
+  const confirmApprove = useCallback(
+    (item: Work) => {
+      Alert.alert(
+        'Approve this work?',
+        'Payment will be released to the creator and the files unlocked. This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Approve', onPress: () => runApprove(item) },
+        ],
+      );
+    },
+    [runApprove],
+  );
 
   const handleAcceptBid = useCallback(
     (creatorId: string, who: string) => {
@@ -1034,17 +1075,32 @@ function BrandCampaignDetail({
                           {formatDate(item.submitted_at || item.created_at)} ·{' '}
                           {text(item.status, 'submitted').replace(/_/g, ' ')}
                         </Text>
-                        <TouchableOpacity
-                          style={styles.reviewBtn}
-                          onPress={() =>
-                            onNavigate('/dashboard/business/work-review')
-                          }
-                          accessibilityRole="button"
-                        >
-                          <Text style={styles.reviewText}>
-                            Open in Work Review
-                          </Text>
-                        </TouchableOpacity>
+                        <View style={styles.workActions}>
+                          <TouchableOpacity
+                            style={[
+                              styles.workApprove,
+                              approving === item.id && styles.workApproveOff,
+                            ]}
+                            disabled={approving === item.id}
+                            onPress={() => confirmApprove(item)}
+                            accessibilityRole="button"
+                          >
+                            {approving === item.id ? (
+                              <ActivityIndicator color="#FFFFFF" size="small" />
+                            ) : (
+                              <Text style={styles.workApproveText}>Approve</Text>
+                            )}
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.reviewBtn}
+                            onPress={() => setRevising(item)}
+                            accessibilityRole="button"
+                          >
+                            <Text style={styles.reviewText}>
+                              Request Revision
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     </View>
                   );
@@ -1054,6 +1110,25 @@ function BrandCampaignDetail({
           )}
         </ScrollView>
       </View>
+
+      <Modal
+        visible={!!revising}
+        animationType="slide"
+        onRequestClose={() => setRevising(null)}
+        statusBarTranslucent
+      >
+        {!!revising && (
+          <WorkRevisionRequest
+            token={token}
+            work={revising}
+            onClose={() => setRevising(null)}
+            onDone={() => {
+              setRevising(null);
+              load();
+            }}
+          />
+        )}
+      </Modal>
     </View>
   );
 }
@@ -1572,6 +1647,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4C5BF3',
+  },
+  workActions: { marginTop: scale(11), gap: scale(9) },
+  workApprove: {
+    height: scale(40),
+    borderRadius: scale(11),
+    backgroundColor: '#22A565',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workApproveOff: { backgroundColor: '#6FBF8E' },
+  workApproveText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 
   empty: { marginTop: scale(30), padding: scale(22), alignItems: 'center' },
