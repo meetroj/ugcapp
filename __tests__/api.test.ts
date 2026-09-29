@@ -143,3 +143,58 @@ test('a plain string detail is still passed through unchanged', async () => {
     signUp('creator', 'a@b.com', 'hunter2', '9876543210'),
   ).rejects.toThrow('Email already registered');
 });
+
+/**
+ * The live link probes back the signup forms' "is this a real site/account?"
+ * check. Onboarding blocks on an `invalid` verdict, so a probe that threw —
+ * or that reported a transport failure as `invalid` — would lock a brand out
+ * of its own signup over a flaky phone connection.
+ */
+test('checkWebsiteLive passes the backend verdict straight through', async () => {
+  g.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({valid: false, reason: 'unreachable'}),
+  })) as unknown as typeof fetch;
+
+  const {checkWebsiteLive} = require('../src/api');
+  await expect(checkWebsiteLive('token', 'asdasdasd.com')).resolves.toEqual({
+    valid: false,
+    reason: 'unreachable',
+  });
+});
+
+test('a probe that cannot reach the backend answers uncertain, not invalid', async () => {
+  g.fetch = (async () => {
+    throw new TypeError('Network request failed');
+  }) as unknown as typeof fetch;
+
+  const {checkWebsiteLive, checkInstagramLive} = require('../src/api');
+  await expect(checkWebsiteLive('token', 'brand.com')).resolves.toEqual({
+    uncertain: true,
+    reason: 'unverified',
+  });
+  await expect(checkInstagramLive('token', 'brand')).resolves.toEqual({
+    uncertain: true,
+    reason: 'unverified',
+  });
+});
+
+test('checkInstagramLive posts the bare handle to the validate endpoint', async () => {
+  const fetchMock = jest.fn(async (_url: string, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({valid: true}),
+  }));
+  g.fetch = fetchMock as unknown as typeof fetch;
+
+  const {checkInstagramLive} = require('../src/api');
+  await checkInstagramLive('token', 'yourbrand');
+
+  const [url, init] = fetchMock.mock.calls[0] as unknown as [
+    string,
+    RequestInit,
+  ];
+  expect(String(url)).toContain('/api/validate/instagram');
+  expect(JSON.parse(String(init.body))).toEqual({username: 'yourbrand'});
+});

@@ -77,26 +77,39 @@ test('the peek is centred rather than pinned to the bottom', async () => {
 
 test('the peek leads with a playable clip', async () => {
   const tree = await open();
-  const webviews = tree.root.findAll(
-    n => typeof n.type !== 'string' && !!n.props?.source?.html,
+  // The clips play through react-native-video now. The inline-HTML player this
+  // replaced was governed by the browser autoplay policy, which left the tiles
+  // on their loading spinner on device instead of ever playing.
+  const players = tree.root.findAll(
+    n =>
+      typeof n.type !== 'string' &&
+      !!n.props?.source?.uri &&
+      n.props?.repeat === true,
     { deep: true },
   );
-  expect(webviews.length).toBeGreaterThan(0);
-  const hero = webviews[0].props.source;
-  // Without baseUrl Android refuses the remote <video> and renders a black box.
-  expect(hero.baseUrl).toBe('https://cdn.example.com');
-  expect(hero.html).toContain('reel.mp4');
+  expect(players.length).toBeGreaterThan(0);
+  const hero = players[0].props;
+  expect(hero.source.uri).toContain('reel.mp4');
+  // Muted + looping: the tile is a preview surface, not a player.
+  expect(hero.muted).toBe(true);
+  expect(hero.repeat).toBe(true);
 });
 
 
 test('Recent work shows at most three clips', async () => {
   const tree = await open();
   const players = tree.root.findAll(
-    n => typeof n.type !== 'string' && !!n.props?.source?.html,
+    n =>
+      typeof n.type !== 'string' &&
+      !!n.props?.source?.uri &&
+      n.props?.repeat === true,
     { deep: true },
   );
+  // Counted by distinct clip, not by node: the test mock forwards Video's
+  // props to a View, so every player matches twice.
+  const clips = new Set(players.map(n => n.props.source.uri));
   // The fixture supplies four; the section is capped at three.
-  expect(players).toHaveLength(3);
+  expect(clips.size).toBe(3);
 });
 
 test('the stat rows carry no line between them', async () => {

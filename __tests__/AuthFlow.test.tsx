@@ -136,9 +136,13 @@ test('keeps the card clear of the bottom safe area', async () => {
   // The card's style is an array: the base object, then the inset override.
   // Both the radius and the gap scale with the screen, so the card is located
   // by its scaled radius and the gap compared against the scaled minimum — the
-  // raw 28/48 only hold on the 390pt reference phone. The captured number is
+  // raw numbers only hold on the 390pt reference phone. The captured number is
   // matched as a decimal too: scaling lands on the device pixel grid, which is
   // a half-point on @2x screens.
+  //
+  // The gap is a plain one, NOT the safe-area inset: AuthLayout's SafeAreaView
+  // already reserves that, and adding it again double-counted the nav bar and
+  // pushed the taller sign-up card off the bottom of the screen.
   const json = JSON.stringify(tree.toJSON());
   const at = json.indexOf(`"borderRadius":${radius.card}`);
   expect(at).toBeGreaterThan(-1);
@@ -147,5 +151,5 @@ test('keeps the card clear of the bottom safe area', async () => {
 
   expect(found).not.toBeNull();
   const gap = Number(found![1]);
-  expect(gap).toBeGreaterThanOrEqual(scale(48));
+  expect(gap).toBeGreaterThanOrEqual(scale(16));
 });
