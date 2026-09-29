@@ -20,7 +20,6 @@ import React, {
   useState,
 } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Dimensions,
   Easing,
@@ -35,7 +34,6 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '../components/Text';
 import type { ScrollViewInstance } from 'react-native';
-import Video from 'react-native-video';
 import Svg, { Circle, Path } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonReelRow } from '../components/Skeleton';
@@ -85,11 +83,31 @@ const photoUrl = (path: unknown) => {
 };
 
 // Portfolio previews are real files served from the backend's /uploads and are
-// frequently .mp4, so the tile checks this before choosing the WebView player
-// over a still <Image>.
+// frequently .mp4, so the tile checks this before choosing a poster image.
 const isVideo = (uri: string | null) =>
   !!uri &&
   (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
+
+// A STILL poster frame for a video, so a list of dozens of creators renders as
+// cheap cached <Image>s instead of dozens of live players. Mounting a real
+// react-native-video (ExoPlayer) per tile is what froze the phone / ANR'd the
+// app: each instance holds a decoder + surface, and this screen duplicates its
+// rows for the marquee, so it could mount 40-80 players at once.
+//
+// Cloudinary can render a JPG frame from any video URL — insert `so_0` (start
+// offset 0) and swap the extension to .jpg. For non-Cloudinary videos there is
+// no cheap frame, so we return '' and the caller shows a neutral placeholder;
+// real playback still happens on the full profile / deal room when tapped.
+const videoPoster = (uri: string | null): string => {
+  if (!uri) return '';
+  if (!isVideo(uri)) return uri; // already an image
+  const m = uri.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
+  if (m) {
+    const rest = m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg');
+    return `${m[1]}so_0/${rest}`;
+  }
+  return ''; // unknown host — no cheap poster
+};
 
 function Icon({
   name,
@@ -171,31 +189,18 @@ function Icon({
  */
 function ReelTile({
   creator,
-  active,
   onPress,
 }: {
   creator: Creator;
-  active: boolean;
   onPress: () => void;
 }) {
-  const [ready, setReady] = useState(false);
-
-  // onReadyForDisplay is the only signal that clears the spinner, and it does
-  // not fire for every source — a slow CDN, an audio-less track or a codec the
-  // decoder gives up on all left the tile spinning forever. After this long the
-  // poster/first frame is the better thing to show, even if playback never
-  // starts, so the grid is never a wall of spinners.
-  useEffect(() => {
-    const timer = setTimeout(() => setReady(true), 6000);
-    return () => clearTimeout(timer);
-  }, []);
-
   const media = photoUrl(creator.portfolio_preview);
   const avatar = photoUrl(creator.profile_photo);
   const name = text(creator.name || creator.nickname, 'Creator');
   const category = text(creator.primary_category);
   const rate = text(creator.budget_range);
   const video = isVideo(media);
+  const poster = videoPoster(media);
 
   return (
     <TouchableOpacity
@@ -206,38 +211,10 @@ function ReelTile({
       accessibilityLabel={`${name}, ${category || 'creator'}`}
     >
       <View style={styles.reel}>
-        {video && media ? (
-          <>
-            <Video
-              source={{ uri: media }}
-              style={styles.reelMedia}
-              resizeMode="cover"
-              repeat
-              muted
-              // Only the reels on screen decode; a long list would otherwise
-              // run a dozen videos at once.
-              paused={!active}
-              playInBackground={false}
-              playWhenInactive={false}
-              disableFocus
-              ignoreSilentSwitch="ignore"
-              onReadyForDisplay={() => setReady(true)}
-              // Fires once the track is decoded even when the first frame is
-              // never presented (paused tiles, audio-less clips), which
-              // onReadyForDisplay alone can miss.
-              onLoad={() => setReady(true)}
-              // A dead link must clear the spinner too, or the tile sits on a
-              // loading state that will never finish.
-              onError={() => setReady(true)}
-            />
-            {!ready && (
-              <View style={styles.reelLoading}>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              </View>
-            )}
-          </>
-        ) : media ? (
-          <Image source={{ uri: media }} style={styles.reelMedia} />
+        {poster ? (
+          // A STILL poster (video frame or image). No live player per tile —
+          // that is what ANR'd the app. Real playback opens on the full profile.
+          <Image source={{ uri: poster }} style={styles.reelMedia} />
         ) : (
           <View style={styles.reelEmpty}>
             <Text style={styles.reelEmptyText}>
@@ -253,9 +230,9 @@ function ReelTile({
             </Text>
           </View>
         )}
-        {video && (
-          <View style={styles.mutedPill}>
-            <Icon name="muted" color="#FFFFFF" size={13} />
+        {video && poster && (
+          <View style={styles.reelPlay}>
+            <Icon name="play" color="#FFFFFF" size={14} />
           </View>
         )}
       </View>
@@ -381,7 +358,6 @@ function ReelRow({
           <ReelTile
             key={`${copy}-${creator.id}`}
             creator={creator}
-            active={active}
             onPress={() => onOpen(creator)}
           />
         )),
@@ -574,26 +550,25 @@ function CreatorPeekSheet({
                     accessibilityRole="button"
                     accessibilityLabel={`Play clip ${index + 1}`}
                   >
-                    {isVideo(uri) ? (
-                      <>
-                        <Video
-                          source={{ uri }}
-                          style={styles.peekClipMedia}
-                          resizeMode="cover"
-                          repeat
-                          muted
-                          playInBackground={false}
-                          playWhenInactive={false}
-                          disableFocus
-                          ignoreSilentSwitch="ignore"
-                        />
-                        <View style={styles.peekPlay}>
-                          <Icon name="play" color="#FFFFFF" size={11} />
+                    {/* Still poster, not a live player — the modal used to mount
+                        up to 3 videos on top of the marquee's players. */}
+                    {(() => {
+                      const p = videoPoster(uri);
+                      return p ? (
+                        <>
+                          <Image source={{ uri: p }} style={styles.peekClipMedia} />
+                          {isVideo(uri) && (
+                            <View style={styles.peekPlay}>
+                              <Icon name="play" color="#FFFFFF" size={11} />
+                            </View>
+                          )}
+                        </>
+                      ) : (
+                        <View style={[styles.peekClipMedia, styles.reelEmpty]}>
+                          <Icon name="play" color="#B9BDD4" size={14} />
                         </View>
-                      </>
-                    ) : (
-                      <Image source={{ uri }} style={styles.peekClipMedia} />
-                    )}
+                      );
+                    })()}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -868,15 +843,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0E1330',
   },
   reelMedia: { flex: 1, backgroundColor: '#0E1330' },
-  reelLoading: {
+  reelPlay: {
     position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
+    right: scale(8),
+    bottom: scale(8),
+    width: scale(26),
+    height: scale(26),
+    borderRadius: scale(13),
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0E1330',
+    backgroundColor: 'rgba(12,16,42,0.6)',
   },
   reelEmpty: {
     flex: 1,

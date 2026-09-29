@@ -21,6 +21,7 @@ import {
   ActivityIndicator,
   Image,
   Linking,
+  Pressable,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -69,6 +70,18 @@ const photoUrl = (path: unknown) => {
 const isVideo = (uri: string | null) =>
   !!uri &&
   (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
+
+// Still poster frame for a video (Cloudinary `so_0` JPG), so the Videos tab
+// shows cheap cached images and only mounts a real player when a clip is
+// tapped — a creator with several clips otherwise ran several ExoPlayers at
+// once, which lagged the profile.
+const videoPoster = (uri: string | null): string => {
+  if (!uri) return '';
+  if (!isVideo(uri)) return uri;
+  const m = uri.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
+  if (m) return `${m[1]}so_0/${m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg')}`;
+  return '';
+};
 
 /** ₹ with Indian digit grouping, matching the web page's `inr()`. */
 const inr = (value: number) => `₹${Number(value).toLocaleString('en-IN')}`;
@@ -247,12 +260,19 @@ function VideoCard({
   fallbackDelivery: string;
 }) {
   const [failed, setFailed] = useState(false);
+  // Tap-to-play: default to a still poster; only mount the real player after a
+  // tap, so several clips don't all decode at once.
+  const [playing, setPlaying] = useState(false);
   const price = String(item.price || '').replace(/[^0-9]/g, '');
   const days = String(item.delivery || '').replace(/[^0-9]/g, '');
+  const poster = videoPoster(item.url);
 
   return (
     <View style={styles.videoCard}>
-      <View style={styles.videoFrame}>
+      <Pressable
+        style={styles.videoFrame}
+        onPress={() => isVideo(item.url) && poster && setPlaying(p => !p)}
+      >
         {failed || !item.url ? (
           // Matches the web's "Media unavailable" placeholder rather than a
           // black rectangle, so a dead link reads as missing, not broken.
@@ -260,24 +280,23 @@ function VideoCard({
             <Icon name="camera" color="#B9BDD4" size={22} />
             <Text style={styles.videoMissingText}>Media unavailable</Text>
           </View>
-        ) : isVideo(item.url) ? (
+        ) : isVideo(item.url) && playing ? (
+          <Video
+            source={{ uri: item.url }}
+            style={styles.videoMedia}
+            resizeMode="cover"
+            repeat
+            muted
+            playInBackground={false}
+            playWhenInactive={false}
+            disableFocus
+            ignoreSilentSwitch="ignore"
+            onError={() => setFailed(true)}
+          />
+        ) : isVideo(item.url) && poster ? (
+          // Still poster + play badge; tapping mounts the player above.
           <>
-            {/* Native player, like the rest of the app. The inline-HTML
-                player this replaced was handed no baseUrl, so its document had
-                a null origin and Android refused to load the remote clip --
-                every sample rendered as an empty box that never played. */}
-            <Video
-              source={{ uri: item.url }}
-              style={styles.videoMedia}
-              resizeMode="cover"
-              repeat
-              muted
-              playInBackground={false}
-              playWhenInactive={false}
-              disableFocus
-              ignoreSilentSwitch="ignore"
-              onError={() => setFailed(true)}
-            />
+            <Image source={{ uri: poster }} style={styles.videoMedia} />
             <View style={styles.playPill}>
               <Icon name="play" color="#FFFFFF" size={11} />
             </View>
@@ -289,7 +308,7 @@ function VideoCard({
             onError={() => setFailed(true)}
           />
         )}
-      </View>
+      </Pressable>
 
       <View style={styles.videoTag}>
         <Text style={styles.videoTagText} numberOfLines={1}>
