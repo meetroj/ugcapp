@@ -44,6 +44,20 @@ const mediaUrl = (path: unknown) => {
   return /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
 };
 
+const isVideoUrl = (u: string | null) =>
+  !!u && (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(u) || /\/video\/upload\//i.test(u));
+
+// Still poster frame for a submitted video, so the card shows a real image
+// instead of a blank tile (an <Image> can't render an .mp4 URL). Cloudinary
+// videos get a `so_0` JPG; a non-video URL is already an image.
+const posterUrl = (u: string | null): string | null => {
+  if (!u) return null;
+  if (!isVideoUrl(u)) return u;
+  const m = u.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
+  if (m) return `${m[1]}so_0/${m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg')}`;
+  return null;
+};
+
 /** Seconds -> "0:32", the length badge on the thumbnail. */
 function duration(seconds: unknown): string {
   const safe = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -319,13 +333,18 @@ function BrandWorkReview({
               </View>
             ) : (
               items.map(work => {
-                const thumb = mediaUrl(
+                const files = Array.isArray(work.work_files) ? work.work_files : [];
+                const rawPlayable =
+                  work.watermarked_url ||
                   work.preview_url ||
-                    work.thumbnail_url ||
-                    work.watermarked_url,
-                );
-                const playable = mediaUrl(
-                  work.watermarked_url || work.preview_url || work.video_url,
+                  work.video_url ||
+                  files[0];
+                const playable = mediaUrl(rawPlayable as string);
+                // Prefer a real thumbnail; if the only source is a video URL,
+                // derive a poster frame so the card isn't blank.
+                const thumb = mediaUrl(
+                  (work.thumbnail_url as string) ||
+                    posterUrl(mediaUrl(work.preview_url as string) || playable),
                 );
                 const who = text(work.creator_name, 'Creator');
                 const campaign = text(
