@@ -7,8 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AuthFlow from './src/screens/AuthFlow';
 import SplashScreen from './src/screens/SplashScreen';
 import WebShell from './src/screens/WebShell';
-import BrandProfileSetup from './src/screens/BrandProfileSetup';
-import CreatorProfileSetup from './src/screens/CreatorProfileSetup';
+import OnboardingWebView from './src/screens/OnboardingWebView';
 import ApprovalGate from './src/screens/ApprovalGate';
 import { verifySession, type AuthUser } from './src/api';
 import { clearSession, loadSession, saveSession } from './src/session';
@@ -130,23 +129,11 @@ function App(): React.JSX.Element {
       {!session ? (
         <AuthFlow onAuthenticated={handleAuthenticated} />
       ) : (session.profile_completed === false || reopenSetup) &&
-        session.role === 'business' ? (
-        // Onboarding is native for both roles: every native route is gated on
-        // profile_completed, so sending a new user to the web form here meant
-        // their whole first session was the website.
-        <BrandProfileSetup
-          token={session.token}
-          session={session}
-          onDone={() => {
-            setReopenSetup(false);
-            handleProfileComplete();
-          }}
-          onLogout={handleLogout}
-        />
-      ) : (session.profile_completed === false || reopenSetup) &&
-        session.role === 'creator' ? (
-        <CreatorProfileSetup
-          token={session.token}
+        (session.role === 'business' || session.role === 'creator') ? (
+        // Onboarding loads the LIVE website form in a WebView, so the app's
+        // profile-setup is always the exact form the website ships (the native
+        // copies had drifted out of sync). Completion is detected server-side.
+        <OnboardingWebView
           session={session}
           onDone={() => {
             setReopenSetup(false);
