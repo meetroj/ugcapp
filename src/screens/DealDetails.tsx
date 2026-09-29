@@ -534,6 +534,21 @@ function DealDetails({
   // The submit button only renders when tapping it can actually do something.
   const canSubmitWork = !!onSubmitWork || (!!token && !!campaignId);
 
+  // Why the upload button is hidden, in the creator's words — so the
+  // Deliverables tab explains the next step instead of showing a dead blank.
+  // can_submit_content only turns true at "Received — Content in Progress" or
+  // "Revision Requested", so everything before that is a wait on shipment.
+  const submitBlockedReason = (() => {
+    const s = state.toLowerCase();
+    if (s.includes('awaiting shipment') || s.includes('accepted'))
+      return 'Waiting for the brand to ship the product. Once it arrives and you confirm receipt, you can upload your work here.';
+    if (s.includes('transit') || s.includes('shipped'))
+      return 'Your product is on the way. Confirm receipt when it arrives to unlock the upload.';
+    if (s.includes('delivered'))
+      return 'Your product was delivered. Confirm you received it to start uploading your work.';
+    return 'You can upload your work once the deal reaches the content stage.';
+  })();
+
   // ── Deal actions ─────────────────────────────────────────────────────────
   // Everything below moves the deal forward and used to live only on the
   // website's deal room. Each wraps one endpoint, reports the backend's own
@@ -1140,9 +1155,26 @@ function DealDetails({
             {versions.length === 0 ? (
               <View style={styles.card}>
                 <Text style={styles.bodyText}>
-                  Nothing submitted yet. Use the button below to upload your
-                  work.
+                  {deal.can_submit_content
+                    ? 'Nothing submitted yet. Use the button below to upload your work.'
+                    : submitBlockedReason}
                 </Text>
+                {/* When the deal is waiting on the creator to confirm the
+                    product arrived, offer that action right here so they can
+                    unblock the upload without hunting for it. */}
+                {!deal.can_submit_content &&
+                  state.toLowerCase().includes('delivered') && (
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, styles.mt12]}
+                      onPress={handleConfirmReceipt}
+                      accessibilityRole="button"
+                    >
+                      <Glyph name="check" color="#FFFFFF" />
+                      <Text style={styles.primaryBtnText}>
+                        Confirm product received
+                      </Text>
+                    </TouchableOpacity>
+                  )}
               </View>
             ) : (
               versions.map((version, index) => (
@@ -1883,6 +1915,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(12),
     backgroundColor: '#171A5C',
   },
+  mt12: { marginTop: scale(12) },
   primaryBtnText: {
     fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',

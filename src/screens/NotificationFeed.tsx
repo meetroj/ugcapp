@@ -12,6 +12,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -104,6 +105,7 @@ function NotificationFeed({
 }: Props) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [failed, setFailed] = useState(false);
   const slide = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
@@ -124,7 +126,10 @@ function NotificationFeed({
     getNotifications(token)
       .then(setItems)
       .catch(() => setFailed(true))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
   }, [token]);
 
   useEffect(() => {
@@ -274,6 +279,15 @@ function NotificationFeed({
               <ScrollView
                 style={styles.list}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {
+                      setRefreshing(true);
+                      load();
+                    }}
+                  />
+                }
               >
                 {items.map(item => (
                   <TouchableOpacity
