@@ -21,7 +21,15 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBanner, SkeletonList } from '../components/Skeleton';
 import { launchImageLibrary } from 'react-native-image-picker';
-import { ApiError, getShipment, updateShipment, uploadMedia } from '../api';
+import {
+  ApiError,
+  getBusinessCompany,
+  getBusinessProfile,
+  getShipment,
+  requestShipment,
+  updateShipment,
+  uploadMedia,
+} from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -188,6 +196,26 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
   const [slip, setSlip] = useState('');
   const [uploadingSlip, setUploadingSlip] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Request-a-shipment form, mirroring ShipLabelRequest on the backend:
+  // description and weight required, dimensions optional, pickup address
+  // required in full.
+  const [requesting, setRequesting] = useState(false);
+  const [ship, setShip] = useState({
+    description: '',
+    weight: '',
+    length: '',
+    width: '',
+    height: '',
+    full_name: '',
+    phone: '',
+    line1: '',
+    line2: '',
+    city: '',
+    state: '',
+    pincode: '',
+  });
+  const setShipField = (key: keyof typeof ship, value: string) =>
+    setShip(current => ({ ...current, [key]: value }));
 
   const load = useCallback(async () => {
     try {
@@ -244,6 +272,88 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
   }, [token, uploadingSlip]);
 
   /** Sends the tracking details, then refetches so the card updates. */
+  /**
+   * Opens the request form, seeding the pickup address from the brand's own
+   * company record so the common case is a couple of product fields rather
+   * than retyping an address they have already given us.
+   */
+  const openRequest = useCallback(async () => {
+    setRequesting(true);
+    const [profile, company] = await Promise.all([
+      getBusinessProfile(token).catch(() => ({} as Record<string, unknown>)),
+      getBusinessCompany(token).catch(() => ({} as Record<string, unknown>)),
+    ]);
+    const pick = (...values: unknown[]) =>
+      values.map(value => text(value)).find(Boolean) || '';
+    setShip(current => ({
+      ...current,
+      full_name: pick(profile.contact_person, profile.brand_name),
+      phone: pick(profile.phone_number),
+      line1: pick(company.billing_address, profile.billing_address),
+      city: pick(company.city, profile.city),
+      state: pick(company.state, profile.state),
+      pincode: pick(company.pincode, profile.pincode),
+    }));
+  }, [token]);
+
+  /** Everything the backend requires but the form has not been given. */
+  const shipIssues = (): string[] => {
+    const missingFields: string[] = [];
+    if (ship.description.trim().length < 3) missingFields.push('Product description');
+    if (!(Number(ship.weight) > 0)) missingFields.push('Weight in kg');
+    if (!ship.full_name.trim()) missingFields.push('Pickup contact name');
+    if (!/^\d{10}$/.test(ship.phone.replace(/\D/g, '')))
+      missingFields.push('10-digit pickup phone');
+    if (!ship.line1.trim()) missingFields.push('Pickup address');
+    if (!ship.city.trim()) missingFields.push('Pickup city');
+    if (!ship.state.trim()) missingFields.push('Pickup state');
+    if (!/^[1-9][0-9]{5}$/.test(ship.pincode)) missingFields.push('6-digit pincode');
+    return missingFields;
+  };
+
+  const submitRequest = useCallback(async () => {
+    const gaps = shipIssues();
+    if (gaps.length) {
+      Alert.alert('Still needed', gaps.map(item => `•  ${item}`).join('\n'));
+      return;
+    }
+    setSaving(true);
+    try {
+      // The bare campaign id addresses the first (or only) hired creator,
+      // which is the same id every other call on this screen uses.
+      await requestShipment(token, campaignId, {
+        description: ship.description.trim(),
+        weight: Number(ship.weight),
+        dimensions: {
+          length: ship.length ? Number(ship.length) : null,
+          width: ship.width ? Number(ship.width) : null,
+          height: ship.height ? Number(ship.height) : null,
+        },
+        pickup_address: {
+          full_name: ship.full_name.trim(),
+          phone: ship.phone.replace(/\D/g, ''),
+          line1: ship.line1.trim(),
+          line2: ship.line2.trim(),
+          city: ship.city.trim(),
+          state: ship.state.trim(),
+          pincode: ship.pincode,
+          country: 'India',
+        },
+      });
+      setRequesting(false);
+      await load();
+    } catch (error) {
+      Alert.alert(
+        'Could not request',
+        error instanceof Error && error.message
+          ? error.message
+          : 'Please try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [campaignId, load, ship, token]);
+
   const saveTracking = useCallback(async () => {
     if (!tracking.trim() || !slip || !expected || saving) return;
     setSaving(true);
@@ -333,9 +443,18 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
             <View style={styles.noteCard}>
               <Text style={styles.noteTitle}>No shipment requested</Text>
               <Text style={styles.noteText}>
-                Once you request a shipment for this campaign, tracking will
-                appear here.
+                Send us the product and pickup details and our team prepares
+                the label. Tracking then appears here.
               </Text>
+              {/* The screen used to state this and offer no way to do it, so
+                  the brand had to open the website to start the shipment. */}
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={openRequest}
+                accessibilityRole="button"
+              >
+                <Text style={styles.actionBtnText}>Request a shipment</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <>
@@ -487,6 +606,157 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
           )}
         </ScrollView>
       )}
+
+      {/* Request a shipment. Scrolls, because the pickup address makes this
+          taller than the keyboard leaves room for. */}
+      <Modal
+        visible={requesting}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRequesting(false)}
+      >
+        <View style={styles.editBackdrop}>
+          <View style={[styles.editSheet, styles.requestSheet]}>
+            <Text style={styles.editTitle}>Request a shipment</Text>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.editLabel}>What are you sending?</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.description}
+                onChangeText={value => setShipField('description', value)}
+                placeholder="e.g. Vitamin C serum, 30ml"
+                placeholderTextColor="#A9ADC2"
+              />
+
+              <Text style={styles.editLabel}>Weight (kg)</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.weight}
+                onChangeText={value =>
+                  setShipField('weight', value.replace(/[^0-9.]/g, ''))
+                }
+                placeholder="0.5"
+                placeholderTextColor="#A9ADC2"
+                keyboardType="decimal-pad"
+              />
+
+              <Text style={styles.editLabel}>Box size in cm (optional)</Text>
+              <View style={styles.dimRow}>
+                {(['length', 'width', 'height'] as const).map(side => (
+                  <TextInput
+                    key={side}
+                    style={[styles.editInput, styles.dimInput]}
+                    value={ship[side]}
+                    onChangeText={value =>
+                      setShipField(side, value.replace(/\D/g, ''))
+                    }
+                    placeholder={side[0].toUpperCase() + side.slice(1)}
+                    placeholderTextColor="#A9ADC2"
+                    keyboardType="number-pad"
+                  />
+                ))}
+              </View>
+
+              <Text style={styles.requestSection}>Pickup address</Text>
+              <Text style={styles.requestHint}>
+                Where our courier collects the parcel. The creator's delivery
+                address stays with our team and is never shown to you.
+              </Text>
+
+              <Text style={styles.editLabel}>Contact name</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.full_name}
+                onChangeText={value => setShipField('full_name', value)}
+                placeholder="Who the courier asks for"
+                placeholderTextColor="#A9ADC2"
+              />
+
+              <Text style={styles.editLabel}>Phone</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.phone}
+                onChangeText={value =>
+                  setShipField('phone', value.replace(/\D/g, '').slice(0, 10))
+                }
+                placeholder="10 digits"
+                placeholderTextColor="#A9ADC2"
+                keyboardType="phone-pad"
+              />
+
+              <Text style={styles.editLabel}>Address</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.line1}
+                onChangeText={value => setShipField('line1', value)}
+                placeholder="Building, street"
+                placeholderTextColor="#A9ADC2"
+              />
+              <TextInput
+                style={[styles.editInput, styles.editStacked]}
+                value={ship.line2}
+                onChangeText={value => setShipField('line2', value)}
+                placeholder="Area, landmark (optional)"
+                placeholderTextColor="#A9ADC2"
+              />
+
+              <View style={styles.dimRow}>
+                <TextInput
+                  style={[styles.editInput, styles.dimInput]}
+                  value={ship.city}
+                  onChangeText={value => setShipField('city', value)}
+                  placeholder="City"
+                  placeholderTextColor="#A9ADC2"
+                />
+                <TextInput
+                  style={[styles.editInput, styles.dimInput]}
+                  value={ship.state}
+                  onChangeText={value => setShipField('state', value)}
+                  placeholder="State"
+                  placeholderTextColor="#A9ADC2"
+                />
+              </View>
+
+              <Text style={styles.editLabel}>Pincode</Text>
+              <TextInput
+                style={styles.editInput}
+                value={ship.pincode}
+                onChangeText={value =>
+                  setShipField('pincode', value.replace(/\D/g, '').slice(0, 6))
+                }
+                placeholder="6 digits"
+                placeholderTextColor="#A9ADC2"
+                keyboardType="number-pad"
+              />
+            </ScrollView>
+
+            <View style={styles.editActions}>
+              <TouchableOpacity
+                style={styles.editGhost}
+                onPress={() => setRequesting(false)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.editGhostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.editSave}
+                onPress={submitRequest}
+                disabled={saving}
+                accessibilityRole="button"
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.editSaveText}>Request</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Tracking editor. POST /api/shipment/update takes the campaign id, so
           the same call covers both adding and correcting these three. */}
@@ -798,6 +1068,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: scale(10),
     marginTop: scale(18),
+  },
+  // The request form is much taller than the tracking editor, so it is
+  // capped and scrolls rather than running off the top of the screen.
+  requestSheet: { maxHeight: '86%' },
+  editStacked: { marginTop: scale(10) },
+  dimRow: { flexDirection: 'row', gap: scale(10) },
+  dimInput: { flex: 1 },
+  requestSection: {
+    marginTop: scale(20),
+    fontSize: fontScale(13),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  requestHint: {
+    marginTop: scale(4),
+    fontSize: fontScale(11),
+    lineHeight: fontScale(16),
+    color: '#8A8FA8',
   },
   editGhost: {
     flex: 1,
