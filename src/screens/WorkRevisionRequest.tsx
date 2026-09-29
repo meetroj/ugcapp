@@ -140,8 +140,14 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
   const trackWidth = useRef(1);
 
   const source = mediaUrl(
-    work.preview_url || work.watermarked_url || work.video_url,
+    work.preview_url ||
+      work.watermarked_url ||
+      work.video_url ||
+      (Array.isArray(work.work_files) ? work.work_files[0] : undefined),
   );
+  // Before approval the brand only gets a watermark-protected preview, so the
+  // player carries a "UGCad · SAMPLE" overlay. approved work clears the flag.
+  const watermarked = work.watermark_protected !== false && work.status !== 'approved';
 
   const [playing, setPlaying] = useState(false);
 
@@ -265,7 +271,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={[styles.header, { paddingTop: insets.top + scale(10) }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onClose}
@@ -343,6 +349,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
               </View>
             )}
           </TouchableOpacity>
+
+          {watermarked && (
+            <View style={styles.watermark} pointerEvents="none">
+              {Array.from({ length: 4 }).map((_, r) => (
+                <Text key={r} style={styles.watermarkText} numberOfLines={1}>
+                  UGCad · SAMPLE   UGCad · SAMPLE   UGCad · SAMPLE
+                </Text>
+              ))}
+            </View>
+          )}
 
           <View style={styles.timeChip}>
             <Text style={styles.timeChipText}>
@@ -574,8 +590,12 @@ const styles = StyleSheet.create({
   flexGrow: { flex: 1 },
 
   header: {
-    height: scale(60),
+    // No fixed height: the status-bar inset is added on top via paddingTop, so a
+    // fixed 60px box clipped the "N free revisions remaining" sub-line under the
+    // translucent status bar. Let it size to its content instead.
+    minHeight: scale(56),
     paddingHorizontal: scale(10),
+    paddingBottom: scale(10),
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(8),
@@ -616,6 +636,23 @@ const styles = StyleSheet.create({
     borderRadius: scale(14),
     overflow: 'hidden',
     backgroundColor: '#151A33',
+  },
+  watermark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    transform: [{ rotate: '-24deg' }],
+  },
+  watermarkText: {
+    color: 'rgba(255,255,255,0.16)',
+    fontSize: fontScale(15),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    letterSpacing: 1,
   },
   video: { ...StyleSheet.absoluteFill },
   videoFallback: { backgroundColor: '#1A1F3D' },

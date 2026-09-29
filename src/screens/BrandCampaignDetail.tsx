@@ -10,6 +10,7 @@ import {
   Alert,
   Image,
   LayoutAnimation,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -36,6 +37,7 @@ import {
   selectCreator,
 } from '../api';
 import WorkRevisionRequest from './WorkRevisionRequest';
+import Video from 'react-native-video';
 import { scale, fontScale, NAV_CLEARANCE } from '../theme';
 
 type Props = {
@@ -132,6 +134,9 @@ function Icon({
         </>
       )}
       {name === 'play' && <Path d="M9 6.5v11l9-5.5z" fill={color} />}
+      {name === 'download' && (
+        <Path d="M12 4v10m-4-4 4 4 4-4M5 19h14" {...line} />
+      )}
       {name === 'chevron-down' && <Path d="m6 9.5 6 6 6-6" {...line} />}
       {name === 'chevron-up' && <Path d="m6 14.5 6-6 6 6" {...line} />}
       {name === 'copy' && (
@@ -285,6 +290,8 @@ function BrandCampaignDetail({
   // campaign's Work Review tab instead of being bounced to another screen.
   const [revising, setRevising] = useState<Work | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
+  // Which submission's inline video is currently playing (tap to toggle).
+  const [playingWork, setPlayingWork] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
   /** Campaign Progress starts open; the header arrow folds it away. */
   const [progressOpen, setProgressOpen] = useState(true);
@@ -1046,26 +1053,55 @@ function BrandCampaignDetail({
                 </View>
               ) : (
                 work.map(item => {
-                  const thumb = photoUrl(
+                  const videoSrc = photoUrl(
                     item.preview_url ||
-                      item.thumbnail_url ||
-                      item.watermarked_url,
+                      (Array.isArray(item.work_files)
+                        ? item.work_files[0]
+                        : undefined) ||
+                      item.video_url,
                   );
+                  const approved = item.status === 'approved';
+                  const revisionRequested = item.status === 'revision_requested';
+                  // Before approval the brand only sees a watermark-protected
+                  // preview; approval clears the flag and releases the clean file.
+                  const showMark =
+                    !approved && item.watermark_protected !== false;
+                  const isPlaying = playingWork === item.id;
                   return (
                     <View key={item.id} style={styles.workCard}>
-                      <View style={styles.workMedia}>
-                        {thumb ? (
-                          <Image
-                            source={{ uri: thumb }}
+                      <TouchableOpacity
+                        style={styles.workMedia}
+                        activeOpacity={0.9}
+                        onPress={() =>
+                          setPlayingWork(isPlaying ? null : item.id)
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+                      >
+                        {videoSrc ? (
+                          <Video
+                            source={{ uri: videoSrc }}
                             style={styles.workMediaImg}
+                            paused={!isPlaying}
+                            resizeMode="cover"
+                            repeat
                           />
                         ) : (
                           <View style={styles.workMediaFallback} />
                         )}
-                        <View style={styles.playBtn}>
-                          <Icon name="play" color="#15163F" size={18} />
-                        </View>
-                      </View>
+                        {showMark && (
+                          <View style={styles.workMark} pointerEvents="none">
+                            <Text style={styles.workMarkText}>
+                              UGCad · SAMPLE
+                            </Text>
+                          </View>
+                        )}
+                        {!isPlaying && (
+                          <View style={styles.playBtn}>
+                            <Icon name="play" color="#15163F" size={18} />
+                          </View>
+                        )}
+                      </TouchableOpacity>
                       <View style={styles.workBody}>
                         <Text style={styles.workTitle}>
                           {text(item.creator_name, 'Creator')}
@@ -1075,32 +1111,68 @@ function BrandCampaignDetail({
                           {formatDate(item.submitted_at || item.created_at)} ·{' '}
                           {text(item.status, 'submitted').replace(/_/g, ' ')}
                         </Text>
-                        <View style={styles.workActions}>
+                        {revisionRequested && (
+                          <Text style={styles.workHistory}>
+                            Revision requested — the creator's new cut will
+                            replace this once they resubmit.
+                          </Text>
+                        )}
+                        {approved ? (
                           <TouchableOpacity
-                            style={[
-                              styles.workApprove,
-                              approving === item.id && styles.workApproveOff,
-                            ]}
-                            disabled={approving === item.id}
-                            onPress={() => confirmApprove(item)}
+                            style={styles.workDownload}
+                            onPress={() => {
+                              const url = photoUrl(
+                                item.video_url || item.preview_url,
+                              );
+                              if (url) {
+                                Linking.openURL(url).catch(() =>
+                                  Alert.alert(
+                                    'Could not open',
+                                    'The download link is unavailable.',
+                                  ),
+                                );
+                              }
+                            }}
                             accessibilityRole="button"
                           >
-                            {approving === item.id ? (
-                              <ActivityIndicator color="#FFFFFF" size="small" />
-                            ) : (
-                              <Text style={styles.workApproveText}>Approve</Text>
-                            )}
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.reviewBtn}
-                            onPress={() => setRevising(item)}
-                            accessibilityRole="button"
-                          >
-                            <Text style={styles.reviewText}>
-                              Request Revision
+                            <Icon name="download" color="#FFFFFF" size={15} />
+                            <Text style={styles.workDownloadText}>
+                              Download video
                             </Text>
                           </TouchableOpacity>
-                        </View>
+                        ) : (
+                          <View style={styles.workActions}>
+                            <TouchableOpacity
+                              style={[
+                                styles.workApprove,
+                                approving === item.id && styles.workApproveOff,
+                              ]}
+                              disabled={approving === item.id}
+                              onPress={() => confirmApprove(item)}
+                              accessibilityRole="button"
+                            >
+                              {approving === item.id ? (
+                                <ActivityIndicator
+                                  color="#FFFFFF"
+                                  size="small"
+                                />
+                              ) : (
+                                <Text style={styles.workApproveText}>
+                                  Approve
+                                </Text>
+                              )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.reviewBtn}
+                              onPress={() => setRevising(item)}
+                              accessibilityRole="button"
+                            >
+                              <Text style={styles.reviewText}>
+                                Request Revision
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
                       </View>
                     </View>
                   );
@@ -1658,6 +1730,51 @@ const styles = StyleSheet.create({
   },
   workApproveOff: { backgroundColor: '#6FBF8E' },
   workApproveText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  workMark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ rotate: '-20deg' }],
+  },
+  workMarkText: {
+    color: 'rgba(255,255,255,0.22)',
+    fontSize: fontScale(15),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  workHistory: {
+    marginTop: scale(8),
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#B26B00',
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: scale(10),
+    paddingVertical: scale(7),
+    borderRadius: scale(9),
+    overflow: 'hidden',
+  },
+  workDownload: {
+    marginTop: scale(11),
+    height: scale(40),
+    borderRadius: scale(11),
+    backgroundColor: '#4C5BF3',
+    flexDirection: 'row',
+    gap: scale(7),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workDownloadText: {
     fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
