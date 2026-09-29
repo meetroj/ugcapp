@@ -33,7 +33,7 @@ import {
   getCampaignWork,
   selectCreator,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { scale, fontScale, NAV_CLEARANCE } from '../theme';
 
 type Props = {
   token: string;
@@ -630,9 +630,25 @@ function BrandCampaignDetail({
               )}
               {(() => {
                 const bids = Array.isArray(campaign.bids) ? campaign.bids : [];
-                const open = bids.filter(
-                  (b: any) => String(b?.status || 'pending').toLowerCase() !== 'declined',
+                // Hide bids that are declined OR already hired, and the whole
+                // card once a creator is selected — the decision is made.
+                const hiredIds = new Set(
+                  (Array.isArray(campaign.selected_creators)
+                    ? campaign.selected_creators
+                    : [campaign.selected_creator]
+                  )
+                    .filter(Boolean)
+                    .map(String),
                 );
+                const open = bids.filter((b: any) => {
+                  const st = String(b?.status || 'pending').toLowerCase();
+                  return (
+                    st !== 'declined' &&
+                    st !== 'accepted' &&
+                    st !== 'selected' &&
+                    !hiredIds.has(String(b?.creator_id ?? ''))
+                  );
+                });
                 if (!open.length) return null;
                 return (
                   <View style={styles.card}>
@@ -1169,7 +1185,8 @@ const styles = StyleSheet.create({
   },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingBottom: scale(30) },
+  // Clear the floating bottom nav + FAB, or the last card scrolls under them.
+  content: { padding: scale(16), paddingBottom: scale(30) + NAV_CLEARANCE },
   // Skeletons render outside the ScrollView, so they need their own padding.
   loadingContent: { padding: scale(16), gap: scale(12) },
 
