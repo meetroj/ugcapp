@@ -254,17 +254,17 @@ function Reviews({
     };
   }, [isBrand, session.user_id, token]);
 
-  // Prefer the aggregate the backend already stores on the user; fall back to
-  // averaging the loaded reviews so the card is never blank.
+  // Derive everything from the ACTUAL reviews list so the summary can never
+  // disagree with it (the stored aggregate had gone stale — a card showing
+  // "4.5 from 2 reviews" over an empty list). Only if the list is empty do we
+  // fall back to the aggregate, and even then the breakdown stays honest.
   const stats = useMemo(() => {
     const rated = reviews.filter(review => Number(review.rating) > 0);
-    const total = Number(profile.total_reviews) || rated.length;
-    const average =
-      Number(profile.average_rating) ||
-      (rated.length
-        ? rated.reduce((sum, review) => sum + Number(review.rating), 0) /
-          rated.length
-        : 0);
+    const total = rated.length || Number(profile.total_reviews) || 0;
+    const average = rated.length
+      ? rated.reduce((sum, review) => sum + Number(review.rating), 0) /
+        rated.length
+      : Number(profile.average_rating) || 0;
 
     const counts = STAR_BUCKETS.map(
       bucket =>
