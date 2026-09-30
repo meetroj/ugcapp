@@ -19,7 +19,6 @@ import {
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { acceptAgreement, getAgreement } from '../api';
 import { scale, fontScale } from '../theme';
 
@@ -41,7 +40,6 @@ export default function AgreementGate({
   token: string;
   onAccepted: () => void;
 }) {
-  const insets = useSafeAreaInsets();
   const [data, setData] = useState<Agreement | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [atBottom, setAtBottom] = useState(false);
@@ -104,12 +102,7 @@ export default function AgreementGate({
 
   return (
     <View style={styles.overlay}>
-      <View
-        style={[
-          styles.card,
-          { marginTop: insets.top + scale(20), marginBottom: insets.bottom + scale(20) },
-        ]}
-      >
+      <View style={styles.card}>
         <View style={styles.head}>
           <Text style={styles.title}>{data.title}</Text>
           <Text style={styles.sub}>
@@ -185,9 +178,10 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: scale(18),
+    borderRadius: scale(20),
     overflow: 'hidden',
-    maxHeight: '92%',
+    maxHeight: '80%',
+    alignSelf: 'stretch',
   },
   head: {
     paddingHorizontal: scale(20),
