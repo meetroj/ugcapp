@@ -1957,6 +1957,18 @@ export async function confirmScript(
   ) as Promise<{ message?: string; status?: string }>;
 }
 
+/** Publish a draft campaign: submits it for admin approval. */
+export async function submitCampaign(
+  token: string,
+  campaignId: string,
+): Promise<{ message?: string; status?: string }> {
+  return send(
+    token,
+    'POST',
+    `/api/campaigns/${encodeURIComponent(campaignId)}/submit`,
+  ) as Promise<{ message?: string; status?: string }>;
+}
+
 /** Admin-curated creator shortlist for a campaign. */
 export async function getShortlist(
   token: string,

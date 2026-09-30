@@ -35,6 +35,7 @@ import {
   getCampaign,
   getCampaignWork,
   selectCreator,
+  submitCampaign,
 } from '../api';
 import WorkRevisionRequest from './WorkRevisionRequest';
 import Video from 'react-native-video';
@@ -303,6 +304,7 @@ function BrandCampaignDetail({
   const [changeNote, setChangeNote] = useState('');
   // Which bid (by creator id) is being accepted/declined right now.
   const [bidBusy, setBidBusy] = useState('');
+  const [publishBusy, setPublishBusy] = useState(false);
 
   const load = useCallback(async () => {
     // The brief and its submissions fail independently: a campaign with no
@@ -363,6 +365,34 @@ function BrandCampaignDetail({
     },
     [runApprove],
   );
+
+  const handlePublish = useCallback(() => {
+    Alert.alert(
+      'Publish this campaign?',
+      'It goes to our team for review, then to creators. Your wallet is charged the budget + fees on publish.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Publish',
+          onPress: async () => {
+            setPublishBusy(true);
+            try {
+              await submitCampaign(token, campaignId);
+              Alert.alert('Submitted', 'Your campaign was sent for review.');
+              load();
+            } catch (e) {
+              Alert.alert(
+                'Could not publish',
+                e instanceof Error ? e.message : 'Please try again.',
+              );
+            } finally {
+              setPublishBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [campaignId, load, token]);
 
   const handleAcceptBid = useCallback(
     (creatorId: string, who: string) => {
@@ -604,6 +634,28 @@ function BrandCampaignDetail({
         >
           {tab === 0 && (
             <>
+              {/* A draft can't reach creators until it's published for review. */}
+              {String(campaign.status) === 'draft' && (
+                <View style={styles.draftCard}>
+                  <Text style={styles.draftTitle}>This campaign is a draft</Text>
+                  <Text style={styles.draftSub}>
+                    Publish it to send it to our team for review, then on to creators.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.publishBtn}
+                    onPress={handlePublish}
+                    disabled={publishBusy}
+                    accessibilityRole="button"
+                  >
+                    {publishBusy ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.publishBtnText}>Publish Campaign</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
               {String(campaign.status) === 'awaiting_brand_confirmation' && (
                 <View style={styles.scriptCard}>
                   <Text style={styles.scriptTitle}>📝 Your script is ready — review it</Text>
@@ -1352,6 +1404,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFDF4',
     borderWidth: 1,
     borderColor: '#E7D9A0',
+  },
+  draftCard: {
+    marginBottom: scale(12),
+    padding: scale(16),
+    borderRadius: scale(14),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EDEEF6',
+  },
+  draftTitle: {
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  draftSub: {
+    marginTop: scale(4),
+    fontSize: fontScale(12.5),
+    lineHeight: fontScale(18),
+    color: '#5C6079',
+  },
+  publishBtn: {
+    marginTop: scale(12),
+    height: scale(48),
+    borderRadius: scale(12),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  publishBtnText: {
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   scriptTitle: {
     fontSize: fontScale(15),
