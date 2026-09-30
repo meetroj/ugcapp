@@ -1289,6 +1289,19 @@ export async function getMe(token: string): Promise<Record<string, unknown>> {
   return get(token, '/api/auth/me');
 }
 
+/** The current Creator & Brand Agreement + whether this user has accepted it. */
+export async function getAgreement(
+  token: string,
+): Promise<Record<string, any>> {
+  return get(token, '/api/agreement');
+}
+
+/** Record acceptance of the current agreement version (stored server-side, so
+ *  it also clears the gate on the website). */
+export async function acceptAgreement(token: string): Promise<void> {
+  await send(token, 'POST', '/api/agreement/accept');
+}
+
 /* =========================== Brand settings ============================ */
 
 export async function getBusinessProfile(token: string) {

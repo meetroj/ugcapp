@@ -688,14 +688,18 @@ function BrandChatThread({
           </Text>
         </View>
 
-        <TouchableOpacity
-          style={styles.briefBtn}
-          onPress={() => onNavigate('/dashboard/business/post-brief')}
-          accessibilityRole="button"
-        >
-          <Icon name="brief" color="#FFFFFF" size={14} />
-          <Text style={styles.briefText}>Send a Brief</Text>
-        </TouchableOpacity>
+        {/* Only a brand sends briefs — a creator receives them, so this is
+            hidden on the creator side. */}
+        {session.role === 'business' && (
+          <TouchableOpacity
+            style={styles.briefBtn}
+            onPress={() => onNavigate('/dashboard/business/post-brief')}
+            accessibilityRole="button"
+          >
+            <Icon name="brief" color="#FFFFFF" size={14} />
+            <Text style={styles.briefText}>Send a Brief</Text>
+          </TouchableOpacity>
+        )}
 
         {/* Reporting was website-only, which meant the one screen where
             harassment actually happens had no way to flag it. */}
@@ -732,13 +736,11 @@ function BrandChatThread({
           style={styles.flex}
           // iOS resizes the view itself, so 'padding' still works there.
           //
-          // Android is left undefined on purpose. targetSdk 36 + the
-          // edgeToEdgeEnabled flag make edge-to-edge mandatory, and the
-          // manifest's adjustResize then stops shrinking the window — so
-          // 'height' measured a frame that never changed and lifted nothing,
-          // leaving the keyboard over the composer and the action chips.
-          // The composer block pads itself by the real keyboard height below.
-          behavior="padding"
+          // Android MUST be undefined: the composer block already pads itself by
+          // the real keyboard height (see keyboardHeight below). Using 'padding'
+          // here too double-counted the keyboard, pushing the whole thread and
+          // composer off the top so only the keyboard was visible.
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={0}
         >
           <ScrollView

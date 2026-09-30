@@ -215,7 +215,9 @@ function Reviews({
     let active = true;
 
     Promise.allSettled([
-      getReviews(token, session.user_id, isBrand ? 'business' : 'creator'),
+      // Token-based /reviews resolves the current user server-side, so it can't
+      // miss due to a user_id/id mismatch (which left the breakdown at 0%).
+      getReviews(token),
       getMe(token),
     ]).then(async results => {
       if (!active) return;

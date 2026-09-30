@@ -9,6 +9,7 @@ import SplashScreen from './src/screens/SplashScreen';
 import WebShell from './src/screens/WebShell';
 import OnboardingWebView from './src/screens/OnboardingWebView';
 import ApprovalGate from './src/screens/ApprovalGate';
+import AgreementGate from './src/screens/AgreementGate';
 import { verifySession, type AuthUser } from './src/api';
 import { clearSession, loadSession, saveSession } from './src/session';
 
@@ -171,6 +172,22 @@ function App(): React.JSX.Element {
           initialPath={homePathFor(session)}
         />
       )}
+      {/* One-time Creator & Brand Agreement gate, overlaid once an authenticated
+          creator/brand hasn't accepted the current version. Acceptance is stored
+          server-side, so agreeing on the website clears it here too (the gate
+          re-checks with the server and never shows for someone who agreed). */}
+      {session &&
+        (session.role === 'creator' || session.role === 'business') &&
+        session.agreement_accepted !== true && (
+          <AgreementGate
+            token={session.token}
+            onAccepted={() => {
+              const next = { ...session, agreement_accepted: true };
+              setSession(next);
+              saveSession(next);
+            }}
+          />
+        )}
     </SafeAreaProvider>
   );
 }

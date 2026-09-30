@@ -1174,11 +1174,10 @@ function DealDetails({
                     ? 'Nothing submitted yet. Use the button below to upload your work.'
                     : submitBlockedReason}
                 </Text>
-                {/* When the deal is waiting on the creator to confirm the
-                    product arrived, offer that action right here so they can
-                    unblock the upload without hunting for it. */}
-                {!deal.can_submit_content &&
-                  state.toLowerCase().includes('delivered') && (
+                {/* Whenever the creator can confirm receipt (the product has
+                    shipped / has tracking), offer it here with the unboxing
+                    upload — that's what unblocks the work upload. */}
+                {!deal.can_submit_content && canConfirmReceipt && (
                     <TouchableOpacity
                       style={[styles.primaryBtn, styles.mt12]}
                       onPress={handleConfirmReceipt}
@@ -1186,7 +1185,7 @@ function DealDetails({
                     >
                       <Glyph name="check" color="#FFFFFF" />
                       <Text style={styles.primaryBtnText}>
-                        Confirm product received
+                        Upload unboxing &amp; mark received
                       </Text>
                     </TouchableOpacity>
                   )}
