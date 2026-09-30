@@ -94,10 +94,19 @@ function AuthFlow({ onAuthenticated }: Props) {
     email: string;
     password: string;
     phone: string;
+    name: string;
+    website?: string;
   }) => {
     try {
       onAuthenticated(
-        await signUp(values.role, values.email, values.password, values.phone),
+        await signUp(
+          values.role,
+          values.email,
+          values.password,
+          values.phone,
+          values.name,
+          values.website,
+        ),
       );
     } catch (error) {
       Alert.alert(

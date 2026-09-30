@@ -11,6 +11,16 @@ const STROKE = colors.placeholder;
 
 type IconProps = { color?: string; size?: number };
 
+/** Globe / website. */
+export function GlobeIcon({ color = STROKE, size = 20 }: IconProps) {
+  return (
+    <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24" fill="none">
+      <Circle cx={12} cy={12} r={8.5} stroke={color} strokeWidth={1.8} />
+      <Path d="M3.5 12h17M12 3.5c2.5 2.5 2.5 14.5 0 17M12 3.5c-2.5 2.5-2.5 14.5 0 17" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 /** Envelope. */
 export function MailIcon({ color = STROKE, size = 20 }: IconProps) {
   return (

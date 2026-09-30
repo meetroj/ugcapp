@@ -126,6 +126,8 @@ export function signUp(
   email: string,
   password: string,
   phone: string,
+  name?: string,
+  website?: string,
 ) {
   return authRequest('/auth/signup', {
     email: email.trim(),
@@ -133,6 +135,10 @@ export function signUp(
     phone: phone.trim(),
     dial_code: SIGNUP_DIAL_CODE,
     role: role === 'brand' ? 'business' : 'creator',
+    // Sent so the account is created with the real name (brand name for a
+    // business), not an auto-generated handle.
+    ...(name ? { name: name.trim() } : {}),
+    ...(website ? { website: website.trim() } : {}),
   });
 }
 

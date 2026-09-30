@@ -13,12 +13,12 @@ import {
 } from 'react-native';
 import { Text, TextInput } from './Text';
 import { colors, radius, scale, fontScale } from '../theme';
-import { EyeIcon, LockIcon, MailIcon, PhoneIcon } from './icons';
+import { EyeIcon, GlobeIcon, LockIcon, MailIcon, PersonIcon, PhoneIcon } from './icons';
 
 type Props = TextInputProps & {
   label: string;
   /** Picks the leading glyph and turns on the eye toggle for 'lock'. */
-  icon: 'mail' | 'lock' | 'phone';
+  icon: 'mail' | 'lock' | 'phone' | 'person' | 'globe';
   compact?: boolean;
 };
 
@@ -36,6 +36,10 @@ function AuthInput({ label, icon, compact = false, ...inputProps }: Props) {
             <LockIcon />
           ) : icon === 'phone' ? (
             <PhoneIcon />
+          ) : icon === 'person' ? (
+            <PersonIcon />
+          ) : icon === 'globe' ? (
+            <GlobeIcon />
           ) : (
             <MailIcon />
           )}
