@@ -1417,8 +1417,8 @@ export async function submitKyc(
  *
  * Reviews are stored on the reviewed user's own document, so the creator and
  * business paths are the same read — `subject` only picks the URL the caller's
- * role expects. Passing no id hits `/api/reviews`, which the backend currently
- * stubs out with an empty array.
+ * role expects. Passing no id hits `/api/reviews`, which now returns the
+ * signed-in user's own reviews (resolved server-side from the token).
  */
 export async function getReviews(
   token: string,

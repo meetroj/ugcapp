@@ -24,6 +24,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SkeletonBlock } from '../components/Skeleton';
+import ChoiceSheet from '../components/ChoiceSheet';
 import {
   BACKEND_URL,
   getConversations,
@@ -633,35 +634,19 @@ function BrandChatThread({
   }, [attachments.length, token, uploading]);
 
   /** Flags the other party to the moderation team. */
-  const report = useCallback(() => {
-    const who = text(title, 'this user');
-    const reasons = [
-      'Sharing contact details',
-      'Abusive or harassing',
-      'Spam or scam',
-    ];
-    Alert.alert(
-      `Report ${who}?`,
-      'Our moderation team reviews every report. The conversation stays open.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        ...reasons.map(reason => ({
-          text: reason,
-          onPress: async () => {
-            try {
-              await reportUser(token, {
-                reported_user_id: otherUserId,
-                reason,
-              });
-              Alert.alert('Reported', 'Thanks — our team will take a look.');
-            } catch (err: any) {
-              Alert.alert('Could not report', String(err?.message || err));
-            }
-          },
-        })),
-      ],
-    );
-  }, [otherUserId, title, token]);
+  const [reportOpen, setReportOpen] = useState(false);
+  const report = useCallback(() => setReportOpen(true), []);
+  const submitReport = useCallback(
+    async (reason: string) => {
+      try {
+        await reportUser(token, { reported_user_id: otherUserId, reason });
+        setError('Thanks — our team will review this report.');
+      } catch (err: any) {
+        setError(String(err?.message || err) || 'Could not report.');
+      }
+    },
+    [otherUserId, token],
+  );
 
   return (
     <View style={styles.screen}>
@@ -883,7 +868,13 @@ function BrandChatThread({
               styles.dock,
               // Dynamic, so it cannot live in the stylesheet: the value is the
               // measured keyboard height for this device and this moment.
-              Platform.OS === 'android' && { paddingBottom: keyboardHeight },
+              // `endCoordinates.height` is measured from the screen bottom and
+              // already includes the nav-bar inset, so on edge-to-edge Android
+              // padding by the full value floated the composer a nav-bar's
+              // height above the keyboard. Subtract the inset to sit flush.
+              Platform.OS === 'android' && {
+                paddingBottom: Math.max(0, keyboardHeight - insets.bottom),
+              },
             ]}
           >
           {/* Quick actions — the structured cards this role may send. One
@@ -1144,6 +1135,18 @@ function BrandChatThread({
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <ChoiceSheet
+        visible={reportOpen}
+        title={`Report ${text(title, 'this user')}?`}
+        message="Our moderation team reviews every report. The conversation stays open."
+        options={[
+          { label: 'Abusive or harassing', tone: 'destructive', onPress: () => submitReport('Abusive or harassing') },
+          { label: 'Sharing contact details', onPress: () => submitReport('Sharing contact details') },
+          { label: 'Spam or scam', onPress: () => submitReport('Spam or scam') },
+        ]}
+        onClose={() => setReportOpen(false)}
+      />
     </View>
   );
 }
