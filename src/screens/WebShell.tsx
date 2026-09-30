@@ -286,6 +286,13 @@ function WebShell({
     brandApp &&
     purePath === '/dashboard/business/wallet' &&
     !/[?&]amount=/.test(currentPath);
+  // The recharge/checkout handoff (wallet + ?amount=): it falls through to the
+  // WebView for the payment SDK, and the floating bottom nav must NOT sit over
+  // the payment screen.
+  const showingWalletCheckout =
+    brandApp &&
+    purePath === '/dashboard/business/wallet' &&
+    /[?&]amount=/.test(currentPath);
   const showingBrandBids =
     brandApp && purePath === '/dashboard/business/pending-bids';
   const showingBrandWorkReview =
@@ -356,6 +363,8 @@ function WebShell({
     // top of the fields and its own footer action.
     showingBrandPostBrief ||
     showingBrandWorkReview ||
+    // The wallet recharge/payment checkout — the nav must not cover it.
+    showingWalletCheckout ||
     showingReviews ||
     // Creator secondary screens, all reached from the profile menu or a card
     // rather than from a tab, and all carrying their own back arrow.
