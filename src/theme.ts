@@ -187,7 +187,7 @@ export const spacing = {
  * their layout. Only the nav dock — which is absolutely positioned and escapes
  * that padding — adds the inset back itself.
  */
-export const NAV_CLEARANCE = scale(72);
+export const NAV_CLEARANCE = scale(76);
 
 /* ------------------------------------------------------------------ *
  * Typography

@@ -45,6 +45,24 @@ import {
   type AuthUser,
 } from '../api';
 import { scale, fontScale } from '../theme';
+import { CONTENT_STYLES, NICHE_CATEGORIES } from './CreatorProfileSetup';
+
+type Opt = { value: string; label: string };
+// Stored values (what signup saves) ↔ the labels the chips show.
+const labelsOf = (opts: Opt[], values: string[]) =>
+  opts.filter(o => values.includes(o.value)).map(o => o.label);
+const valueOf = (opts: Opt[], label: string) =>
+  opts.find(o => o.label === label)?.value || label;
+const knownValues = (opts: Opt[], ...sources: unknown[]): string[] => {
+  const known = new Set(opts.map(o => o.value));
+  for (const src of sources) {
+    const list = (Array.isArray(src) ? src : src ? [src] : [])
+      .map(String)
+      .filter(v => known.has(v));
+    if (list.length) return list;
+  }
+  return [];
+};
 
 type Props = {
   token: string;
@@ -409,6 +427,20 @@ function CreatorSettings({ token, onBack }: Props) {
           gender: profile.gender || '',
           bodyType: profile.bodyType || '',
           skinTone: profile.skinTone || '',
+          // Same fallbacks signup's rehydrate uses, so older single-value
+          // profiles still show their category selected.
+          contentStyles: knownValues(
+            CONTENT_STYLES,
+            profile.content_styles,
+            profile.content_style,
+            profile.category,
+          ),
+          contentCategories: knownValues(
+            NICHE_CATEGORIES,
+            profile.content_categories,
+            profile.niche,
+            profile.primary_category,
+          ),
           bio: profile.bio || profile.description || '',
           country: profile.country || '',
           state: profile.state || '',
@@ -595,6 +627,19 @@ function CreatorSettings({ token, onBack }: Props) {
         gender: form.gender,
         bodyType: form.bodyType,
         skinTone: form.skinTone,
+        // The same five keys signup writes, so both screens stay in sync.
+        ...(() => {
+          const styles: string[] = form.contentStyles || [];
+          const niches: string[] = form.contentCategories || [];
+          return {
+            content_styles: styles,
+            content_style: styles[0] || '',
+            content_categories: niches,
+            niche: niches[0] || '',
+            category: niches[0] || styles[0] || '',
+            primary_category: niches[0] || styles[0] || '',
+          };
+        })(),
         bio: form.bio,
         country: form.country,
         state: form.state,
@@ -761,6 +806,20 @@ function CreatorSettings({ token, onBack }: Props) {
                 value={form.skinTone || ''}
                 options={SKIN_TONES}
                 onChange={v => set('skinTone', v)}
+              />
+              <MultiChoice
+                label="Content Categories (pick all that apply)"
+                values={labelsOf(NICHE_CATEGORIES, form.contentCategories || [])}
+                options={NICHE_CATEGORIES.map(o => o.label)}
+                onToggle={l =>
+                  toggle('contentCategories', valueOf(NICHE_CATEGORIES, l))
+                }
+              />
+              <MultiChoice
+                label="Content Styles (pick all that apply)"
+                values={labelsOf(CONTENT_STYLES, form.contentStyles || [])}
+                options={CONTENT_STYLES.map(o => o.label)}
+                onToggle={l => toggle('contentStyles', valueOf(CONTENT_STYLES, l))}
               />
               <Field
                 label="Bio"

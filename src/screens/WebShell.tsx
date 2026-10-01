@@ -78,8 +78,6 @@ const THEME_COLOR = '#667eea';
 const NAV_SURFACE = '#15163F';
 const ACTIVE_TINT = '#FFFFFF';
 const INACTIVE_TINT = '#7B7F9E';
-/** Diameter of the active-tab dot under each nav icon. */
-const DOT_SIZE = scale(6);
 // The raised centre button keeps the brand purple so it still stands out.
 const FAB_TINT = '#4C5BF3';
 // Diameter of the raised centre button and the notch it sits in.
@@ -87,9 +85,9 @@ const FAB_SIZE = scale(58);
 // Height of the white pill, and the geometry of the scoop cut out of its top
 // edge. The notch is drawn a little wider than the button so a ring of
 // background shows around it instead of the white touching the purple.
-const NAV_BAR_HEIGHT = scale(62);
+const NAV_BAR_HEIGHT = scale(66);
 // Tab-bar glyphs; the viewBox is 24, so this scales the whole set at once.
-const NAV_ICON_SIZE = scale(26);
+const NAV_ICON_SIZE = scale(22);
 const NAV_RADIUS = scale(26);
 const NOTCH_GAP = scale(6);
 const NOTCH_RADIUS = FAB_SIZE / 2 + NOTCH_GAP;
@@ -1261,20 +1259,13 @@ function AppBottomNav({
         accessibilityState={{ selected: active }}
       >
         <NavIcon name={item.icon} color={color} size={NAV_ICON_SIZE} />
-        {/* Active state is a dot under the icon, not a label. Drawn as an SVG
-            circle rather than a rounded View: at 6dp a View's corner radius
-            lands on a fractional pixel and Android's renderer squares it off,
-            which no borderRadius value reliably fixed. The <Svg> box is always
-            rendered so the row never shifts when the active tab changes; only
-            the circle's fill switches. */}
-        <Svg width={DOT_SIZE} height={DOT_SIZE}>
-          <Circle
-            cx={DOT_SIZE / 2}
-            cy={DOT_SIZE / 2}
-            r={DOT_SIZE / 2}
-            fill={active ? ACTIVE_TINT : 'transparent'}
-          />
-        </Svg>
+        {/* Name under every icon; the active tab is the white, bold one. */}
+        <Text
+          style={[styles.navLabel, { color }, active && styles.navLabelActive]}
+          numberOfLines={1}
+        >
+          {item.label}
+        </Text>
       </TouchableOpacity>
     );
   };
@@ -1292,8 +1283,21 @@ function AppBottomNav({
             icons still lay out underneath, so nothing jumps on first paint. */}
         {!!fabItem && barWidth > 0 && <NavBarShape width={barWidth} />}
         {rowItems.slice(0, splitAt).map(renderItem)}
-        {/* Spacer holding open the gap the centre button sits in. */}
-        {!!fabItem && <View style={styles.fabSlot} />}
+        {/* Equal-width column under the raised centre button, so all five
+            columns share the bar evenly and its label lines up with the rest. */}
+        {!!fabItem && (
+          <View style={styles.fabSlot} pointerEvents="none">
+            <Text
+              style={[
+                styles.navLabel,
+                { color: isActive(fabItem) ? ACTIVE_TINT : INACTIVE_TINT },
+              ]}
+              numberOfLines={1}
+            >
+              {fabItem.label}
+            </Text>
+          </View>
+        )}
         {rowItems.slice(splitAt).map(renderItem)}
       </View>
 
@@ -1368,11 +1372,24 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: scale(5),
+    gap: scale(4),
     height: '100%',
   },
-  // Reserves the centre gap so the four icons sit either side of the button.
-  fabSlot: { width: FAB_SIZE },
+  navLabel: {
+    fontSize: fontScale(10),
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  navLabelActive: { fontWeight: '700' },
+  // Same width as a tab (not a fixed gap) so the five columns are equal; the
+  // label sits on the same line as the other tabs' labels.
+  fabSlot: {
+    flex: 1,
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: scale(12),
+  },
   // Raised centre action, overlapping the top edge of the pill.
   fab: {
     position: 'absolute',

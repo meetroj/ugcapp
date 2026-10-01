@@ -215,11 +215,23 @@ function BrandLogo({
  */
 type FilterKey = 'budget' | 'delivery' | 'sort';
 
+// Same field chain the card's budget label uses. Briefs store the per-video
+// budget as budget_max / per_video_budget — reading only `budget` made every
+// brief ₹0, so the budget filter and "Highest budget" sort did nothing.
 const budgetOf = (c: Campaign) =>
-  Number(c.budget || c.max_budget || c.compensation || 0);
+  Number(
+    c.budget || c.max_budget || c.budget_max || c.per_video_budget || c.compensation || 0,
+  );
 
-const deliveryDaysOf = (c: Campaign) =>
-  Number(c.delivery_days || c.delivery || 0);
+// Days until the brief's delivery deadline. Briefs carry dates, not a
+// `delivery_days` count (that's on bids), so the old read was always 0 and
+// the delivery filters returned nothing.
+const deliveryDaysOf = (c: Campaign) => {
+  const r = c as Record<string, any>;
+  const raw = r.final_delivery_by || r.due_date || r.deadline || r.draft_delivery_by;
+  const ms = raw ? new Date(raw).getTime() - Date.now() : NaN;
+  return Number.isNaN(ms) ? 0 : Math.ceil(ms / 86400000);
+};
 
 const FILTERS: {
   key: FilterKey;

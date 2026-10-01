@@ -186,7 +186,7 @@ const BODY_TYPES = ['Average', 'Slim', 'Athletic', 'Plus Size', 'No Preference']
 const SKIN_TONES = ['Fair', 'Brown', 'Dark', 'No preference'];
 
 /** How the content is made. Mirrors CONTENT_CATEGORIES on the web. */
-const CONTENT_STYLES = [
+export const CONTENT_STYLES = [
   { value: 'testimonial', label: 'Testimonial / Review' },
   { value: 'product_demo', label: 'Product Demo' },
   { value: 'try_on', label: 'Try-On / Haul' },
@@ -203,7 +203,7 @@ const CONTENT_STYLES = [
 ];
 
 /** What the content is ABOUT. The same ten the brand signup uses. */
-const NICHE_CATEGORIES = [
+export const NICHE_CATEGORIES = [
   { value: 'fashion', label: 'Fashion & Apparel' },
   { value: 'beauty', label: 'Beauty & Cosmetics' },
   { value: 'tech', label: 'Technology & Gadgets' },
