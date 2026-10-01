@@ -1378,10 +1378,9 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
   const tomorrowISO = useMemo(() => addDays(todayISO(), 1), []);
   const needsShipping = typeNeedsShipping(form.productType);
 
-  // Whether ANY deliverable wants an edited cut. Without one there is no
-  // separate "final" hand-off — the draft IS the final — so the "Final content
-  // delivery by" field is hidden and the draft date doubles as the deadline.
-  const anyEdited = form.deliverables.some(d => d.editedRequired);
+  // Two dates only when the CREATOR edits: the raw video first, then the edited cut
+  // once the brand approves the raw. Raw-only or UGC.ad-edited briefs get one date.
+  const anyEdited = form.deliverables.some(d => d.editedRequired && d.editedBy !== 'ugc');
 
   const draftDeliverySuggestion = useMemo(
     () => addDays(form.productShippingBy, 7),
@@ -1598,8 +1597,8 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
       } else if (target === 7) {
         if (typeNeedsShipping(form.productType) && !form.productShippingBy)
           m.push('Product shipping date');
-        if (!form.draftDeliveryBy) m.push('Draft delivery date');
-        if (anyEdited && !form.finalDeliveryBy) m.push('Final delivery date');
+        if (!form.draftDeliveryBy) m.push(anyEdited ? 'Raw video date' : 'Delivery date');
+        if (anyEdited && !form.finalDeliveryBy) m.push('Edited video date');
         if (!(budget > 0)) m.push('Budget');
         if (!form.creatorLevel) m.push('Creator level');
         if (!form.qualityTier) m.push('Quality tier');
@@ -1708,7 +1707,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
         }; gender ${form.genderPreference}; city ${form.cityFilter}; niches ${
           form.nicheTags.join(', ') || 'none'
         }`,
-        `Timeline: ship by ${form.productShippingBy}; draft by ${form.draftDeliveryBy}; revisions ${form.revisions}; final by ${(anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy}`,
+        `Timeline: ship by ${form.productShippingBy}; ${anyEdited ? 'raw video' : 'delivery'} by ${form.draftDeliveryBy}; revisions ${form.revisions}${anyEdited ? `; edited video by ${form.finalDeliveryBy}` : ''}`,
         `Budget: ${
           form.budgetMode === 'fixed'
             ? `fixed Rs. ${form.fixedBudget}`
@@ -2670,7 +2669,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                   />
                 )}
                 <DateField
-                  label="Content draft delivery by"
+                  label={anyEdited ? 'Raw video delivery by' : 'Content delivery by'}
                   required
                   value={form.draftDeliveryBy}
                   onChange={v => set('draftDeliveryBy', v)}
@@ -2691,7 +2690,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                 />
                 {anyEdited && (
                   <DateField
-                    label="Final content delivery by"
+                    label="Edited video delivery by"
                     required
                     value={form.finalDeliveryBy}
                     onChange={v => set('finalDeliveryBy', v)}
@@ -2773,8 +2772,8 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                   } · ${form.cityFilter}`}
                 />
                 <ReviewRow label="Ship by" value={form.productShippingBy} />
-                <ReviewRow label="Draft by" value={form.draftDeliveryBy} />
-                {anyEdited && <ReviewRow label="Final by" value={form.finalDeliveryBy} />}
+                <ReviewRow label={anyEdited ? 'Raw video by' : 'Delivery by'} value={form.draftDeliveryBy} />
+                {anyEdited && <ReviewRow label="Edited video by" value={form.finalDeliveryBy} />}
 
                 <View style={styles.summary}>
                   <View style={styles.summaryRow}>
