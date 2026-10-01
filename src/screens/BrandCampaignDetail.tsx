@@ -310,10 +310,7 @@ function BrandCampaignDetail({
     // The brief and its submissions fail independently: a campaign with no
     // submitted work yet is a normal state, so an empty work list must not
     // blank out the brief itself.
-    const [detail, submissions] = await Promise.allSettled([
-      getCampaign(token, campaignId),
-      getCampaignWork(token, campaignId),
-    ]);
+    const [detail] = await Promise.allSettled([getCampaign(token, campaignId)]);
 
     // Leaving `campaign` null on failure is what renders the "Couldn't load
     // this campaign" state below.
@@ -321,13 +318,24 @@ function BrandCampaignDetail({
       setCampaign(detail.value);
     }
 
+    // Without a creator id the backend returns only the LATEST submission on the
+    // brief, so on a multi-creator brief ask for each hired creator's separately.
+    const hired: string[] =
+      detail.status === 'fulfilled' &&
+      Array.isArray(detail.value?.selected_creators)
+        ? detail.value.selected_creators.map(String)
+        : [];
+    const results = await Promise.allSettled(
+      hired.length > 1
+        ? hired.map(id => getCampaignWork(token, campaignId, id))
+        : [getCampaignWork(token, campaignId)],
+    );
+    const seen = new Set<string>();
     setWork(
-      submissions.status === 'fulfilled'
-        ? submissions.value.map((item, index) => ({
-            ...item,
-            id: String(item.id ?? index),
-          }))
-        : [],
+      results
+        .flatMap(r => (r.status === 'fulfilled' ? r.value : []))
+        .map((item, index) => ({ ...item, id: String(item.id ?? index) }))
+        .filter(item => !seen.has(item.id) && !!seen.add(item.id)),
     );
 
     setLoading(false);
@@ -549,6 +557,22 @@ function BrandCampaignDetail({
   );
   const creatorAvatar = photoUrl(
     campaign.creator_photo || campaign.creator_profile_photo,
+  );
+  // Every hired creator, named from their bid. The single-creator card above only
+  // knows the first pick, so a multi-creator brief lists the rest here.
+  const hiredList: { id: string; name: string }[] = (
+    Array.isArray(campaign.selected_creators) ? campaign.selected_creators : []
+  ).map((id: unknown) => {
+    const bid = (Array.isArray(campaign.bids) ? campaign.bids : []).find(
+      (b: any) => String(b?.creator_id) === String(id),
+    );
+    return {
+      id: String(id),
+      name: text(bid?.creator_name || bid?.creator_nickname, 'Creator'),
+    };
+  });
+  const needsShipping = !!(
+    campaign.requires_shipment || campaign.shipment_required
   );
 
   return (
@@ -1002,8 +1026,55 @@ function BrandCampaignDetail({
               {/* Ship Product — only for a physical brief with a creator hired.
                   Opens the native shipment screen (pickup address + Delhivery
                   label), so the brand can ship straight from the app. */}
-              {!!creatorName &&
-                (campaign.requires_shipment || campaign.shipment_required) && (
+              {hiredList.length > 1 ? (
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>
+                    Hired creators ({hiredList.length})
+                  </Text>
+                  {hiredList.map(c => (
+                    <View key={c.id} style={styles.deliverableRow}>
+                      <Text style={styles.deliverableText}>
+                        {c.name}
+                      </Text>
+                      <View style={styles.creatorActions}>
+                        <TouchableOpacity
+                          style={styles.ghostBtn}
+                          onPress={() => onNavigate(`/creator/${c.id}`)}
+                          accessibilityRole="button"
+                        >
+                          <Icon name="person" color="#5C6180" size={14} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.ghostBtn}
+                          onPress={() =>
+                            onOpenThread
+                              ? onOpenThread(c.id, c.name)
+                              : onNavigate('/messages')
+                          }
+                          accessibilityRole="button"
+                        >
+                          <Icon name="chat" color="#5C6180" size={14} />
+                        </TouchableOpacity>
+                        {needsShipping && (
+                          <TouchableOpacity
+                            style={styles.solidBtn}
+                            onPress={() =>
+                              onNavigate(
+                                `/shipment/${campaignId}?creator=${encodeURIComponent(c.id)}`,
+                              )
+                            }
+                            accessibilityRole="button"
+                          >
+                            <Text style={styles.solidText}>📦 Ship</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                !!creatorName &&
+                needsShipping && (
                   <TouchableOpacity
                     style={styles.shipBtn}
                     onPress={() => onNavigate(`/shipment/${campaignId}`)}
@@ -1011,7 +1082,8 @@ function BrandCampaignDetail({
                   >
                     <Text style={styles.shipBtnText}>📦  Ship Product</Text>
                   </TouchableOpacity>
-                )}
+                )
+              )}
 
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Deliverables</Text>

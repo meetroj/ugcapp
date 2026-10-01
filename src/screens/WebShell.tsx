@@ -317,6 +317,8 @@ function WebShell({
   const showingBrandCampaignDetail = brandApp && !!campaignMatch;
   const shipmentMatch = /^\/shipment\/([^/]+)$/.exec(purePath);
   const showingBrandShipmentDetail = brandApp && !!shipmentMatch;
+  // /shipment/<campaign>?creator=<id> targets one hired creator on a multi-creator brief.
+  const shipmentCreator = /[?&]creator=([^&#]+)/.exec(currentPath)?.[1];
   // A creator's public profile: /creator/<id>. The screen fetches by id, so it
   // renders natively from anywhere — the Creators tab just also hands over its
   // directory record as a seed so the header paints without waiting.
@@ -785,6 +787,7 @@ function WebShell({
         <BrandShipmentDetail
           token={token}
           campaignId={shipmentMatch![1]}
+          creatorId={shipmentCreator ? decodeURIComponent(shipmentCreator) : undefined}
           onBack={backTo('/dashboard/business/shipments')}
         />
       ) : showingChat ? (

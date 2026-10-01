@@ -36,6 +36,8 @@ import { scale, fontScale } from '../theme';
 type Props = {
   token: string;
   campaignId: string;
+  /** Which hired creator to ship to on a multi-creator brief (default: the first). */
+  creatorId?: string;
   onBack: () => void;
 };
 
@@ -182,7 +184,9 @@ const CHECKS = [
   { key: 'working_condition', label: 'Working Condition' },
 ];
 
-function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
+function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
+  // "<campaign>~<creator>" addresses one creator's deal on a multi-creator brief.
+  const dealId = creatorId ? `${campaignId}~${creatorId}` : campaignId;
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -220,7 +224,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
 
   const load = useCallback(async () => {
     try {
-      setShipment(await getShipment(token, campaignId));
+      setShipment(await getShipment(token, campaignId, creatorId));
       setMissing(false);
     } catch (error) {
       // A 404 means nothing has been requested yet — a normal state, not an
@@ -233,7 +237,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [campaignId, token]);
+  }, [campaignId, creatorId, token]);
 
   useEffect(() => {
     load();
@@ -346,7 +350,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
       // creator hasn't confirmed their address yet), fall back to the manual
       // request queue so the shipment still gets moving.
       try {
-        const res = await createShipLabel(token, campaignId, payload);
+        const res = await createShipLabel(token, dealId, payload);
         setRequesting(false);
         await load();
         Alert.alert(
@@ -358,7 +362,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
         return;
       } catch (labelErr) {
         // Courier declined — queue it for the ops team instead.
-        await requestShipment(token, campaignId, payload);
+        await requestShipment(token, dealId, payload);
         setRequesting(false);
         await load();
         Alert.alert(
@@ -379,7 +383,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [campaignId, load, ship, token]);
+  }, [dealId, load, ship, token]);
 
   const saveTracking = useCallback(async () => {
     if (!tracking.trim() || !slip || !expected || saving) return;
@@ -387,6 +391,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     try {
       await updateShipment(token, {
         campaign_id: campaignId,
+        creator_id: creatorId,
         tracking_number: tracking.trim(),
         courier_slip: slip,
         expected_delivery: expected,
@@ -404,7 +409,7 @@ function BrandShipmentDetail({ token, campaignId, onBack }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [campaignId, courier, expected, load, saving, slip, token, tracking]);
+  }, [campaignId, courier, creatorId, expected, load, saving, slip, token, tracking]);
 
   const banner = bannerFor(shipment);
   const checklist = (shipment?.checklist || {}) as Record<string, unknown>;

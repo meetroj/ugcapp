@@ -129,11 +129,13 @@ function budgetPair(campaign: Campaign): { spent: string; total: string } {
  * the headcount asked for, then the bids received — whichever the document has.
  */
 function creatorCount(campaign: Campaign): number {
-  if (Array.isArray(campaign.selected_creators)) {
+  if (Array.isArray(campaign.selected_creators) && campaign.selected_creators.length) {
     return campaign.selected_creators.length;
   }
   if (campaign.selected_creator) return 1;
-  if (Number(campaign.creators_needed)) return Number(campaign.creators_needed);
+  // creators_wanted is the field the backend stores; creators_needed is a legacy alias.
+  const wanted = Number(campaign.creators_wanted) || Number(campaign.creators_needed);
+  if (wanted) return wanted;
   if (Array.isArray(campaign.bids)) return campaign.bids.length;
   return Number(campaign.applications) || 0;
 }

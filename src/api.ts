@@ -1105,10 +1105,13 @@ export async function getPendingWork(token: string): Promise<WorkSubmission[]> {
 export async function getCampaignWork(
   token: string,
   campaignId: string,
+  /** On a multi-creator brief, which hired creator's submission to fetch. */
+  creatorId?: string,
 ): Promise<WorkSubmission[]> {
+  const query = creatorId ? `?creator_id=${encodeURIComponent(creatorId)}` : '';
   const data = await get<unknown>(
     token,
-    `/api/work/campaign/${encodeURIComponent(campaignId)}`,
+    `/api/work/campaign/${encodeURIComponent(campaignId)}${query}`,
   );
   // This endpoint returns a SINGLE work-submission object (or {} when there's
   // none), NOT a list or a {submissions:[...]} wrapper — so toList() alone
@@ -1450,8 +1453,11 @@ export async function postReview(
 export async function getShipment(
   token: string,
   shipmentId: string,
+  /** On a multi-creator brief, which hired creator's shipment. */
+  creatorId?: string,
 ): Promise<Record<string, unknown>> {
-  return get(token, `/api/shipment/${encodeURIComponent(shipmentId)}`);
+  const query = creatorId ? `?creator_id=${encodeURIComponent(creatorId)}` : '';
+  return get(token, `/api/shipment/${encodeURIComponent(shipmentId)}${query}`);
 }
 
 /**

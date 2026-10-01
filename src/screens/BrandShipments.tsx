@@ -31,6 +31,9 @@ type Props = {
 
 type Row = {
   campaignId: string;
+  /** One row per hired creator: each gets their own shipment. */
+  creatorId?: string;
+  creatorName?: string;
   title: string;
   budget: number;
   creators: number;
@@ -161,19 +164,38 @@ function BrandShipments({
             campaign.selected_creators.length > 0),
       );
 
-      // The shipment lives on its own endpoint, one call per campaign. A 404
-      // simply means nothing has been requested yet.
+      // One shipment per hired creator, each on its own endpoint call. A 404
+      // simply means nothing has been requested yet. Single-creator briefs keep
+      // the plain (creator-less) call, exactly as before.
+      const pairs = shippable.flatMap(campaign => {
+        const hired = Array.isArray(campaign.selected_creators)
+          ? campaign.selected_creators.map(String)
+          : [];
+        return hired.length > 1
+          ? hired.map((id: string) => ({ campaign, creatorId: id }))
+          : [{ campaign, creatorId: undefined as string | undefined }];
+      });
       const built = await Promise.all(
-        shippable.map(async campaign => {
+        pairs.map(async ({ campaign, creatorId }) => {
           const campaignId = String(campaign.id ?? '');
           let shipment: Record<string, any> | null = null;
           try {
-            shipment = await getShipment(token, campaignId);
+            shipment = await getShipment(token, campaignId, creatorId);
           } catch {
             shipment = null;
           }
+          const bids: Record<string, any>[] = Array.isArray(campaign.bids)
+            ? (campaign.bids as Record<string, any>[])
+            : [];
+          const bid = creatorId
+            ? bids.find(b => String(b?.creator_id) === creatorId)
+            : undefined;
           return {
             campaignId,
+            creatorId,
+            creatorName: bid
+              ? text(bid.creator_name || bid.creator_nickname, 'Creator')
+              : undefined,
             title: text(campaign.title, 'Untitled campaign'),
             budget: Number(campaign.budget || campaign.budget_max) || 0,
             creators: Array.isArray(campaign.selected_creators)
@@ -300,9 +322,15 @@ function BrandShipments({
                 const courier = text(row.shipment?.courier_name);
                 return (
                   <TouchableOpacity
-                    key={row.campaignId}
+                    key={`${row.campaignId}~${row.creatorId ?? ''}`}
                     style={styles.card}
-                    onPress={() => onNavigate(`/shipment/${row.campaignId}`)}
+                    onPress={() =>
+                      onNavigate(
+                        row.creatorId
+                          ? `/shipment/${row.campaignId}?creator=${encodeURIComponent(row.creatorId)}`
+                          : `/shipment/${row.campaignId}`,
+                      )
+                    }
                     accessibilityRole="button"
                   >
                     <View style={styles.cardTop}>
@@ -314,6 +342,7 @@ function BrandShipments({
                       <View style={styles.cardCopy}>
                         <Text style={styles.cardTitle} numberOfLines={1}>
                           {row.title}
+                          {row.creatorName ? ` · ${row.creatorName}` : ''}
                         </Text>
                         <Text style={styles.cardMeta}>
                           Budget: {rupees(row.budget)} · {row.creators}{' '}
