@@ -246,9 +246,14 @@ function BrandWorkReview({
   const confirmApprove = useCallback(
     (work: Work) => {
       const who = text(work.creator_name, 'the creator');
+      const rawStage = work.stage === 'raw';
       Alert.alert(
-        'Approve this work?',
-        `Payment will be released to ${who} and the files unlocked. This cannot be undone.`,
+        rawStage ? 'Approve the raw video?' : 'Approve this work?',
+        rawStage && work.edit_mode === 'creator'
+          ? `${who} will edit it and submit the edited video next. Payment is released when you approve the edited video.`
+          : rawStage && work.edit_mode === 'ugc'
+          ? `Payment will be released to ${who} and UGC.ad's team will edit the video for you. This cannot be undone.`
+          : `Payment will be released to ${who} and the files unlocked. This cannot be undone.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Approve', onPress: () => runApprove(work) },
@@ -391,7 +396,9 @@ function BrandWorkReview({
                           {campaign || 'Submission'}
                         </Text>
                         <View style={styles.pendingChip}>
-                          <Text style={styles.pendingText}>Pending Review</Text>
+                          <Text style={styles.pendingText}>
+                            {work.stage === 'raw' ? 'Raw video' : work.stage === 'edited' ? 'Edited video' : 'Pending Review'}
+                          </Text>
                         </View>
                       </View>
                       <Text style={styles.byline}>
@@ -440,6 +447,26 @@ function BrandWorkReview({
                         </View>
                       </View>
 
+                      {/* Every submitted file (raw AND edited), each playable. */}
+                      {Array.isArray(work.files) && work.files.length > 1 && (
+                        <View style={styles.secondaryRow}>
+                          {work.files.map((f: any) => (
+                            <TouchableOpacity
+                              key={`${f.kind}-${f.url}`}
+                              style={styles.secondaryBtn}
+                              onPress={() => {
+                                setPreviewPaused(false);
+                                setPreviewing({ ...work, watermarked_url: f.url, preview_url: f.url, video_url: f.url });
+                              }}
+                              accessibilityRole="button"
+                            >
+                              <Icon name="play" color="#5C6180" size={14} />
+                              <Text style={styles.secondaryText}>{f.label}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+
                       {/* Confirmed first — approving releases escrow and is
                         final. */}
                       <TouchableOpacity
@@ -456,7 +483,13 @@ function BrandWorkReview({
                         ) : (
                           <>
                             <Icon name="approve" color="#FFFFFF" size={16} />
-                            <Text style={styles.approveText}>Approve</Text>
+                            <Text style={styles.approveText}>
+                              {work.stage === 'raw'
+                                ? work.edit_mode === 'ugc'
+                                  ? 'Approve raw — UGC.ad edits next'
+                                  : 'Approve raw — creator edits next'
+                                : 'Approve'}
+                            </Text>
                           </>
                         )}
                       </TouchableOpacity>

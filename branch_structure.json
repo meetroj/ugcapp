@@ -1,17 +1,20 @@
 {
   "default_branch": "main",
   "branches": [
+    "app-fixes",
     "app-web-sync",
     "main",
     "signup-mobile-number"
   ],
   "parent": {
+    "app-fixes": "main",
     "app-web-sync": "main",
     "main": null,
     "signup-mobile-number": "main"
   },
   "order": [
     "main",
+    "app-fixes",
     "app-web-sync",
     "signup-mobile-number"
   ]

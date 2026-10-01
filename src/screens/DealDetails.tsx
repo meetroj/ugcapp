@@ -424,12 +424,15 @@ function DealDetails({
 
   const campaignId = String(campaign.id || deal.campaign_id || '');
 
-  // Does this brief owe a finished cut on top of the raw footage? Any ONE deliverable
-  // row asking for it is enough. A brief saved before the field existed reads false,
-  // so its submit flow is the single-file one it has always been.
-  const needsEdited =
-    Array.isArray(campaign.deliverable_items) &&
-    campaign.deliverable_items.some((d: any) => d && d.edited_required);
+  // Raw → edited flow (brief wants an edited cut): one file per stage. The raw video
+  // goes first; once the brand approves it the creator uploads the edited video
+  // (creator edits) or UGC.ad's editors take over (nothing more to upload).
+  const editFlow = deal.edit_flow || null;
+  const stage: 'raw' | 'edited' | null =
+    editFlow?.stage === 'raw' || editFlow?.stage === 'edited' ? editFlow.stage : null;
+  const stageLabel =
+    stage === 'raw' ? 'raw video' : stage === 'edited' ? 'edited video' : 'work';
+  const stageDue = stage === 'raw' ? editFlow?.raw_due : stage === 'edited' ? editFlow?.edited_due : null;
 
   /**
    * The built-in submit flow: pick a video, push it through the generic
@@ -461,21 +464,6 @@ function DealDetails({
     return url;
   };
 
-  /** Says which file to pick next, so the two-file flow cannot be picked blind.
-   *  Resolves false when the creator backs out. */
-  const confirmStep = (title: string, message: string) =>
-    new Promise<boolean>(resolve => {
-      Alert.alert(
-        title,
-        message,
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Choose file', onPress: () => resolve(true) },
-        ],
-        { cancelable: false },
-      );
-    });
-
   const handleSubmitWork = async () => {
     if (onSubmitWork) {
       onSubmitWork();
@@ -485,54 +473,24 @@ function DealDetails({
       return;
     }
     try {
-      if (needsEdited) {
-        // Two files, picked one at a time - the mobile equivalent of the web's two
-        // upload zones. Bail out silently on cancel at any step; nothing is submitted
-        // until BOTH files are in hand, so a half-finished flow leaves no trace.
-        if (
-          !(await confirmStep(
-            'Edited file',
-            'This brief asks for a finished cut as well as the raw footage. Pick the EDITED file first.',
-          ))
-        ) {
-          return;
-        }
-        const edited = await pickAndUpload();
-        if (!edited) {
-          return;
-        }
-        if (
-          !(await confirmStep(
-            'Raw file',
-            'Now pick the RAW footage the cut was made from.',
-          ))
-        ) {
-          return;
-        }
-        const raw = await pickAndUpload();
-        if (!raw) {
-          return;
-        }
-        await submitWork(token, campaignId, {
-          // Edited first: work_files[0] is the primary video the backend watermarks
-          // and the brand's review screen plays, so the raw footage must not lead.
-          work_files: [edited, raw],
-          edited_files: [edited],
-          raw_files: [raw],
-        });
-      } else {
-        const url = await pickAndUpload();
-        if (!url) {
-          return;
-        }
-        await submitWork(token, campaignId, { work_files: [url] });
+      const url = await pickAndUpload();
+      if (!url) {
+        return;
       }
+      await submitWork(token, campaignId, {
+        work_files: [url],
+        ...(stage === 'raw' ? { raw_files: [url] } : {}),
+        ...(stage === 'edited' ? { edited_files: [url] } : {}),
+      });
       // Refresh the deal so the submitted version card appears immediately,
       // instead of asking the creator to pull-to-refresh.
       onChanged?.();
       Alert.alert(
-        'Work submitted',
-        'Your work was sent to the brand for review — it now shows under Deliverables.',
+        stage === 'raw' ? 'Raw video submitted' : stage === 'edited' ? 'Edited video submitted' : 'Work submitted',
+        stage === 'raw'
+          ? 'Your raw video was sent to the brand. Once they approve it, ' +
+              (editFlow?.mode === 'ugc' ? "you're paid and UGC.ad edits it." : 'you can upload the edited video.')
+          : 'Your work was sent to the brand for review — it now shows under Deliverables.',
       );
     } catch (error) {
       Alert.alert(
@@ -1192,7 +1150,7 @@ function DealDetails({
               </View>
             ) : (
               versions.map((version, index) => (
-                <View key={version.version ?? index} style={styles.card}>
+                <View key={`${version.stage || ''}${version.version ?? index}`} style={styles.card}>
                   <View style={styles.deliverHead}>
                     <View style={styles.deliverNum}>
                       <Text style={styles.deliverNumText}>
@@ -1200,9 +1158,11 @@ function DealDetails({
                       </Text>
                     </View>
                     <Text style={styles.deliverTitle}>
-                      {String(
-                        version.title || version.asset_type || 'Final Video',
-                      )}
+                      {version.stage === 'raw'
+                        ? 'Raw video'
+                        : version.stage === 'edited'
+                        ? 'Edited video'
+                        : String(version.title || version.asset_type || 'Final Video')}
                     </Text>
                     <View
                       style={[
@@ -1286,6 +1246,19 @@ function DealDetails({
               ))
             )}
 
+            {deal.current_state === 'Raw Approved — UGC.ad Editing' && (
+              <View style={styles.card}>
+                <Text style={styles.bodyText}>
+                  Your raw video was approved. UGC.ad's team is editing it — nothing more to upload.
+                </Text>
+              </View>
+            )}
+
+            {deal.can_submit_content && canSubmitWork && !!stageDue && (
+              <Text style={styles.bodyText}>
+                {stage === 'raw' ? 'Raw video' : 'Edited video'} due by {longDate(stageDue)}
+              </Text>
+            )}
             {deal.can_submit_content && canSubmitWork && (
               <TouchableOpacity
                 style={styles.primaryBtn}
@@ -1300,7 +1273,7 @@ function DealDetails({
                   <>
                     <Glyph name="upload" color="#FFFFFF" />
                     <Text style={styles.primaryBtnText}>
-                      Upload / Submit Work
+                      {stage ? `Upload ${stageLabel}` : 'Upload / Submit Work'}
                     </Text>
                   </>
                 )}
