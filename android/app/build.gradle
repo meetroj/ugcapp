@@ -1,5 +1,10 @@
 apply plugin: "com.android.application"
-apply plugin: "org.jetbrains.kotlin.android"
+// AGP 9.0+ ships built-in Kotlin support and registers the "kotlin" extension itself,
+// which collides with an explicit apply here ("Cannot add extension with name 'kotlin'").
+// Guard it so this keeps working on both older AGP (needs the explicit apply) and 9.0+.
+if (project.extensions.findByName('kotlin') == null) {
+    apply plugin: "org.jetbrains.kotlin.android"
+}
 apply plugin: "com.facebook.react"
 
 /**

@@ -164,6 +164,7 @@ const OBJECTIVES = [
   'Comparison',
   'Sale promotion',
   'Customer education',
+  'Lead generation',
   'Other',
 ];
 const DELIVERABLE_TYPES = [
@@ -174,6 +175,7 @@ const DELIVERABLE_TYPES = [
   'Static post',
   'Carousel post',
   'Story set (3-5 frames)',
+  'Amazon listing video',
 ];
 const ASPECTS = ['9:16', '1:1', '16:9', '4:5'];
 const CTAS = ['Visit website', 'Use code', 'Swipe up', 'Follow brand', 'None'];
@@ -1349,21 +1351,22 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
     };
   }, [token]);
 
-  // `budget` is what ONE creator is paid — it feeds per_video_budget/budget_max.
-  // The wallet holds it for every creator the brief hires, so everything below
-  // multiplies by the count, exactly as the web wizard does.
+  // `budget` is the PER-VIDEO amount — it feeds per_video_budget/budget_max. The
+  // backend holds it for every deliverable asset AND every creator the brief hires
+  // (campaign_slot_budget x campaign_creators_wanted), so this preview must multiply
+  // by both the same way or it understates what publishing will actually reserve.
   const budget =
     Number(form.budgetMode === 'fixed' ? form.fixedBudget : form.budgetMax) ||
     0;
   const creatorsCount = Math.max(1, Number(form.creatorsWanted) || 1);
-  const totalBudget = budget * creatorsCount;
-  const commission = Math.round(totalBudget * COMMISSION_RATE);
   // Total assets requested = sum of every deliverable row's quantity, the same
   // count escrow uses, so the tier shown here matches the debit.
   const totalDeliverables = form.deliverables.reduce(
     (sum, item) => sum + Math.max(1, Number(item.quantity) || 1),
     0,
   );
+  const totalBudget = budget * totalDeliverables * creatorsCount;
+  const commission = Math.round(totalBudget * COMMISSION_RATE);
   const listingFee = listingFeeFor(creatorsCount, totalDeliverables);
   const totalDebit = totalBudget + commission + listingFee;
   const paidAdsSelected = form.platforms.some(p =>
@@ -2775,11 +2778,22 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
 
                 <View style={styles.summary}>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Creator payout</Text>
+                    <Text style={styles.summaryLabel}>Budget per video</Text>
                     <Text style={styles.summaryValue}>
                       ₹{budget.toLocaleString('en-IN')}
                     </Text>
                   </View>
+                  {(totalDeliverables > 1 || creatorsCount > 1) && (
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>
+                        Total videos ({totalDeliverables} x {creatorsCount}{' '}
+                        creator{creatorsCount === 1 ? '' : 's'})
+                      </Text>
+                      <Text style={styles.summaryValue}>
+                        ₹{totalBudget.toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                  )}
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>
                       Platform commission ({COMMISSION_RATE * 100}%)

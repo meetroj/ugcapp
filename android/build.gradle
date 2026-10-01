@@ -5,7 +5,14 @@ buildscript {
         compileSdkVersion = 37
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"
-        kotlinVersion = "2.2.0"
+        // 2.2.10, not 2.2.0: something elsewhere in the build graph (the RN Gradle
+        // plugin's own included build) pulls in kotlin-gradle-plugin 2.2.10 and wins
+        // Gradle's version conflict resolution regardless of what's pinned here or in
+        // a library's own buildscript block — so this must match that actual resolved
+        // version, or @react-native-async-storage/async-storage's own version table
+        // picks a KSP release built for 2.2.0 and fails ("ksp-2.2.0-2.0.2 is too old
+        // for kotlin-2.2.10").
+        kotlinVersion = "2.2.10"
     }
     repositories {
         google()
@@ -14,7 +21,11 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        // Pinned to match $kotlinVersion — left unversioned this resolved a newer
+        // transitive Kotlin Gradle Plugin (2.2.10) than the KSP version some
+        // libraries (e.g. @react-native-async-storage/async-storage) pin against
+        // (ksp-2.2.0-2.0.2), which only works with kotlin-gradle-plugin 2.2.0.
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
     }
 }
 

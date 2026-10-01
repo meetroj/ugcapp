@@ -45,6 +45,8 @@ type Comment = {
 
 /** PRD Section 8: the first 2 revisions on a deal are free. */
 const FREE_REVISION_LIMIT = 2;
+/** INR charged for each revision beyond the free limit (₹300 of this goes to the creator). */
+const PAID_REVISION_FEE = 500;
 /** The backend rejects anything outside 1-5 items. */
 const MAX_ITEMS = 5;
 
@@ -578,8 +580,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
 
         {freeLeft === 0 && (
           <Text style={styles.feeWarn}>
-            The first {FREE_REVISION_LIMIT} revisions are free. This one is
-            charged to your wallet.
+            The first {FREE_REVISION_LIMIT} revisions are free. This one costs
+            ₹{PAID_REVISION_FEE} (₹300 of it goes to the creator), charged to
+            your wallet.
+          </Text>
+        )}
+        {freeLeft === 1 && (
+          <Text style={styles.feeWarn}>
+            This is your last free revision — make sure it covers everything.
+            Revisions after this cost ₹{PAID_REVISION_FEE} each (₹300 goes to
+            the creator).
           </Text>
         )}
       </ScrollView>
