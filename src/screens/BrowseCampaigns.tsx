@@ -316,11 +316,21 @@ export default function BrowseCampaigns({
   const loadCampaigns = useCallback(() => {
     getCampaigns(token, { status: 'active' })
       .then(list => {
+        // A multi-creator brief stays active while it has open slots — but a creator
+        // already hired on it shouldn't be offered it to bid on again.
+        const me = String(session?.user_id || '');
         setCampaigns(
-          list.map((c, i) => ({
-            ...c,
-            id: String(c.id || c.campaign_id || i),
-          })),
+          list
+            .filter(
+              c =>
+                !(Array.isArray(c.selected_creators) ? c.selected_creators : [])
+                  .map(String)
+                  .includes(me),
+            )
+            .map((c, i) => ({
+              ...c,
+              id: String(c.id || c.campaign_id || i),
+            })),
         );
         setFailed(false);
       })
@@ -334,7 +344,7 @@ export default function BrowseCampaigns({
     getUnreadCount(token)
       .then(setNotifications)
       .catch(() => {});
-  }, [token]);
+  }, [session?.user_id, token]);
 
   useEffect(() => loadCampaigns(), [loadCampaigns]);
 

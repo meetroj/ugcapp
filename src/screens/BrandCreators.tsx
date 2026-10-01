@@ -303,10 +303,14 @@ function ReelRow({
   const [dragging, setDragging] = useState(false);
   // A single loop's width. Drift wraps here; 0 until we have tiles to measure.
   const loopWidth = creators.length * TILE_STRIDE;
+  // Only a row wider than the screen drifts and needs the second copy for its
+  // seamless wrap. A short row (one or two creators) showed every creator twice
+  // side by side, which read as duplicate creators.
+  const loops = loopWidth > Dimensions.get('window').width;
 
   useEffect(() => {
     // Nothing to drift if the row is paused, empty, or short enough to fit.
-    if (!active || dragging || !loopWidth) return;
+    if (!active || dragging || !loops) return;
 
     const timer = setInterval(() => {
       const next =
@@ -322,7 +326,7 @@ function ReelRow({
     }, TICK_MS);
 
     return () => clearInterval(timer);
-  }, [active, dragging, loopWidth, reverse]);
+  }, [active, dragging, loopWidth, loops, reverse]);
 
   // Both rows open flush against the left edge. The reversed row can still
   // drift backwards from 0: the wrap below adds a loop when the offset goes
@@ -353,7 +357,7 @@ function ReelRow({
       }}
     >
       {/* Two copies back to back — see the note above on the seamless wrap. */}
-      {[0, 1].map(copy =>
+      {(loops ? [0, 1] : [0]).map(copy =>
         creators.map(creator => (
           <ReelTile
             key={`${copy}-${creator.id}`}
