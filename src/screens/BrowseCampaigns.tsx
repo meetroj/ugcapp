@@ -877,13 +877,25 @@ function SubmitBid({
   onSubmitted: () => void;
 }) {
   const [amount, setAmount] = useState('');
+  const [rawAmount, setRawAmount] = useState('');
+  const [editedAmount, setEditedAmount] = useState('');
   const [days, setDays] = useState('');
   const [proposal, setProposal] = useState('');
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState('');
+  // The creator (not UGC.ad's team) cuts the edited file, so they quote raw + edited separately.
+  const split = (
+    Array.isArray(campaign.deliverable_items) ? campaign.deliverable_items : []
+  ).some(
+    (d: any) => d?.edited_required && (d?.edited_by || 'creator') === 'creator',
+  );
+  const total = split
+    ? (Number(rawAmount) || 0) + (Number(editedAmount) || 0)
+    : Number(amount) || 0;
   const submit = async () => {
-    if (!amount || !days || !proposal.trim()) {
-      setMessage('Please complete all three fields.');
+    const pricesFilled = split ? !!rawAmount && !!editedAmount : !!amount;
+    if (!pricesFilled || !days || !proposal.trim()) {
+      setMessage('Please complete all fields.');
       return;
     }
     setSending(true);
@@ -893,8 +905,11 @@ function SubmitBid({
       // which the backend does not serve: every bid 404'd and the creator was
       // told to "try again" on a request that could never succeed.
       await placeBid(token, campaign.id, {
-        amount: Number(amount),
-        bid_amount: Number(amount),
+        amount: total,
+        bid_amount: total,
+        ...(split
+          ? { raw_amount: Number(rawAmount), edited_amount: Number(editedAmount) }
+          : {}),
         delivery_days: Number(days),
         proposal,
         message: proposal,
@@ -928,16 +943,45 @@ function SubmitBid({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <BidField label="Bid Amount (₹)" icon="wallet">
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="numeric"
-            placeholder="Enter your bid amount"
-            placeholderTextColor="#9BA0B8"
-            style={styles.bidInput}
-          />
-        </BidField>
+        {split ? (
+          <>
+            <BidField label="Payout for raw video (₹)" icon="wallet">
+              <TextInput
+                value={rawAmount}
+                onChangeText={setRawAmount}
+                keyboardType="numeric"
+                placeholder="e.g. 1000"
+                placeholderTextColor="#9BA0B8"
+                style={styles.bidInput}
+              />
+            </BidField>
+            <BidField label="Payout for edited video (₹)" icon="wallet">
+              <TextInput
+                value={editedAmount}
+                onChangeText={setEditedAmount}
+                keyboardType="numeric"
+                placeholder="e.g. 1000"
+                placeholderTextColor="#9BA0B8"
+                style={styles.bidInput}
+              />
+            </BidField>
+            <Text style={styles.fieldLabel}>
+              This brief needs you to edit the video too. Total bid: ₹
+              {total.toLocaleString('en-IN')}
+            </Text>
+          </>
+        ) : (
+          <BidField label="Bid Amount (₹)" icon="wallet">
+            <TextInput
+              value={amount}
+              onChangeText={setAmount}
+              keyboardType="numeric"
+              placeholder="Enter your bid amount"
+              placeholderTextColor="#9BA0B8"
+              style={styles.bidInput}
+            />
+          </BidField>
+        )}
         <BidField label="Estimated Delivery (days)" icon="calendar">
           <TextInput
             value={days}

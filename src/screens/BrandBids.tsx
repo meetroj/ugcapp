@@ -481,6 +481,12 @@ function BrandBids({
                                 <Text style={styles.statLabel}>
                                   Price / video
                                 </Text>
+                                {bid.raw_amount != null && (
+                                  <Text style={styles.statLabel}>
+                                    Raw {rupees(bid.raw_amount)} + Edited{' '}
+                                    {rupees(bid.edited_amount)}
+                                  </Text>
+                                )}
                               </View>
                               {!!bid.delivery_days && (
                                 <View style={styles.statCol}>
