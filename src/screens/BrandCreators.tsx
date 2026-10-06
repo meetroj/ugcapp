@@ -86,7 +86,42 @@ const photoUrl = (path: unknown) => {
 // frequently .mp4, so the tile checks this before choosing a poster image.
 const isVideo = (uri: string | null) =>
   !!uri &&
-  (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
+  !/\.(jpe?g|png|gif|webp|avif|svg|bmp|heic)(?:[?#]|$)/i.test(uri) &&
+  (/\.(mp4|mov|webm|m4v|avi|mkv|3gp)(?:[?#]|$)/i.test(uri) ||
+    /\/video\/upload\//i.test(uri));
+
+const creatorVideoUrl = (creator: Creator): string | null => {
+  const explicit = text(creator.portfolio_video);
+  if (explicit) return explicit;
+  if (isVideo(creator.portfolio_preview || null)) return creator.portfolio_preview || null;
+  const portfolio = Array.isArray(creator.portfolio) ? creator.portfolio : [];
+  for (const item of portfolio) {
+    const url =
+      typeof item === 'string'
+        ? item
+        : item && typeof item === 'object'
+        ? text(
+            (item as Record<string, unknown>).video_url ||
+              (item as Record<string, unknown>).videoUrl ||
+              (item as Record<string, unknown>).link ||
+              (item as Record<string, unknown>).original_url ||
+              (item as Record<string, unknown>).url,
+          )
+        : '';
+    if (isVideo(url)) return url;
+  }
+  return null;
+};
+
+const cloudinaryVideoPoster = (uri: string | null): string => {
+  if (!uri) return '';
+  const match = uri.match(
+    /^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i,
+  );
+  if (!match) return '';
+  const rest = match[2].replace(/\.(mp4|mov|webm|m4v|avi|mkv|3gp)(\?.*)?$/i, '.jpg');
+  return `${match[1]}so_0/${rest}`;
+};
 
 // A STILL poster frame for a video, so a list of dozens of creators renders as
 // cheap cached <Image>s instead of dozens of live players. Mounting a real
@@ -194,13 +229,17 @@ function ReelTile({
   creator: Creator;
   onPress: () => void;
 }) {
-  const media = photoUrl(creator.portfolio_preview);
+  const videoUrl = creatorVideoUrl(creator);
+  const previewUrl = text(creator.portfolio_preview);
+  const media = photoUrl(
+    previewUrl && !isVideo(previewUrl) ? previewUrl : videoUrl,
+  );
   const avatar = photoUrl(creator.profile_photo);
   const name = text(creator.name || creator.nickname, 'Creator');
   const category = text(creator.primary_category);
   const rate = text(creator.budget_range);
-  const video = isVideo(media);
-  const poster = videoPoster(media);
+  const video = !!videoUrl;
+  const poster = cloudinaryVideoPoster(videoUrl) || (media && !video ? media : '');
 
   return (
     <TouchableOpacity
@@ -230,7 +269,7 @@ function ReelTile({
             </Text>
           </View>
         )}
-        {video && poster && (
+        {video && (
           <View style={styles.reelPlay}>
             <Icon name="play" color="#FFFFFF" size={14} />
           </View>
@@ -442,7 +481,24 @@ function CreatorPeekSheet({
   // No reviews yet shows the level instead of "0.0", which would read as a bad
   // score rather than an absent one.
   const ratingValue = reviews ? `${rating.toFixed(1)} (${reviews})` : level;
-  const clips = (Array.isArray(creator.portfolio) ? creator.portfolio : [])
+  const clips = Array.from(
+    new Set(
+      [
+        creatorVideoUrl(creator),
+        ...(Array.isArray(creator.portfolio) ? creator.portfolio : []).map(item =>
+          typeof item === 'string'
+            ? item
+            : item && typeof item === 'object'
+            ? text(
+                (item as Record<string, unknown>).video_url ||
+                  (item as Record<string, unknown>).videoUrl ||
+                  (item as Record<string, unknown>).url,
+              )
+            : '',
+        ),
+      ].filter((url): url is string => !!url),
+    ),
+  )
     .map(photoUrl)
     .filter(Boolean)
     .slice(0, 6) as string[];
@@ -557,7 +613,7 @@ function CreatorPeekSheet({
                     {/* Still poster, not a live player — the modal used to mount
                         up to 3 videos on top of the marquee's players. */}
                     {(() => {
-                      const p = videoPoster(uri);
+                      const p = cloudinaryVideoPoster(uri) || videoPoster(uri);
                       return p ? (
                         <>
                           <Image source={{ uri: p }} style={styles.peekClipMedia} />

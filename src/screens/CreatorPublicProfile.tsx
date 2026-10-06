@@ -69,7 +69,8 @@ const photoUrl = (path: unknown) => {
 
 const isVideo = (uri: string | null) =>
   !!uri &&
-  (/\.(mp4|mov|webm|m4v)(\?|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
+  !/\.(jpe?g|png|gif|webp|avif|svg|bmp|heic)(?:[?#]|$)/i.test(uri) &&
+  (/\.(mp4|mov|webm|m4v|avi|mkv|3gp)(?:[?#]|$)/i.test(uri) || /\/video\/upload\//i.test(uri));
 
 // Still poster frame for a video (Cloudinary `so_0` JPG), so the Videos tab
 // shows cheap cached images and only mounts a real player when a clip is
@@ -102,6 +103,7 @@ const itemUrl = (item: any): string => {
     typeof item === 'string'
       ? [item]
       : [
+          item.video_url,
           item.url,
           item.videoUrl,
           item.link,
@@ -271,7 +273,7 @@ function VideoCard({
     <View style={styles.videoCard}>
       <Pressable
         style={styles.videoFrame}
-        onPress={() => isVideo(item.url) && poster && setPlaying(p => !p)}
+        onPress={() => isVideo(item.url) && setPlaying(p => !p)}
       >
         {failed || !item.url ? (
           // Matches the web's "Media unavailable" placeholder rather than a
@@ -301,6 +303,11 @@ function VideoCard({
               <Icon name="play" color="#FFFFFF" size={11} />
             </View>
           </>
+        ) : isVideo(item.url) ? (
+          <View style={styles.videoMissing}>
+            <Icon name="play" color="#B9BDD4" size={22} />
+            <Text style={styles.videoMissingText}>Tap to play video</Text>
+          </View>
         ) : (
           <Image
             source={{ uri: item.url }}
@@ -419,7 +426,10 @@ function CreatorPublicProfile({
       : Array.isArray(seed?.portfolio)
       ? seed!.portfolio
       : [];
-    return (source as any[])
+    const portfolio = seed?.portfolio_video
+      ? [...(source as any[]), seed!.portfolio_video]
+      : (source as any[]);
+    return portfolio
       .map(item => {
         const url = itemUrl(item);
         const meta = typeof item === 'string' ? ({} as any) : item;

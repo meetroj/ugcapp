@@ -1187,6 +1187,7 @@ export type DirectoryCreator = {
   public_creator_id?: string;
   primary_category?: string;
   portfolio_preview?: string;
+  portfolio_video?: string;
   portfolio?: string[];
   profile_photo?: string | null;
   average_rating?: number;
