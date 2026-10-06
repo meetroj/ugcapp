@@ -84,6 +84,14 @@ const videoPoster = (uri: string | null): string => {
   return '';
 };
 
+const playableVideoUrl = (uri: string): string => {
+  if (!/^https?:\/\/res\.cloudinary\.com\//i.test(uri) || !/\/video\/upload\//i.test(uri)) {
+    return uri;
+  }
+  if (/\/video\/upload\/f_mp4,vc_h264,/i.test(uri)) return uri;
+  return uri.replace('/video/upload/', '/video/upload/f_mp4,vc_h264,q_auto:good/');
+};
+
 /** ₹ with Indian digit grouping, matching the web page's `inr()`. */
 const inr = (value: number) => `₹${Number(value).toLocaleString('en-IN')}`;
 
@@ -284,7 +292,7 @@ function VideoCard({
           </View>
         ) : isVideo(item.url) && playing ? (
           <Video
-            source={{ uri: item.url }}
+            source={{ uri: playableVideoUrl(item.url) }}
             style={styles.videoMedia}
             resizeMode="cover"
             repeat
