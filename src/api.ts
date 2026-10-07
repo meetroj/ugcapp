@@ -11,7 +11,7 @@
  */
 export const BACKEND_URL = __DEV__
   ? 'http://localhost:8000'
-  : 'https://backend-chq9.onrender.com';
+  : 'https://app.ugcad.io';
 
 export type AuthUser = {
   user_id: string;
