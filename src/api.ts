@@ -944,7 +944,7 @@ export type Campaign = {
 
 /** Normalizes Mongo's `_id` into the `id` every screen keys off. */
 function withId(c: Record<string, unknown>): Campaign {
-  return { ...c, id: String(c.id || c._id || '') } as Campaign;
+  return { ...c, id: String(c.id || c.campaign_id || c._id || '') } as Campaign;
 }
 
 /**
@@ -1099,6 +1099,18 @@ export type WorkSubmission = {
 export async function getPendingWork(token: string): Promise<WorkSubmission[]> {
   const data = await get<unknown>(token, '/api/work/pending-review');
   return toList<WorkSubmission>(data, 'submissions');
+}
+
+/**
+ * Every submission across the brand's campaigns, one row per (campaign,
+ * creator), in ALL statuses — what the website's Work Review tabs show. Approved
+ * rows carry the clean files; the rest carry watermark-safe previews.
+ */
+export async function getWorkReview(
+  token: string,
+): Promise<Array<Record<string, any>>> {
+  const data = await get<unknown>(token, '/api/business/work-review');
+  return toList<Record<string, any>>(data, 'items');
 }
 
 /** Submissions against one campaign. */
@@ -1371,7 +1383,7 @@ export async function getWallet(token: string): Promise<Wallet> {
 }
 
 export async function rechargeWallet(token: string, amount: number) {
-  return send(token, 'POST', '/api/business/wallet/recharge', { amount });
+  return send<WalletPaymentOrder>(token, 'POST', '/api/business/wallet/recharge', { amount, gateway: 'razorpay' });
 }
 
 /* ============================== Earnings =============================== */
@@ -2094,4 +2106,20 @@ export async function savePrivacyPrefs(
   privacy: PrivacyPrefs,
 ): Promise<void> {
   await send(token, 'PUT', '/api/profile/preferences', { privacy });
+}
+
+export type WalletPaymentOrder = {
+  gateway: string;
+  order_id: string;
+  key_id?: string;
+  amount: number;
+  currency: string;
+};
+export type WalletPaymentResult = {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+};
+export function verifyWalletPayment(token: string, result: WalletPaymentResult) {
+  return send<{ success: boolean }>(token, 'POST', '/api/payments/verify', result);
 }

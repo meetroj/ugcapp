@@ -1,11 +1,14 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Brand campaigns — the native replacement for the web
  * /dashboard/business/all-campaigns page. Lists the brand's campaigns from
  * GET /api/campaigns with status tabs. Read-only: opening a campaign or
  * posting a brief hands off to the existing web flow.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  FlatList,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -240,6 +243,7 @@ function BrandCampaigns({
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   // Active is the default view: it's the list a brand needs most often.
   const [tab, setTab] = useState<string>('active');
+  const listRef = useRef<FlatList<Campaign>>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // Separates "no campaigns yet" from "the list could not be loaded".
@@ -261,18 +265,22 @@ function BrandCampaigns({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 
-  const visible = useMemo(() => {
-    const statuses = TABS.find(item => item.key === tab)?.statuses;
-    // Only reachable if `tab` somehow holds a key no longer in TABS.
-    if (!statuses) return campaigns;
-    return campaigns.filter(campaign =>
-      statuses.includes(String(campaign.status)),
-    );
-  }, [campaigns, tab]);
+  const groups = useMemo(() => Object.fromEntries(TABS.map(item => [
+    item.key,
+    item.statuses.length
+      ? campaigns.filter(campaign => item.statuses.includes(String(campaign.status)))
+      : campaigns,
+  ])), [campaigns]);
+  const visible = groups[tab] || campaigns;
+
+  const selectTab = useCallback((key: string) => {
+    setTab(key);
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, []);
 
   return (
     <View style={styles.screen}>
@@ -284,23 +292,10 @@ function BrandCampaigns({
         />
       </View>
       <View style={styles.sheet}>
-        <ScrollView
-          contentContainerStyle={styles.page}
-          showsVerticalScrollIndicator={false}
-          stickyHeaderIndices={[0]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                load();
-              }}
-            />
-          }
-        >
           <View style={styles.stickyTop}>
             <ScrollView
               horizontal
+              keyboardShouldPersistTaps="always"
               showsHorizontalScrollIndicator={false}
               style={styles.tabsBar}
               contentContainerStyle={styles.tabs}
@@ -308,11 +303,13 @@ function BrandCampaigns({
               {TABS.map(item => {
                 const active = tab === item.key;
                 return (
-                  <TouchableOpacity
+                  <Pressable
                     key={item.key}
                     style={[styles.tab, active && styles.tabActive]}
-                    onPress={() => setTab(item.key)}
-                    accessibilityRole="button"
+                    onPress={() => selectTab(item.key)}
+                    accessibilityRole="tab"
+                    accessibilityLabel={`Filter: ${item.label}`}
+                    accessibilityState={{ selected: active }}
                   >
                     <Text
                       style={[styles.tabText, active && styles.tabTextActive]}
@@ -322,17 +319,29 @@ function BrandCampaigns({
                     <View
                       style={[styles.tabDot, { backgroundColor: item.dot }]}
                     />
-                  </TouchableOpacity>
+                  </Pressable>
                 );
               })}
             </ScrollView>
           </View>
-
-          {loading ? (
-            <View style={styles.content}>
-              <SkeletonCampaignList count={4} />
-            </View>
-          ) : !visible.length ? (
+        <FlatList
+          ref={listRef}
+          data={loading ? [] : visible}
+          keyExtractor={campaign => campaign.id}
+          extraData={tab}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={[styles.page, styles.content]}
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={5}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={() => {
+              setRefreshing(true);
+              load();
+            }} />
+          }
+          ListEmptyComponent={loading ? <SkeletonCampaignList count={4} /> : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>
                 {failed ? "Couldn't load campaigns" : 'Nothing here yet'}
@@ -345,9 +354,9 @@ function BrandCampaigns({
                   : 'No campaigns in this state right now.'}
               </Text>
             </View>
-          ) : (
-            <View style={styles.content}>
-              {visible.map(campaign => {
+          )}
+          renderItem={({ item: campaign }) => {
+
                 const status = String(campaign.status || '');
                 const chip = STATUS_STYLE[status] || {
                   bg: '#EEEFF4',
@@ -425,10 +434,9 @@ function BrandCampaigns({
                     </View>
                   </TouchableOpacity>
                 );
-              })}
-            </View>
-          )}
-        </ScrollView>
+
+          }}
+        />
       </View>
     </View>
   );
@@ -449,8 +457,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   page: { paddingBottom: scale(96) + NAV_CLEARANCE },
-  // Header and filters travel together as one sticky block, so the tabs stay
-  // reachable while a long campaign list scrolls under them.
+  // Filters stay outside the list so scrolling never intercepts their taps.
   stickyTop: { backgroundColor: '#F7F8FC' },
 
   tabsBar: { flexGrow: 0, flexShrink: 0 },
@@ -459,7 +466,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(7),
-    height: scale(38),
+    minHeight: scale(44),
     paddingHorizontal: scale(16),
     borderRadius: scale(19),
     backgroundColor: '#FFFFFF',

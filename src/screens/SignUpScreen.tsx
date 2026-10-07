@@ -1,6 +1,7 @@
+import { Alert } from '../components/AppAlert';
 /** "Create account" screen: role choice, email + mobile + password, Google alternative. */
 import React, { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
 import RoleSelector, { type Role } from '../components/RoleSelector';
@@ -52,8 +53,6 @@ type Props = {
     email: string;
     password: string;
     phone: string;
-    name: string;
-    website?: string;
   }) => Promise<void>;
   /**
    * Google sign-in. The button only renders when this is provided.
@@ -69,24 +68,12 @@ type Props = {
 
 export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) {
   const [role, setRole] = useState<Role>('creator');
-  const [name, setName] = useState('');
-  const [website, setWebsite] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const isBrand = role === 'brand';
 
   const submit = async () => {
-    if (!name.trim()) {
-      Alert.alert(
-        isBrand ? 'Add your brand name' : 'Add your name',
-        isBrand
-          ? 'Enter your brand name so creators see it on your campaigns.'
-          : 'Enter your name.',
-      );
-      return;
-    }
     if (!email.trim() || !phone.trim() || !password || loading) return;
     if (!isValidPhone(phone)) {
       Alert.alert(
@@ -109,8 +96,6 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) 
         email,
         password,
         phone: normalizePhone(phone),
-        name: name.trim(),
-        website: isBrand ? website.trim() || undefined : undefined,
       });
     } finally {
       setLoading(false);
@@ -121,30 +106,7 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) 
     <>
       <RoleSelector value={role} onChange={setRole} compact />
 
-      {/* Name is captured here so the account isn't created with a random
-          handle. For a brand it's the brand name creators see on campaigns. */}
-      <AuthInput
-        label={isBrand ? 'Brand name' : 'Full name'}
-        icon="person"
-        placeholder={isBrand ? 'e.g. Acme Cosmetics' : 'Your name'}
-        value={name}
-        onChangeText={setName}
-        compact
-      />
-
-      {isBrand && (
-        <AuthInput
-          label="Website (optional)"
-          icon="globe"
-          placeholder="https://yourbrand.com"
-          keyboardType="url"
-          autoCapitalize="none"
-          value={website}
-          onChangeText={setWebsite}
-          compact
-        />
-      )}
-
+      {/* No name here: creators and brands give it in the profile form. */}
       <AuthInput
         label="Email"
         icon="mail"

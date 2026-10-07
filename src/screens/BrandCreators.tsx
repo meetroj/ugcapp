@@ -1,19 +1,13 @@
+import { reconcileDirectory, visibleCreatorRow, type RowLayout } from '../creatorDirectoryPerformance';
+import { useLiveEffect } from "../liveUpdates";
 /**
- * Browse creators — the native replacement for the web
- * /dashboard/business/browse-creator page. Renders the directory from
- * GET /api/business/creator-directory as two horizontal rows of 9:16 reel
- * tiles: each creator's portfolio_preview plays muted and looping, with the
- * name / category / rate line underneath. The rows drift on their own (in
- * opposite directions) and can also be dragged by hand — see ReelRow.
- * Read-only: inviting a creator still opens the existing web flow.
- *
- * Video playback uses react-native-video, the same native player the deal and
- * work-review screens use. It replaced an inline-HTML web player, which was
- * subject to the browser autoplay policy: on device the tiles sat on their
- * loading spinner instead of ever playing.
+ * Brand creator directory. Rows are virtualized and swipeable; no JS-driven marquee.
+ * One visible preview decoder is mounted across the whole screen. Original uploads
+ * are loaded only when explicitly requested, and live data refreshes keep rows mounted.
  */
 import React, {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -21,6 +15,8 @@ import React, {
 } from 'react';
 import {
   Animated,
+  AppState,
+  FlatList,
   Dimensions,
   Easing,
   Image,
@@ -33,11 +29,13 @@ import {
   View,
 } from 'react-native';
 import { Text, TextInput } from '../components/Text';
-import type { ScrollViewInstance } from 'react-native';
+
 import Svg, { Circle, Path } from 'react-native-svg';
+import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
 import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, getCreatorDirectory } from '../api';
+import { previewOf } from '../mediaPreview';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -55,6 +53,13 @@ type Props = {
 
 type Creator = Record<string, any> & { id: string };
 
+// One decoder for the entire directory, mounted only in the vertically visible row.
+const PREVIEW_BUFFER = {
+  minBufferMs: 1000, maxBufferMs: 3000,
+  bufferForPlaybackMs: 350, bufferForPlaybackAfterRebufferMs: 700,
+};
+const ROW_PADDING = scale(16);
+
 // Tile geometry. Roughly 42% of the screen puts two full tiles plus a sliver
 // of the third on screen, which reads as a scrollable row rather than a grid.
 const GRID_GAP = scale(12);
@@ -67,12 +72,8 @@ const FOOTER_HEIGHT = scale(46);
 // width the drift wraps on.
 const TILE_STRIDE = TILE_WIDTH + GRID_GAP;
 
-// The rows drift on a timer rather than an Animated loop so a drag can take
-// over mid-travel without fighting a running animation.
-const TICK_MS = 16;
-const DRIFT_PER_TICK = 0.35;
-// How long a row stays still after the user lets go before drifting again.
-const RESUME_DELAY_MS = 2000;
+// Playback resumes only after a gesture settles; no per-frame JS scroll commands.
+const SETTLE_MS = 200;
 
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -218,48 +219,105 @@ function Icon({
 }
 
 /**
- * One reel tile. Renders the creator's portfolio video in a WebView, or the
- * still image / initial when there is no video. `active` is driven by the
- * grid's scroll position so only the reels on screen actually play.
+ * Memoized card: a poster by default and one native preview when selected.
+ * Original uploads require an explicit play tap; unavailable small clips never
+ * silently start full-resolution downloads while the user scrolls.
  */
-function ReelTile({
+const ReelTile = React.memo(function ReelTileContent({
   creator,
-  onPress,
+  onOpen,
+  onRequestPlay,
+  index,
+  play,
+  allowOriginal,
 }: {
   creator: Creator;
-  onPress: () => void;
+  onOpen: (creator: Creator) => void;
+  onRequestPlay: (index: number) => void;
+  index: number;
+  allowOriginal: boolean;
+  /** True for the few tiles currently in the middle of the screen. */
+  play: boolean;
 }) {
+  // Upstream's lookup finds a clip anywhere in the portfolio, not just the preview.
   const videoUrl = creatorVideoUrl(creator);
   const previewUrl = text(creator.portfolio_preview);
-  const media = photoUrl(
-    previewUrl && !isVideo(previewUrl) ? previewUrl : videoUrl,
-  );
+  const media = photoUrl(videoUrl || previewUrl);
   const avatar = photoUrl(creator.profile_photo);
   const name = text(creator.name || creator.nickname, 'Creator');
   const category = text(creator.primary_category);
   const rate = text(creator.budget_range);
   const video = !!videoUrl;
-  const poster = cloudinaryVideoPoster(videoUrl) || (media && !video ? media : '');
+  // Prefer the small preview, but uploads are playable even before a preview exists.
+  const small = video ? previewOf(media) : null;
+  const [smallFailed, setSmallFailed] = useState(false);
+  const [clipFailed, setClipFailed] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
+  const [ready, setReady] = useState(false);
+  const useSmall = !!small && !clipFailed;
+  const playbackUrl = useSmall ? small!.clip : allowOriginal ? media : null;
+  const source = useMemo(() => ({ uri: playbackUrl || '', bufferConfig: PREVIEW_BUFFER }), [playbackUrl]);
+  // A photo preview the creator chose beats a generated frame.
+  const photoPreview = previewUrl && !isVideo(previewUrl) ? photoUrl(previewUrl) : '';
+  const poster = small && !smallFailed
+    ? small.poster
+    : photoPreview || cloudinaryVideoPoster(media) || videoPoster(media) || avatar;
+  const showClip = video && play && !!playbackUrl && !videoFailed;
+
+  useEffect(() => {
+    setSmallFailed(false);
+    setClipFailed(false);
+    setVideoFailed(false);
+    setReady(false);
+  }, [media]);
+  useEffect(() => { setReady(false); }, [showClip, playbackUrl]);
 
   return (
     <TouchableOpacity
       style={styles.tile}
-      onPress={onPress}
+      onPress={() => onOpen(creator)}
       activeOpacity={0.9}
       accessibilityRole="button"
       accessibilityLabel={`${name}, ${category || 'creator'}`}
     >
       <View style={styles.reel}>
         {poster ? (
-          // A STILL poster (video frame or image). No live player per tile —
-          // that is what ANR'd the app. Real playback opens on the full profile.
-          <Image source={{ uri: poster }} style={styles.reelMedia} />
+          // The picture is always there: it shows while a clip loads and for
+          // every tile that isn't one of the few playing.
+          <Image
+            source={{ uri: poster }}
+            style={styles.reelMedia}
+            onError={() => setSmallFailed(true)}
+          />
         ) : (
           <View style={styles.reelEmpty}>
             <Text style={styles.reelEmptyText}>
               {name.charAt(0).toUpperCase()}
             </Text>
           </View>
+        )}
+
+        {showClip && (
+          <Video
+            key={playbackUrl}
+            source={source}
+            style={[styles.reelClip, ready ? styles.clipReady : styles.clipLoading]}
+            resizeMode="cover"
+            repeat
+            muted
+            // Texture view, because a surface view ignores opacity and would
+            // flash black over the picture until the first frame.
+            viewType={ViewType.TEXTURE}
+            maxBitRate={800000}
+            progressUpdateInterval={1000}
+            reportBandwidth={false}
+            playInBackground={false}
+            playWhenInactive={false}
+            disableFocus
+            ignoreSilentSwitch="ignore"
+            onReadyForDisplay={() => setReady(true)}
+            onError={() => useSmall ? setClipFailed(true) : setVideoFailed(true)}
+          />
         )}
 
         {!!text(creator.level_label) && (
@@ -269,10 +327,13 @@ function ReelTile({
             </Text>
           </View>
         )}
-        {video && (
-          <View style={styles.reelPlay}>
+        {video && !(showClip && ready) && (
+          <TouchableOpacity style={styles.reelPlay}
+            accessibilityRole="button" accessibilityLabel={`Play ${name}'s preview`}
+            hitSlop={scale(8)}
+            onPress={event => { event.stopPropagation(); setVideoFailed(false); onRequestPlay(index); }}>
             <Icon name="play" color="#FFFFFF" size={14} />
-          </View>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -309,105 +370,67 @@ function ReelTile({
       </View>
     </TouchableOpacity>
   );
-}
+});
 
-/**
- * One horizontal row of reels that drifts on its own and can still be dragged.
- *
- * The list is rendered twice back to back. When the drift passes the end of the
- * first copy the offset jumps back by exactly that width — the second copy is
- * showing the same tiles at that moment, so the seam is invisible and the row
- * reads as an endless loop.
- *
- * Touching the row stops the drift (otherwise it would fight the finger) and it
- * resumes a couple of seconds after release. `scrollEventThrottle` keeps the
- * saved offset in step with a manual drag, so the drift picks up from where the
- * user left it rather than snapping back.
- */
-function ReelRow({
-  creators,
-  active,
-  reverse,
-  onOpen,
-}: {
+
+/** Swipeable, virtualized row. Scrolling releases the decoder until settling. */
+const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen }: {
   creators: Creator[];
-  /** False while the tab is off screen, so off-screen reels don't play. */
   active: boolean;
-  /** Second row drifts the other way, so the two aren't visually in lockstep. */
-  reverse?: boolean;
+  onActivate: () => void;
   onOpen: (creator: Creator) => void;
 }) {
-  const ref = useRef<ScrollViewInstance>(null);
-  const offset = useRef(0);
-  const [dragging, setDragging] = useState(false);
-  // A single loop's width. Drift wraps here; 0 until we have tiles to measure.
-  const loopWidth = creators.length * TILE_STRIDE;
-  // Only a row wider than the screen drifts and needs the second copy for its
-  // seamless wrap. A short row (one or two creators) showed every creator twice
-  // side by side, which read as duplicate creators.
-  const loops = loopWidth > Dimensions.get('window').width;
-
-  useEffect(() => {
-    // Nothing to drift if the row is paused, empty, or short enough to fit.
-    if (!active || dragging || !loops) return;
-
-    const timer = setInterval(() => {
-      const next =
-        offset.current + (reverse ? -DRIFT_PER_TICK : DRIFT_PER_TICK);
-      // Wrap in both directions so the reversed row loops just as cleanly.
-      offset.current =
-        next >= loopWidth
-          ? next - loopWidth
-          : next < 0
-          ? next + loopWidth
-          : next;
-      ref.current?.scrollTo({ x: offset.current, animated: false });
-    }, TICK_MS);
-
-    return () => clearInterval(timer);
-  }, [active, dragging, loopWidth, loops, reverse]);
-
-  // Both rows open flush against the left edge. The reversed row can still
-  // drift backwards from 0: the wrap below adds a loop when the offset goes
-  // negative, which lands on the identical second copy, so travelling left is
-  // seamless without having to start a whole loop in.
-  useEffect(() => {
-    offset.current = 0;
-    ref.current?.scrollTo({ x: 0, animated: false });
-  }, [reverse, loopWidth]);
-
+  const [scrolling, setScrolling] = useState(false);
+  const [playingSlot, setPlayingSlot] = useState<number | null>(null);
+  const [requestedSlot, setRequestedSlot] = useState<number | null>(null);
+  const settling = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const creatorRef = useRef(creators);
+  creatorRef.current = creators;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60, minimumViewTime: 150 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { isViewable: boolean; index?: number | null }[] }) => {
+    const slots = viewableItems.filter(item => item.isViewable && item.index != null)
+      .map(item => item.index!).sort((a, b) => a - b);
+    setPlayingSlot(current => current != null && slots.includes(current) ? current : (
+      slots.find(index => {
+        const creator = creatorRef.current[index];
+        return creator && (!!creator.portfolio_video || isVideo(photoUrl(creator.portfolio_preview)));
+      }) ?? null
+    ));
+    setRequestedSlot(current => current != null && slots.includes(current) ? current : null);
+  }).current;
+  const stop = useCallback(() => {
+    if (settling.current) clearTimeout(settling.current);
+    setScrolling(true);
+  }, []);
+  const settle = useCallback(() => {
+    if (settling.current) clearTimeout(settling.current);
+    settling.current = setTimeout(() => { settling.current = null; setScrolling(false); }, SETTLE_MS);
+  }, []);
+  useEffect(() => () => { if (settling.current) clearTimeout(settling.current); }, []);
+  const rowIdentity = useMemo(() => creators.map(creator => creator.id).join('|'), [creators]);
+  useEffect(() => { setPlayingSlot(null); setRequestedSlot(null); }, [rowIdentity]);
+  const requestPlay = useCallback((index: number) => {
+    onActivate();
+    setRequestedSlot(index);
+    setPlayingSlot(index);
+    setScrolling(false);
+  }, [onActivate]);
+  const renderItem = useCallback(({ item, index }: { item: Creator; index: number }) => (
+    <ReelTile creator={item} index={index} onOpen={onOpen} onRequestPlay={requestPlay}
+      play={active && !scrolling && playingSlot === index} allowOriginal={requestedSlot === index} />
+  ), [active, scrolling, playingSlot, requestedSlot, onOpen, requestPlay]);
   if (!creators.length) return null;
-
-  return (
-    <ScrollView
-      ref={ref}
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.row}
-      scrollEventThrottle={16}
-      onScroll={event => {
-        offset.current = event.nativeEvent.contentOffset.x;
-      }}
-      onTouchStart={() => setDragging(true)}
-      onScrollBeginDrag={() => setDragging(true)}
-      onScrollEndDrag={() => {
-        // Momentum can still be running, so wait before drifting again.
-        setTimeout(() => setDragging(false), RESUME_DELAY_MS);
-      }}
-    >
-      {/* Two copies back to back — see the note above on the seamless wrap. */}
-      {(loops ? [0, 1] : [0]).map(copy =>
-        creators.map(creator => (
-          <ReelTile
-            key={`${copy}-${creator.id}`}
-            creator={creator}
-            onPress={() => onOpen(creator)}
-          />
-        )),
-      )}
-    </ScrollView>
-  );
-}
+  return <FlatList horizontal data={creators} renderItem={renderItem}
+    keyExtractor={creator => creator.id}
+    extraData={`${active}-${scrolling}-${playingSlot}-${requestedSlot}`}
+    initialNumToRender={3} maxToRenderPerBatch={3} windowSize={3}
+    getItemLayout={(_, index) => ({ length: TILE_STRIDE, offset: ROW_PADDING + index * TILE_STRIDE, index })}
+    viewabilityConfig={viewabilityConfig} onViewableItemsChanged={onViewableItemsChanged}
+    showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}
+    onScrollBeginDrag={() => { onActivate(); stop(); }} onScrollEndDrag={settle}
+    onMomentumScrollBegin={stop} onMomentumScrollEnd={settle}
+    keyboardShouldPersistTaps="handled" />;
+});
 
 /** One "Price / Rating / Deliverables / Location" row inside the peek sheet. */
 function PeekRow({
@@ -674,38 +697,75 @@ function BrandCreators({
   // best-match ordered, which is what the endpoint defaults to anyway.
   const sort = 'best_match';
   const [query, setQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const deferredQuery = useDeferredValue(query);
+  const [activeRow, setActiveRow] = useState(0);
+  const activeRowRef = useRef(0);
+  const [verticalScrolling, setVerticalScrolling] = useState(false);
+  const viewport = useRef({ height: 0, offset: 0 });
+  const rowLayouts = useRef<Array<RowLayout | undefined>>([]);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(false);
+  const request = useRef(0);
+  const pending = useRef<string | null>(null);
+  const activateRow = useCallback((index: number) => {
+    if (activeRowRef.current !== index) { activeRowRef.current = index; setActiveRow(index); }
+  }, []);
+  const activateFirst = useCallback(() => activateRow(0), [activateRow]);
+  const activateSecond = useCallback(() => activateRow(1), [activateRow]);
+  const chooseVisibleRow = useCallback(() => {
+    activateRow(visibleCreatorRow(rowLayouts.current, viewport.current.offset, viewport.current.height));
+  }, [activateRow]);
+  const stopVertical = useCallback(() => {
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    setVerticalScrolling(true);
+  }, []);
+  const settleVertical = useCallback(() => {
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      settleTimer.current = null; chooseVisibleRow(); setVerticalScrolling(false);
+    }, SETTLE_MS);
+  }, [chooseVisibleRow]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; if (settleTimer.current) clearTimeout(settleTimer.current); };
+  }, []);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      setForeground(state === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
+
 
   const load = useCallback(async () => {
+    if (pending.current === token) return;
+    pending.current = token;
+    const current = ++request.current;
     try {
-      // getCreatorDirectory accepts both the bare array the endpoint sends and
-      // a `{creators: []}` wrapper, so neither shape can blank the row.
       const list = await getCreatorDirectory(token, sort);
-      setCreators(
-        list.map((creator, index) => ({
-          ...creator,
-          id: String(creator.id ?? index),
-        })) as Creator[],
-      );
+      if (!mounted.current || current !== request.current) return;
+      const next = list.map((creator, index) => ({ ...creator, id: String(creator.id ?? index) })) as Creator[];
+      setCreators(previous => reconcileDirectory(previous, next));
     } catch {
-      // Backend unreachable — keep whatever is on screen; pull-to-refresh
-      // retries the real request.
+      // Keep loaded rows and playback intact on a failed background refresh.
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (current === request.current) {
+        pending.current = null;
+        if (mounted.current) { setLoading(false); setRefreshing(false); }
+      }
     }
   }, [sort, token]);
 
-  useEffect(() => {
-    setLoading(true);
-    load();
-  }, [load]);
+  useLiveEffect(() => { load(); }, [load]);
 
   // Search is client-side: the directory endpoint takes filters, not a text
   // query, and the list is small enough to filter in place.
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = deferredQuery.trim().toLowerCase();
     if (!needle) return creators;
     return creators.filter(creator =>
       [
@@ -718,7 +778,12 @@ function BrandCreators({
         .filter(Boolean)
         .some(field => String(field).toLowerCase().includes(needle)),
     );
-  }, [creators, query]);
+  }, [creators, deferredQuery]);
+  const rows = useMemo(() => [
+    visible.slice(0, Math.ceil(visible.length / 2)),
+    visible.slice(Math.ceil(visible.length / 2)),
+  ], [visible]);
+  const playbackAllowed = foreground && !peek && !searchFocused && !verticalScrolling && query === deferredQuery;
 
   return (
     <View style={styles.screen}>
@@ -735,6 +800,7 @@ function BrandCreators({
             style={styles.search}
             value={query}
             onChangeText={setQuery}
+            onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)}
             placeholder="Search by name, category or style"
             placeholderTextColor="#A9ADC2"
             autoCapitalize="none"
@@ -762,7 +828,12 @@ function BrandCreators({
             />
           </View>
         ) : (
-          <ScrollView
+          <ScrollView testID="creator-directory-scroll"
+            onLayout={event => { viewport.current.height = event.nativeEvent.layout.height; chooseVisibleRow(); }}
+            onScroll={event => { viewport.current.offset = event.nativeEvent.contentOffset.y; chooseVisibleRow(); }}
+            scrollEventThrottle={64}
+            onScrollBeginDrag={stopVertical} onScrollEndDrag={settleVertical}
+            onMomentumScrollBegin={stopVertical} onMomentumScrollEnd={settleVertical}
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -787,20 +858,14 @@ function BrandCreators({
               </View>
             ) : (
               <View style={styles.rows}>
-                {/* Split in half so the two rows carry different creators; the
-                  second drifts the other way. An odd count puts the extra tile
-                  in the top row. */}
-                <ReelRow
-                  creators={visible.slice(0, Math.ceil(visible.length / 2))}
-                  active
-                  onOpen={setPeek}
-                />
-                <ReelRow
-                  creators={visible.slice(Math.ceil(visible.length / 2))}
-                  active
-                  reverse
-                  onOpen={setPeek}
-                />
+                <View testID="creator-directory-row-0" onLayout={event => { rowLayouts.current[0] = event.nativeEvent.layout; chooseVisibleRow(); }}>
+                  <ReelRow creators={rows[0]} active={playbackAllowed && activeRow === 0}
+                    onActivate={activateFirst} onOpen={setPeek} />
+                </View>
+                <View testID="creator-directory-row-1" onLayout={event => { rowLayouts.current[1] = event.nativeEvent.layout; chooseVisibleRow(); }}>
+                  <ReelRow creators={rows[1]} active={playbackAllowed && activeRow === 1}
+                    onActivate={activateSecond} onOpen={setPeek} />
+                </View>
               </View>
             )}
           </ScrollView>
@@ -903,6 +968,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#0E1330',
   },
   reelMedia: { flex: 1, backgroundColor: '#0E1330' },
+  clipReady: { opacity: 1 },
+  clipLoading: { opacity: 0 },
+  reelClip: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   reelPlay: {
     position: 'absolute',
     right: scale(8),

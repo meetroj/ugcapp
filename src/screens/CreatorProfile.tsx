@@ -1,3 +1,5 @@
+import { useLiveEffect } from "../liveUpdates";
+import { Alert } from '../components/AppAlert';
 /**
  * Creator profile — the native screen behind the Profile tab.
  *
@@ -11,10 +13,9 @@
  * POST /api/profile/upload-banner and /api/profile/upload-photo each store the
  * file AND write the field, so no follow-up save call is needed.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   RefreshControl,
   ScrollView,
@@ -212,7 +213,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
     load().finally(() => {
       if (active) {

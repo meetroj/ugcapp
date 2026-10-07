@@ -1,13 +1,16 @@
+import { useLiveEffect } from "../liveUpdates";
+import { submissionHistory } from '../submissionHistory';
+import VideoPreview from '../components/VideoPreview';
+import { Alert } from '../components/AppAlert';
 /**
  * Campaign detail — the native replacement for the web /campaigns/{id} page.
  * Three tabs from the design: Overview (progress + creator + deliverables),
  * About Campaign (the full brief) and Work Review (submissions on this
  * campaign). Reads GET /api/campaigns/{id} and GET /api/work/campaign/{id}.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   LayoutAnimation,
   Linking,
@@ -32,7 +35,9 @@ import {
   BACKEND_URL,
   confirmScript,
   declineBid,
+  finishHiring,
   getCampaign,
+  getBusinessDeals,
   getCampaignWork,
   selectCreator,
   submitCampaign,
@@ -81,6 +86,31 @@ const photoUrl = (path: unknown) => {
   if (typeof path !== 'string' || !path) return null;
   return /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
 };
+
+/**
+ * The clean delivered file of an approved submission, as a link that downloads.
+ *
+ * Deliveries are stored under edited_files / raw_files / work_files, so
+ * `video_url` is usually empty; the backend lists them in `files` (edited
+ * first). Same fallback order as GET /api/work/{id}/download. Cloudinary plays
+ * a video in the browser unless told to send it as an attachment.
+ */
+export function downloadUrlOf(item: Record<string, any>): string | null {
+  const files = Array.isArray(item.files) ? item.files : [];
+  const delivered = files.find(f => f?.kind === 'edited') || files[0];
+  const url = photoUrl(
+    item.video_url ||
+      delivered?.url ||
+      (Array.isArray(item.work_files) ? item.work_files[0] : undefined) ||
+      item.preview_url,
+  );
+  return url
+    ? url.replace(
+        /(res\.cloudinary\.com\/[^/]+\/(?:video|image)\/upload\/)(?!fl_attachment)/,
+        '$1fl_attachment/',
+      )
+    : null;
+}
 
 const rupees = (value: unknown) =>
   `Rs. ${(Number(value) || 0).toLocaleString('en-IN', {
@@ -293,6 +323,7 @@ function BrandCampaignDetail({
   const [approving, setApproving] = useState<string | null>(null);
   // Which submission's inline video is currently playing (tap to toggle).
   const [playingWork, setPlayingWork] = useState<string | null>(null);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
   /** Campaign Progress starts open; the header arrow folds it away. */
   const [progressOpen, setProgressOpen] = useState(true);
@@ -304,13 +335,16 @@ function BrandCampaignDetail({
   const [changeNote, setChangeNote] = useState('');
   // Which bid (by creator id) is being accepted/declined right now.
   const [bidBusy, setBidBusy] = useState('');
+  const [finishingHiring, setFinishingHiring] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
 
   const load = useCallback(async () => {
     // The brief and its submissions fail independently: a campaign with no
     // submitted work yet is a normal state, so an empty work list must not
     // blank out the brief itself.
-    const [detail] = await Promise.allSettled([getCampaign(token, campaignId)]);
+    const [detail, deals] = await Promise.allSettled([
+      getCampaign(token, campaignId), getBusinessDeals(token),
+    ]);
 
     // Leaving `campaign` null on failure is what renders the "Couldn't load
     // this campaign" state below.
@@ -332,8 +366,8 @@ function BrandCampaignDetail({
     );
     const seen = new Set<string>();
     setWork(
-      results
-        .flatMap(r => (r.status === 'fulfilled' ? r.value : []))
+      [...results.flatMap(r => (r.status === 'fulfilled' ? r.value : [])),
+        ...submissionHistory(deals.status === 'fulfilled' ? deals.value : [], campaignId)]
         .map((item, index) => ({ ...item, id: String(item.id ?? index) }))
         .filter(item => !seen.has(item.id) && !!seen.add(item.id)),
     );
@@ -395,6 +429,31 @@ function BrandCampaignDetail({
               );
             } finally {
               setPublishBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [campaignId, load, token]);
+
+  const handleFinishHiring = useCallback((hired: number, remaining: number) => {
+    Alert.alert(
+      `Finish hiring with ${hired} creator${hired === 1 ? '' : 's'}?`,
+      `The ${remaining} unfilled slot${remaining === 1 ? '' : 's'} will close and the unused budget will be refunded to your wallet. Your hired creators will continue their work.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Finish hiring',
+          onPress: async () => {
+            setFinishingHiring(true);
+            try {
+              await finishHiring(token, campaignId);
+              await load();
+              Alert.alert('Hiring closed', 'Unused budget refunded to your wallet.');
+            } catch (e) {
+              Alert.alert('Could not finish hiring', e instanceof Error ? e.message : 'Please try again.');
+            } finally {
+              setFinishingHiring(false);
             }
           },
         },
@@ -476,7 +535,7 @@ function BrandCampaignDetail({
     [campaignId, changeNote, load, token],
   );
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 
@@ -560,15 +619,23 @@ function BrandCampaignDetail({
   );
   // Every hired creator, named from their bid. The single-creator card above only
   // knows the first pick, so a multi-creator brief lists the rest here.
-  const hiredList: { id: string; name: string }[] = (
-    Array.isArray(campaign.selected_creators) ? campaign.selected_creators : []
-  ).map((id: unknown) => {
+  const selectedIds = Array.isArray(campaign.selected_creators)
+    ? campaign.selected_creators.filter(Boolean).map(String)
+    : [];
+  if (!selectedIds.length && campaign.selected_creator) {
+    selectedIds.push(String(campaign.selected_creator));
+  }
+  const wanted = Math.max(1, Number(campaign.creators_wanted) || 1);
+  const remainingSlots = Math.max(0, wanted - selectedIds.length);
+  const hiringOpen = campaign.status === 'active' && remainingSlots > 0;
+  const hiredList: { id: string; name: string }[] = selectedIds.map((id: string) => {
     const bid = (Array.isArray(campaign.bids) ? campaign.bids : []).find(
       (b: any) => String(b?.creator_id) === String(id),
     );
+    const hired = (Array.isArray(campaign.hired_creators) ? campaign.hired_creators : []).find((creator: any) => String(creator.id) === id);
     return {
       id: String(id),
-      name: text(bid?.creator_name || bid?.creator_nickname, 'Creator'),
+      name: text(hired?.name || bid?.creator_name || bid?.creator_nickname || bid?.creator?.full_name || bid?.creator?.name || (String(campaign.selected_creator) === id ? creatorName : ''), 'Creator'),
     };
   });
   const needsShipping = !!(
@@ -658,6 +725,17 @@ function BrandCampaignDetail({
         >
           {tab === 0 && (
             <>
+              {work.filter(item => !item.historical && item.status === 'revision_requested').map(item => (
+                <View key={`revision-${item.id}`} style={styles.card}>
+                  <Text style={styles.cardTitle}>Revision requested</Text>
+                  <Text style={styles.bidProposal}>
+                    {text(item.creator_name, 'Creator')} is preparing a revised video. The previous upload remains in Work Review.
+                  </Text>
+                  {!!item.revisions?.length && <Text style={styles.bidProposal}>
+                    {String(item.revisions[item.revisions.length - 1]?.feedback || '')}
+                  </Text>}
+                </View>
+              ))}
               {/* A draft can't reach creators until it's published for review. */}
               {String(campaign.status) === 'draft' && (
                 <View style={styles.draftCard}>
@@ -752,7 +830,31 @@ function BrandCampaignDetail({
                   </View>
                 </View>
               )}
+              {hiringOpen && selectedIds.length > 0 && (
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Hiring</Text>
+                  <Text style={styles.bidProposal}>
+                    {selectedIds.length} of {wanted} creators hired. You can close the remaining slots now.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.bidBtn, styles.bidAccept]}
+                    onPress={() => handleFinishHiring(selectedIds.length, remainingSlots)}
+                    disabled={finishingHiring || !!bidBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Finish hiring"
+                  >
+                    {finishingHiring ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.bidAcceptText}>
+                        Finish hiring with {selectedIds.length} creator{selectedIds.length === 1 ? '' : 's'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
               {(() => {
+                if (!hiringOpen) return null;
                 const bids = Array.isArray(campaign.bids) ? campaign.bids : [];
                 // Hide bids that are declined OR already hired, and the whole
                 // card once a creator is selected — the decision is made.
@@ -787,6 +889,15 @@ function BrandCampaignDetail({
                             <Text style={styles.bidName} numberOfLines={1}>{who}</Text>
                             <Text style={styles.bidAmount}>{rupees(b.amount || b.price)}</Text>
                           </View>
+                          <TouchableOpacity
+                            style={styles.ghostBtn}
+                            onPress={() => onNavigate(`/creator/${encodeURIComponent(cid)}`)}
+                            disabled={!cid}
+                            accessibilityRole="button"
+                            accessibilityLabel={`View ${who}'s profile`}
+                          >
+                            <Text style={styles.bidDeclineText}>View creator profile</Text>
+                          </TouchableOpacity>
                           {!!text(b.proposal || b.message) && (
                             <Text style={styles.bidProposal} numberOfLines={3}>
                               {text(b.proposal || b.message)}
@@ -801,7 +912,7 @@ function BrandCampaignDetail({
                             <TouchableOpacity
                               style={[styles.bidBtn, styles.bidDecline]}
                               onPress={() => handleDeclineBid(cid, who)}
-                              disabled={busy || !cid}
+                              disabled={busy || finishingHiring || !cid}
                               accessibilityRole="button"
                             >
                               <Text style={styles.bidDeclineText}>Decline</Text>
@@ -809,7 +920,7 @@ function BrandCampaignDetail({
                             <TouchableOpacity
                               style={[styles.bidBtn, styles.bidAccept]}
                               onPress={() => handleAcceptBid(cid, who)}
-                              disabled={busy || !cid}
+                              disabled={busy || finishingHiring || !cid}
                               accessibilityRole="button"
                             >
                               {busy ? (
@@ -1032,17 +1143,18 @@ function BrandCampaignDetail({
                     Hired creators ({hiredList.length})
                   </Text>
                   {hiredList.map(c => (
-                    <View key={c.id} style={styles.deliverableRow}>
-                      <Text style={styles.deliverableText}>
+                    <View key={c.id} style={styles.hiredCreator}>
+                      <Text style={styles.hiredCreatorName}>
                         {c.name}
                       </Text>
-                      <View style={styles.creatorActions}>
+                      <View style={styles.hiredCreatorActions}>
                         <TouchableOpacity
                           style={styles.ghostBtn}
                           onPress={() => onNavigate(`/creator/${c.id}`)}
                           accessibilityRole="button"
                         >
                           <Icon name="person" color="#5C6180" size={14} />
+                          <Text style={styles.ghostText}>Profile</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.ghostBtn}
@@ -1054,6 +1166,7 @@ function BrandCampaignDetail({
                           accessibilityRole="button"
                         >
                           <Icon name="chat" color="#5C6180" size={14} />
+                          <Text style={styles.ghostText}>Chat</Text>
                         </TouchableOpacity>
                         {needsShipping && (
                           <TouchableOpacity
@@ -1226,6 +1339,11 @@ function BrandCampaignDetail({
                           </View>
                         )}
                       </TouchableOpacity>
+                      <TouchableOpacity style={styles.reviewBtn}
+                        onPress={() => { setPlayingWork(null); setPreviewUri(videoSrc); }}
+                        disabled={!videoSrc} accessibilityRole="button" accessibilityLabel="Open full-screen video">
+                        <Text style={styles.reviewText}>View full video</Text>
+                      </TouchableOpacity>
                       <View style={styles.workBody}>
                         <Text style={styles.workTitle}>
                           {text(item.creator_name, 'Creator')}
@@ -1233,29 +1351,26 @@ function BrandCampaignDetail({
                         <Text style={styles.workMeta}>
                           Submitted{' '}
                           {formatDate(item.submitted_at || item.created_at)} ·{' '}
-                          {text(item.status, 'submitted').replace(/_/g, ' ')}
+                          {item.historical ? 'Previous upload' : text(item.status, 'submitted').replace(/_/g, ' ')}
                         </Text>
                         {revisionRequested && (
                           <Text style={styles.workHistory}>
-                            Revision requested — the creator's new cut will
-                            replace this once they resubmit.
+                            Revision requested — awaiting the creator's revised video.
+                            This upload stays available for comparison.
                           </Text>
                         )}
                         {approved ? (
                           <TouchableOpacity
                             style={styles.workDownload}
                             onPress={() => {
-                              const url = photoUrl(
-                                item.video_url || item.preview_url,
-                              );
-                              if (url) {
-                                Linking.openURL(url).catch(() =>
-                                  Alert.alert(
-                                    'Could not open',
-                                    'The download link is unavailable.',
-                                  ),
+                              const unavailable = () =>
+                                Alert.alert(
+                                  'Could not open',
+                                  'The download link is unavailable.',
                                 );
-                              }
+                              const url = downloadUrlOf(item);
+                              if (!url) return unavailable();
+                              Linking.openURL(url).catch(unavailable);
                             }}
                             accessibilityRole="button"
                           >
@@ -1264,11 +1379,12 @@ function BrandCampaignDetail({
                               Download video
                             </Text>
                           </TouchableOpacity>
-                        ) : (
+                        ) : !revisionRequested && !item.historical ? (
                           <View style={styles.workActions}>
                             <TouchableOpacity
                               style={[
                                 styles.workApprove,
+                                styles.workAction,
                                 approving === item.id && styles.workApproveOff,
                               ]}
                               disabled={approving === item.id}
@@ -1287,7 +1403,8 @@ function BrandCampaignDetail({
                               )}
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={styles.reviewBtn}
+                              style={[styles.reviewBtn, styles.workAction]}
+                              disabled={approving === item.id}
                               onPress={() => setRevising(item)}
                               accessibilityRole="button"
                             >
@@ -1296,7 +1413,7 @@ function BrandCampaignDetail({
                               </Text>
                             </TouchableOpacity>
                           </View>
-                        )}
+                        ) : null}
                       </View>
                     </View>
                   );
@@ -1306,6 +1423,8 @@ function BrandCampaignDetail({
           )}
         </ScrollView>
       </View>
+
+      <VideoPreview uri={previewUri} onClose={() => setPreviewUri(null)} />
 
       <Modal
         visible={!!revising}
@@ -1545,16 +1664,19 @@ const styles = StyleSheet.create({
     color: '#15163F',
     textAlignVertical: 'top',
   },
-  scriptActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
+  scriptActions: { gap: scale(10), marginTop: scale(12) },
   scriptBtn: {
-    flex: 1,
-    height: scale(46),
+    minHeight: scale(46),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(12),
     borderRadius: scale(12),
     alignItems: 'center',
     justifyContent: 'center',
   },
   scriptBtnPrimary: { backgroundColor: '#15163F' },
   scriptBtnPrimaryText: {
+    textAlign: 'center',
+    lineHeight: fontScale(18),
     fontSize: fontScale(13.5),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
@@ -1562,6 +1684,8 @@ const styles = StyleSheet.create({
   },
   scriptBtnGhost: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E7D9A0' },
   scriptBtnGhostText: {
+    textAlign: 'center',
+    lineHeight: fontScale(18),
     fontSize: fontScale(13.5),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
@@ -1792,6 +1916,20 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  hiredCreator: {
+    paddingVertical: scale(10),
+    gap: scale(8),
+  },
+  hiredCreatorName: {
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '600',
+    color: '#15163F',
+  },
+  hiredCreatorActions: {
+    flexDirection: 'row',
+    gap: scale(8),
+  },
   deliverableRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1878,7 +2016,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4C5BF3',
   },
-  workActions: { marginTop: scale(11), gap: scale(9) },
+  workActions: { marginTop: scale(11), gap: scale(9), flexDirection: 'row' },
+  workAction: { flex: 1, marginTop: 0, minHeight: scale(44) },
   workApprove: {
     height: scale(40),
     borderRadius: scale(11),

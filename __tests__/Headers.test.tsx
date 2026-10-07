@@ -12,6 +12,7 @@ import Earnings from '../src/screens/Earnings';
 
 const session: any = { user_id: '1', role: 'creator', profile_completed: true };
 beforeEach(() => {
+  jest.useFakeTimers();
   // Screens fetch on mount; a stubbed empty response keeps them off the
   // network and lands them in their empty state.
   (globalThis as any).fetch = jest.fn(() =>
@@ -55,4 +56,10 @@ test('Earnings header has Notifications + Messages', async () => {
     );
   });
   expect(labels(t)).toEqual(expect.arrayContaining(['Notifications', 'Messages']));
+});
+
+// Active Work polls while mounted; keep timers inside each test.
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
 });

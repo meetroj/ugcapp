@@ -1,6 +1,7 @@
+import { Alert } from '../components/AppAlert';
 /** "Welcome back" screen: email + password, Google alternative. */
 import React, { useState } from 'react';
-import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../components/Text';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';

@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Reviews — native screen replacing the web /reviews page inside the shell.
  * Shows the star breakdown for the signed-in user's rating and the reviews the
@@ -5,7 +6,7 @@
  * roles; only the source of the reviews differs — a creator sees what brands
  * wrote about them, a brand sees what creators wrote about the brand.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Image,
   ScrollView,
@@ -211,7 +212,7 @@ function Reviews({
   // own endpoint. Everything below this line is shared between the two.
   const isBrand = session.role === 'business';
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
 
     Promise.allSettled([

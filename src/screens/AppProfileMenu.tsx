@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * The Profile tab: the account card, then the menu grouped into labelled
  * sections (Account, Campaigns/Work, Payments, Support) instead of one long
@@ -10,7 +11,6 @@
  */
 import React, { useCallback } from 'react';
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   TouchableOpacity,

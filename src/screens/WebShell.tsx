@@ -1,3 +1,4 @@
+import { useLiveUpdates } from "../liveUpdates";
 /**
  * The WebView shell around the live PWA, shown once the user is authenticated.
  * All UI comes from the website; this file only adds the native behaviour
@@ -200,7 +201,10 @@ function WebShell({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errored, setErrored] = useState(false);
+  useLiveUpdates(token);
   const [currentPath, setCurrentPath] = useState(initialPath);
+  const pathRef = useRef(initialPath);
+  const stackRef = useRef<string[]>([]);
   const [webPath, setWebPath] = useState(initialPath);
   const [feedOpen, setFeedOpen] = useState(false);
   // Display name for the open chat thread. The list knows it; the URL only
@@ -214,7 +218,7 @@ function WebShell({
   // Paths visited before the current one, oldest first. Native screens swap in
   // and out by path alone, so without this stack there is nothing for the
   // hardware back button to return to and Android would close the app.
-  const [history, setHistory] = useState<string[]>([]);
+
   // Unread chat messages, for the header badge on screens that show one.
   const [unread, setUnread] = useState(0);
 
@@ -454,13 +458,14 @@ function WebShell({
         setFeedOpen(true);
         return;
       }
-      if (currentPath !== path) {
-        setHistory(stack => [...stack, currentPath]);
+      if (pathRef.current !== path) {
+        stackRef.current = [...stackRef.current, pathRef.current];
       }
+      pathRef.current = path;
       setCurrentPath(path);
       setWebPath(path);
     },
-    [currentPath],
+    [],
   );
 
   /**
@@ -468,18 +473,19 @@ function WebShell({
    * which is the signal to let Android close the app.
    */
   const goBack = useCallback((): boolean => {
-    if (history.length === 0) {
+    if (stackRef.current.length === 0) {
       return false;
     }
-    const previous = history[history.length - 1];
+    const previous = stackRef.current[stackRef.current.length - 1];
     // Returning to a web path remounts the WebView at that URL, which fires
     // onNavigationStateChange; the flag stops it re-pushing what we just popped.
-    goingBack.current = true;
-    setHistory(stack => stack.slice(0, -1));
+    goingBack.current = false;
+    stackRef.current = stackRef.current.slice(0, -1);
+    pathRef.current = previous;
     setCurrentPath(previous);
     setWebPath(previous);
     return true;
-  }, [history]);
+  }, []);
 
   /**
    * Back target for a screen's own back / close button. Returns to whatever the
@@ -490,10 +496,12 @@ function WebShell({
   const backTo = useCallback(
     (fallback: string) => () => {
       if (!goBack()) {
-        navigateTo(fallback);
+        pathRef.current = fallback;
+        setCurrentPath(fallback);
+        setWebPath(fallback);
       }
     },
-    [goBack, navigateTo],
+    [goBack],
   );
 
   // Hardware back closes overlays first, then walks back through the screens
@@ -511,8 +519,16 @@ function WebShell({
       // A native screen is on top: it has no WebView history of its own, so
       // our stack is the only thing that can move us backwards.
       if (showingNative) {
-        return goBack();
+        if (goBack()) return true;
+        if (pathRef.current !== homePath) {
+          pathRef.current = homePath;
+          setCurrentPath(homePath);
+          setWebPath(homePath);
+          return true;
+        }
+        return false;
       }
+      if (goBack()) return true;
       if (canGoBack.current) {
         goingBack.current = true;
         webRef.current?.goBack();
@@ -521,7 +537,7 @@ function WebShell({
       return goBack();
     });
     return () => sub.remove();
-  }, [errored, feedOpen, goBack, showingNative]);
+  }, [errored, feedOpen, goBack, showingNative, homePath]);
 
   const onNavStateChange = useCallback((nav: WebViewNavigation) => {
     canGoBack.current = nav.canGoBack;
@@ -533,17 +549,17 @@ function WebShell({
       const path = normalizePath(url.pathname + url.search);
       if (goingBack.current) {
         goingBack.current = false;
+        pathRef.current = path;
         setCurrentPath(path);
         return;
       }
       // Links followed inside the WebView also become history entries, so the
       // back button treats web and native screens the same way.
-      setCurrentPath(prev => {
-        if (prev !== path) {
-          setHistory(stack => [...stack, prev]);
-        }
-        return path;
-      });
+      if (pathRef.current !== path) {
+        stackRef.current = [...stackRef.current, pathRef.current];
+        pathRef.current = path;
+        setCurrentPath(path);
+      }
     } catch {}
   }, []);
 
@@ -722,7 +738,11 @@ function WebShell({
           }
           onBack={backTo('/dashboard/business/browse-creator')}
           onMessage={() => navigateTo(`/messages/${creatorMatch![1]}`)}
-          onSendBrief={() => navigateTo('/dashboard/business/post-brief')}
+          onSendBrief={() =>
+            navigateTo(
+              `/dashboard/business/post-brief?creator=${encodeURIComponent(creatorMatch![1])}`,
+            )
+          }
         />
       ) : showingBrandWallet ? (
         <BrandWallet
@@ -757,10 +777,18 @@ function WebShell({
         />
       ) : showingBrandPostBrief ? (
         <BrandPostBrief
+          // Remount per URL so a private / duplicate brief never carries its
+          // state into the next brief opened on the same screen.
+          key={currentPath}
           token={token}
           duplicateFrom={
             /[?&]from=([^&]+)/.exec(currentPath)?.[1]
               ? decodeURIComponent(/[?&]from=([^&]+)/.exec(currentPath)![1])
+              : undefined
+          }
+          creatorId={
+            /[?&]creator=([^&]+)/.exec(currentPath)?.[1]
+              ? decodeURIComponent(/[?&]creator=([^&]+)/.exec(currentPath)![1])
               : undefined
           }
           onBack={backTo('/dashboard/business/all-campaigns')}

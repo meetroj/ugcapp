@@ -1,3 +1,4 @@
+import { Alert } from '../src/components/AppAlert';
 /**
  * @format
  * Sign-up now collects a mobile number. It is compulsory and there is no OTP,
@@ -6,7 +7,7 @@
  */
 import React from 'react';
 import ReactTestRenderer, { act } from 'react-test-renderer';
-import { Alert } from 'react-native';
+
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   SignUpForm,

@@ -181,3 +181,29 @@ test('a 2FA challenge raises TwoFactorRequired rather than a dead end', async ()
 
   await expect(login('a@b.com', 'pw')).rejects.toBeInstanceOf(TwoFactorRequired);
 });
+
+test('private draft preserves its creator and campaign id without sending chat', async () => {
+  const {sent} = capture({campaign_id: 'PRIVATE-DRAFT', status: 'draft'});
+  const {createCampaign} = require('../src/api');
+  const result = await createCampaign('tok', {
+    title: 'Private draft', status: 'draft', visibility: 'private', selected_creator: 'creator-7',
+  }, true);
+  expect(sent).toHaveLength(1);
+  expect(sent[0].url).toContain('/api/campaigns/draft');
+  expect(bodyOf(sent[0])).toEqual(expect.objectContaining({
+    status: 'draft', visibility: 'private', selected_creator: 'creator-7',
+  }));
+  expect(result.id).toBe('PRIVATE-DRAFT');
+});
+
+test('private submission requests admin review with no client chat send', async () => {
+  const {sent} = capture({campaign_id: 'PRIVATE-REVIEW', status: 'pending_approval'});
+  const {createCampaign} = require('../src/api');
+  const result = await createCampaign('tok', {
+    title: 'Private brief', status: 'pending_approval', visibility: 'private', selected_creator: 'creator-7',
+  });
+  expect(sent).toHaveLength(1);
+  expect(sent[0].url.endsWith('/api/campaigns')).toBe(true);
+  expect(bodyOf(sent[0]).status).toBe('pending_approval');
+  expect(result.id).toBe('PRIVATE-REVIEW');
+});

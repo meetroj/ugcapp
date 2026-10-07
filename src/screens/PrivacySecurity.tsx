@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Privacy & Security — native settings screen reached from the profile menu.
  * Sections: Security (account rows), Privacy (marked "Coming soon" until a
@@ -6,7 +7,6 @@
  */
 import React, { useEffect, useState } from 'react';
 import {
-  Alert,
   Linking,
   ScrollView,
   StyleSheet,

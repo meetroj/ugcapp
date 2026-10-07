@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Password recovery, in the three steps the website's Auth page uses:
  * ask for the email, check the emailed code, then set the new password.
@@ -8,7 +9,7 @@
  * login and sign-up forms sit in.
  */
 import React, { useState } from 'react';
-import { Alert } from 'react-native';
+
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../components/Text';
 import AuthInput from '../components/AuthInput';

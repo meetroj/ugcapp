@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Creator earnings screen. Replaces the WebView's /withdrawal route.
  *
@@ -10,7 +11,7 @@
  * "Money In" rows are the released escrows; "Withdrawals" are the payout
  * requests. Both lists are sorted newest first and share one row component.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Image,
   RefreshControl,
@@ -277,7 +278,7 @@ function Earnings({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
     load().finally(() => {
       if (active) {

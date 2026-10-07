@@ -1,5 +1,7 @@
+import { useLiveEffect } from "../liveUpdates";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   RefreshControl,
   ScrollView,
@@ -13,6 +15,7 @@ import type {
   NativeSyntheticEvent,
   ScrollViewInstance,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Rect } from 'react-native-svg';
 import Video from 'react-native-video';
 import { SkeletonBlock } from '../components/Skeleton';
@@ -177,6 +180,12 @@ function CreatorHome({
   const [refreshing, setRefreshing] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 1).
   const [notifications, setNotifications] = useState(0);
+  // Private briefs already announced this session (the poll re-runs loadData).
+  const announced = useRef(new Set<string>());
+  // A ref, not a dependency: the parent passes an inline arrow, which would
+  // rebuild loadData (and refetch) on every render.
+  const openMessages = useRef(onOpenMessages);
+  openMessages.current = onOpenMessages;
 
   const loadData = useCallback(() => {
     let active = true;
@@ -219,6 +228,35 @@ function CreatorHome({
       setRefreshing(false);
     });
 
+    // A private brief that just went live for this creator pops up once per brief.
+    // Remembered in storage, not by the chat card: declining only closes the card
+    // and the brief itself stays active.
+    getCampaigns(token)
+      .then(async list => {
+        const brief = list.find(c =>
+          c.visibility === 'private' && c.status === 'active' &&
+          (c.selected_creator === session.user_id ||
+            (c.selected_creators || []).includes(session.user_id)) &&
+          !announced.current.has(c.id));
+        if (!active || !brief) return;
+        const key = `privateBriefSeen:${brief.id}`;
+        announced.current.add(brief.id);
+        if (await AsyncStorage.getItem(key).catch(() => null)) return;
+        await AsyncStorage.setItem(key, '1').catch(() => {});
+        const budget = Number(brief.budget_max || brief.budget_min || 0);
+        Alert.alert(
+          "You've received a private brief",
+          `${String(brief.brand_name || 'A brand')} sent "${brief.title || 'a brief'}" to you only` +
+            (budget ? ` (₹${budget.toLocaleString('en-IN')} per video)` : '') +
+            '. Open Messages to accept or decline within 72 hours.',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'View & respond', onPress: () => openMessages.current() },
+          ],
+        );
+      })
+      .catch(() => {});
+
     // Badge only — a failure here must not affect the rest of the screen.
     getUnreadCount(token)
       .then(count => {
@@ -231,7 +269,7 @@ function CreatorHome({
     };
   }, [session.user_id, token]);
 
-  useEffect(() => loadData(), [loadData]);
+  useLiveEffect(() => loadData(), [loadData]);
 
   // Only ever show what the backend actually returned. (Previously this fell
   // back to the signed-in user's own profile, which made a failed request look

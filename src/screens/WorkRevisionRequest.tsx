@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Request Revision — the structured, Frame.io-style revision composer from the
  * design. Comments are pinned to a moment in the submitted video, the brand
@@ -11,7 +12,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   ScrollView,

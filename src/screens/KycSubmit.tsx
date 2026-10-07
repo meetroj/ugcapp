@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * KYC details — the native screen behind "Start KYC" / "Update Details".
  *
@@ -13,7 +14,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   ScrollView,

@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLiveEffect } from "../liveUpdates";
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -346,11 +347,11 @@ export default function BrowseCampaigns({
       .catch(() => {});
   }, [session?.user_id, token]);
 
-  useEffect(() => loadCampaigns(), [loadCampaigns]);
+  useLiveEffect(() => loadCampaigns(), [loadCampaigns]);
 
   // Which campaigns are already saved. Separate from the list fetch so a
   // failure here only costs the filled bookmarks, not the campaigns.
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
     getSavedBriefs(token)
       .then(ids => {

@@ -1,13 +1,13 @@
+import { useLiveEffect } from "../liveUpdates";
+import { Alert } from '../components/AppAlert';
 /**
  * Brand wallet — the native replacement for the web
  * /dashboard/business/wallet page. Shows the balance, chat-unlock state,
  * recharge-bonus tiers and transaction history from GET /api/business/wallet.
  *
- * Adding funds is NOT native: the recharge endpoint opens a Razorpay/Cashfree
- * order that needs a checkout SDK this app doesn't bundle, so "Add Funds"
- * carries the chosen amount over to the existing web flow.
+ * Adding funds creates an order and opens payment checkout inside the app.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import {
   KeyboardAvoidingView,
   RefreshControl,
@@ -20,7 +20,8 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonWallet } from '../components/Skeleton';
-import { getWallet } from '../api';
+import { getWallet, rechargeWallet, type WalletPaymentOrder } from '../api';
+import WalletCheckout from './WalletCheckout';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -123,7 +124,6 @@ function Icon({
 
 function BrandWallet({
   token,
-  onNavigate,
   onNotifications,
   onMessages,
 }: Props) {
@@ -145,7 +145,7 @@ function BrandWallet({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 
@@ -171,18 +171,41 @@ function BrandWallet({
   const typed = Number(amount) || 0;
   const canAdd = typed >= MIN_RECHARGE;
 
-  /**
-   * Hands off to the web wallet page. The recharge endpoint returns a payment
-   * gateway order that needs a checkout SDK this app doesn't bundle, so the
-   * amount travels as a query param for the web page to prefill.
-   */
-  const addFunds = () => {
-    if (!canAdd) return;
-    onNavigate(`/dashboard/business/wallet?amount=${typed}`);
+  const [paymentOrder, setPaymentOrder] = useState<WalletPaymentOrder | null>(null);
+  const [startingPayment, setStartingPayment] = useState(false);
+  const paymentPending = useRef(false);
+  const addFunds = async () => {
+    if (!canAdd || !Number.isFinite(typed) || paymentPending.current) return;
+    paymentPending.current = true;
+    setStartingPayment(true);
+    try {
+      const order = await rechargeWallet(token, typed);
+      if (order.gateway !== 'razorpay' || !order.key_id || !order.order_id) {
+        throw new Error('Payment checkout is unavailable. Please try again later.');
+      }
+      setPaymentOrder(order);
+    } catch (error) {
+      Alert.alert('Unable to start payment', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      paymentPending.current = false;
+      setStartingPayment(false);
+    }
   };
 
   return (
     <View style={styles.screen}>
+      {paymentOrder && (
+        <WalletCheckout
+          token={token}
+          order={paymentOrder}
+          onClose={() => setPaymentOrder(null)}
+          onSuccess={() => {
+            setPaymentOrder(null);
+            load();
+            Alert.alert('Payment successful', 'Your wallet has been updated.');
+          }}
+        />
+      )}
       <View style={styles.topBar}>
         <AppHeader
           title="Wallet"
@@ -297,12 +320,12 @@ function BrandWallet({
               <TouchableOpacity
                 style={[styles.addBtn, !canAdd && styles.addBtnOff]}
                 onPress={addFunds}
-                disabled={!canAdd}
+                disabled={!canAdd || startingPayment || !!paymentOrder}
                 accessibilityRole="button"
                 accessibilityState={{ disabled: !canAdd }}
               >
                 <Icon name="bolt" color="#FFFFFF" size={16} />
-                <Text style={styles.addBtnText}>Add Funds</Text>
+                <Text style={styles.addBtnText}>{startingPayment ? 'Opening payment…' : 'Add Funds'}</Text>
               </TouchableOpacity>
 
               <Text style={styles.hint}>

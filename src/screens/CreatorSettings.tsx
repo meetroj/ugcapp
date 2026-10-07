@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Creator account settings — the native version of the website's creator
  * profile editor (Frontend/src/components/CreatorProfileModal.js).
@@ -22,7 +23,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,

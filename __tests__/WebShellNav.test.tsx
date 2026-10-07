@@ -19,6 +19,7 @@ const session: any = {
 };
 
 beforeEach(() => {
+  jest.useFakeTimers();
   (globalThis as any).fetch = jest.fn(() =>
     Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
   );
@@ -194,4 +195,10 @@ test('brand campaign detail Chat opens that creator thread', async () => {
   // Lands on the creator's own thread, not the generic inbox.
   expect(findByLabel(t, 'Send message')).toBeTruthy();
   expect(texts(t)).toContain('Arushi');
+});
+
+// Active Work polls while mounted; keep timers inside each test.
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
 });

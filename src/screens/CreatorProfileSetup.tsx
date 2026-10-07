@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Creator onboarding — the native replacement for the web
  * /profile-setup/creator page.
@@ -20,7 +21,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,

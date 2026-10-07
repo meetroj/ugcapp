@@ -1,3 +1,4 @@
+import AppAlertHost from './src/components/AppAlert';
 /**
  * ugcad.io — native Android shell around the live PWA.
  * Shows the native auth screens first, then hands over to the WebView shell.
@@ -192,6 +193,7 @@ function App(): React.JSX.Element {
             }}
           />
         )}
+      <AppAlertHost />
     </SafeAreaProvider>
   );
 }

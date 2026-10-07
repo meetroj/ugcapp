@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Manage Shipment — the native replacement for the web
  * /dashboard/business/shipments page. There is no brand-wide shipments
@@ -6,7 +7,7 @@
  * GET /api/shipment/{campaign_id}. Read-only: creating a shipment request
  * needs pickup addresses and product dimensions, so that stays on the web.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -217,7 +218,7 @@ function BrandShipments({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 

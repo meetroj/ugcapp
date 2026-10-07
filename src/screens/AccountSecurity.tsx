@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Account Security — change password, two-factor, deactivate.
  *
@@ -12,7 +13,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Clipboard,
   ScrollView,
   StyleSheet,

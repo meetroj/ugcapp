@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Saved — the native screen for the Profile tab's "Saved" row.
  *
@@ -6,7 +7,7 @@
  * one against the campaign list to render a real card. Un-saving here calls
  * DELETE and drops the row immediately.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -86,7 +87,7 @@ function SavedBriefs({ token, onBack, onBrowse }: Props) {
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 

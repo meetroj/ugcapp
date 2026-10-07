@@ -87,8 +87,8 @@ android {
         applicationId "com.ugcapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 13
-        versionName "1.2.9"
+        versionCode 17
+        versionName "1.2.10"
     }
     signingConfigs {
         debug {

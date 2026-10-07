@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   Image,
   RefreshControl,
   ScrollView,
@@ -69,24 +70,26 @@ const stringValue = (value: unknown, fallback: string) =>
  * deal still showed up as ongoing work.
  */
 function tabStateOf(deal: Deal): string {
-  const state = String(deal.current_state || '').toLowerCase();
-  if (!state) {
-    return 'active';
-  }
-  if (state.includes('cancel') || state.includes('reject')) {
+  const state = String(deal.current_state || '').trim().toLowerCase();
+  const campaign = deal.campaign || {};
+  const booking = String(campaign.booking_status || '').toLowerCase();
+  const status = String(campaign.status || '').toLowerCase();
+  if (booking === 'declined' || status === 'cancelled' ||
+      state.includes('cancel') || state.includes('reject')) {
     return 'cancelled';
   }
-  if (state.includes('dispute')) {
-    return 'cancelled';
+  // Pending bookings are requests even when their lifecycle already says accepted.
+  if (!campaign.brief_sent && ['pending_creator', 'price_revision'].includes(booking)) {
+    return 'request';
   }
-  // 'Paid - Complete' is the only terminal success state.
-  if (state.includes('paid') || state.includes('complete')) {
+  // Match terminal states; words such as "unpaid" and "incomplete" are ongoing.
+  if (/^paid\s*[-—–]\s*complete$/.test(state) || ['complete', 'completed'].includes(state)) {
     return 'completed';
   }
-  // A deal the creator has not accepted yet still needs a decision.
   if (state.includes('awaiting acceptance') || state.includes('invited')) {
     return 'request';
   }
+  // Disputes and damage reports still require resolution and remain ongoing work.
   return 'active';
 }
 
@@ -126,18 +129,23 @@ function ActiveWork({
   const [failed, setFailed] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 7).
   const [notifications, setNotifications] = useState(0);
+  const mounted = useRef(false);
+  const requestId = useRef(0);
+  const autoTabbed = useRef(false);
 
   const loadDeals = useCallback(() => {
-    let cancelled = false;
+    const currentRequest = ++requestId.current;
+    const isCurrent = () => mounted.current && currentRequest === requestId.current;
     // GET /api/deals/my — the backend derives the creator from the token and
     // serializes each deal for this viewer. The previous call
     // (/api/deals?creator_id=...) is the admin list route and answered 403 for
     // every creator, so this screen never showed a single real deal.
     getMyDeals(token)
       .then(deals => {
-        if (cancelled) {
+        if (!isCurrent()) {
           return;
         }
+        setFailed(false);
         setWorks(
           deals.map((deal, index) => ({
             ...deal,
@@ -149,12 +157,12 @@ function ActiveWork({
         );
       })
       .catch(() => {
-        if (!cancelled) {
+        if (isCurrent()) {
           setFailed(true);
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        if (isCurrent()) {
           setLoading(false);
           setRefreshing(false);
         }
@@ -162,18 +170,41 @@ function ActiveWork({
     // The bell badge is decorative — a failure here must not blank the screen.
     getUnreadCount(token)
       .then(count => {
-        if (!cancelled) {
+        if (isCurrent()) {
           setNotifications(count);
         }
       })
       .catch(() => {});
 
-    return () => {
-      cancelled = true;
-    };
   }, [token]);
 
-  useEffect(() => loadDeals(), [loadDeals]);
+  useEffect(() => {
+    mounted.current = true;
+    autoTabbed.current = false;
+    loadDeals();
+    const interval = setInterval(() => {
+      if (AppState.currentState === 'active') loadDeals();
+    }, 10000);
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') loadDeals();
+    });
+    return () => {
+      mounted.current = false;
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [loadDeals]);
+
+  useEffect(() => {
+    if (autoTabbed.current || loading) return;
+    const pending = works.some(work =>
+      work.status === 'request' && work.campaign?.booking_status !== 'price_revision',
+    );
+    if (pending) {
+      autoTabbed.current = true;
+      setTab('Requests');
+    }
+  }, [loading, works]);
 
   const groups = useMemo(
     () => ({

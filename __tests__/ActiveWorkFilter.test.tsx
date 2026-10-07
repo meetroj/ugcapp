@@ -13,6 +13,7 @@ import { scale } from '../src/theme';
 const session: any = { user_id: '1', role: 'creator', profile_completed: true };
 
 beforeEach(() => {
+  jest.useFakeTimers();
   (globalThis as any).fetch = jest.fn(() =>
     Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
   );
@@ -58,4 +59,10 @@ test('opening the filter overlays the content instead of pushing it down', async
   expect(menu).toBeTruthy();
   const flat = StyleSheet.flatten(menu.props.style);
   expect(flat.position).toBe('absolute');
+});
+
+// Active Work polls while mounted; keep timers inside each test.
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
 });

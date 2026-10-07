@@ -11,3 +11,5 @@ const Video = React.forwardRef((props: any, ref: any) => (
 ));
 
 export default Video;
+
+export const ViewType = { TEXTURE: 'textureView', SURFACE: 'surfaceView' };

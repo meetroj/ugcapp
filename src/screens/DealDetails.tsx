@@ -1,3 +1,5 @@
+import VideoPreview from '../components/VideoPreview';
+import { Alert } from '../components/AppAlert';
 /**
  * Deal Details — the screen behind the arrow on an Active Work card.
  *
@@ -8,10 +10,11 @@
  * Five tabs sit under a summary card and a six-step progress rail. Every tab
  * reads from the same deal object, so switching tabs costs no network.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  AppState,
+  RefreshControl,
   Image,
   Linking,
   Modal,
@@ -25,6 +28,7 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
 import {
   archiveDeal,
+  getMyDeals,
   BACKEND_URL,
   confirmDealReceipt,
   escalateDeal,
@@ -351,7 +355,7 @@ function KeyValue({ label, value }: { label: string; value: string }) {
 }
 
 function DealDetails({
-  deal,
+  deal: initialDeal,
   token,
   onBack,
   onChat,
@@ -360,6 +364,37 @@ function DealDetails({
   onChanged,
   onArchived,
 }: Props) {
+  const [deal, setDeal] = useState(initialDeal);
+  const [refreshing, setRefreshing] = useState(false);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const refreshingDeal = useRef(false);
+  useEffect(() => { setDeal(initialDeal); }, [initialDeal]);
+  const dealKey = String(initialDeal.deal_id || initialDeal.campaign?.id || '');
+  const refreshDeal = useCallback(async () => {
+    if (!token || refreshingDeal.current) { setRefreshing(false); return; }
+    refreshingDeal.current = true;
+    try {
+      const fresh = await getMyDeals(token);
+      const next = fresh.find(item => String(item.deal_id || item.campaign?.id) === dealKey);
+      if (mounted.current && next) setDeal(next);
+    } catch {
+      // Keep submitted versions visible when the connection is interrupted.
+    } finally {
+      refreshingDeal.current = false;
+      if (mounted.current) setRefreshing(false);
+    }
+  }, [dealKey, token]);
+  useEffect(() => {
+    mounted.current = true;
+    const interval = setInterval(() => {
+      if (AppState.currentState === 'active') refreshDeal();
+    }, 10000);
+    const subscription = AppState.addEventListener('change', next => {
+      if (next === 'active') refreshDeal();
+    });
+    return () => { mounted.current = false; clearInterval(interval); subscription.remove(); };
+  }, [refreshDeal]);
   const [tab, setTab] = useState<Tab>('Overview');
   const [submitting, setSubmitting] = useState(false);
   /** Which deal action is in flight, so only that row shows a spinner. */
@@ -484,6 +519,7 @@ function DealDetails({
       });
       // Refresh the deal so the submitted version card appears immediately,
       // instead of asking the creator to pull-to-refresh.
+      await refreshDeal();
       onChanged?.();
       Alert.alert(
         stage === 'raw' ? 'Raw video submitted' : stage === 'edited' ? 'Edited video submitted' : 'Work submitted',
@@ -541,6 +577,7 @@ function DealDetails({
     try {
       await work();
       if (done) Alert.alert('Done', done);
+      await refreshDeal();
       onChanged?.();
     } catch (error) {
       Alert.alert(
@@ -708,6 +745,102 @@ function DealDetails({
   const disputeOpen = !!deal.dispute?.status && deal.dispute.status !== 'closed';
   const dealClosed = /complete|closed|paid/i.test(state);
 
+  const renderVersionCards = () => (versions.map((version, index) => (
+                <View key={`${version.stage || ''}${version.version ?? index}`} style={styles.card}>
+                  <View style={styles.deliverHead}>
+                    <View style={styles.deliverNum}>
+                      <Text style={styles.deliverNumText}>
+                        {version.version ?? index + 1}
+                      </Text>
+                    </View>
+                    <Text style={styles.deliverTitle}>
+                      {version.stage === 'raw'
+                        ? 'Raw video'
+                        : version.stage === 'edited'
+                        ? 'Edited video'
+                        : String(version.title || version.asset_type || 'Final Video')}
+                    </Text>
+                    <View
+                      style={[
+                        styles.badgePill,
+                        String(version.status).toLowerCase() === 'approved'
+                          ? styles.badgeDone
+                          : styles.badgePending,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.badgePillText,
+                          String(version.status).toLowerCase() === 'approved'
+                            ? styles.badgeDoneText
+                            : styles.badgePendingText,
+                        ]}
+                      >
+                        {version.status || 'submitted'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {(() => {
+                    // Prefer a real thumbnail; otherwise a poster frame of the
+                    // submitted video so the card isn't blank.
+                    const poster =
+                      mediaUrl(version.thumbnail_url) ||
+                      posterFrom(mediaUrl(version.video_url));
+                    return poster ? (
+                      <View style={styles.thumbWrap}>
+                        <Image
+                          source={{ uri: poster }}
+                          style={styles.thumb}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.thumbPlay}>
+                          <Glyph name="play" color="#FFFFFF" />
+                        </View>
+                      </View>
+                    ) : null;
+                  })()}
+
+                  {!!version.submitted_at && (
+                    <>
+                      <Text style={styles.uploadLabel}>Uploaded on</Text>
+                      <Text style={styles.uploadDate}>
+                        {longDate(version.submitted_at)}
+                      </Text>
+                    </>
+                  )}
+
+                  <View style={styles.deliverActions}>
+                    <TouchableOpacity
+                      style={[styles.ghostBtn, styles.flex]}
+                      disabled={!version.video_url}
+                      onPress={() => {
+                        const url = mediaUrl(version.video_url);
+                        if (url) setPreviewUri(url);
+                      }}
+                      accessibilityRole="button"
+                    >
+                      <Glyph name="play" color="#3D4FD8" />
+                      <Text style={styles.ghostBtnText}>Preview</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.softBtn, styles.flex]}
+                      disabled={!version.raw_footage_url && !version.video_url}
+                      onPress={() => {
+                        const url = mediaUrl(
+                          version.raw_footage_url || version.video_url,
+                        );
+                        if (url) Linking.openURL(url).catch(() => {});
+                      }}
+                      accessibilityRole="button"
+                    >
+                      <Glyph name="download" color="#3D4FD8" />
+                      <Text style={styles.ghostBtnText}>Download</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )));
+
   return (
     <View style={styles.screen}>
       {/* --- dark header --- */}
@@ -762,6 +895,10 @@ function DealDetails({
       </View>
 
       <ScrollView
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => {
+          setRefreshing(true);
+          refreshDeal();
+        }} />}
         style={styles.body}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
@@ -902,6 +1039,7 @@ function DealDetails({
               );
             })}
           </ScrollView>
+      <VideoPreview uri={previewUri} onClose={() => setPreviewUri(null)} />
         </View>
 
         {/* --- tabs --- */}
@@ -988,6 +1126,19 @@ function DealDetails({
               )}
             </Accordion>
 
+            {state.toLowerCase().includes('revision') && (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Revision requested</Text>
+                <Text style={styles.bodyText}>{String(revisions.latest_feedback || 'Review the requested changes and upload a revised video. Your previous upload stays below.')}</Text>
+                {deal.can_submit_content && canSubmitWork && (
+                  <TouchableOpacity style={[styles.primaryBtn, styles.mt12]} onPress={handleSubmitWork}
+                    disabled={submitting} accessibilityRole="button">
+                    <Text style={styles.primaryBtnText}>{submitting ? 'Uploading…' : 'Upload revised video'}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {versions.length > 0 && renderVersionCards()}
             <Accordion
               icon="pulse"
               title="Activity Timeline"
@@ -1149,101 +1300,7 @@ function DealDetails({
                   )}
               </View>
             ) : (
-              versions.map((version, index) => (
-                <View key={`${version.stage || ''}${version.version ?? index}`} style={styles.card}>
-                  <View style={styles.deliverHead}>
-                    <View style={styles.deliverNum}>
-                      <Text style={styles.deliverNumText}>
-                        {version.version ?? index + 1}
-                      </Text>
-                    </View>
-                    <Text style={styles.deliverTitle}>
-                      {version.stage === 'raw'
-                        ? 'Raw video'
-                        : version.stage === 'edited'
-                        ? 'Edited video'
-                        : String(version.title || version.asset_type || 'Final Video')}
-                    </Text>
-                    <View
-                      style={[
-                        styles.badgePill,
-                        String(version.status).toLowerCase() === 'approved'
-                          ? styles.badgeDone
-                          : styles.badgePending,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.badgePillText,
-                          String(version.status).toLowerCase() === 'approved'
-                            ? styles.badgeDoneText
-                            : styles.badgePendingText,
-                        ]}
-                      >
-                        {version.status || 'submitted'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {(() => {
-                    // Prefer a real thumbnail; otherwise a poster frame of the
-                    // submitted video so the card isn't blank.
-                    const poster =
-                      mediaUrl(version.thumbnail_url) ||
-                      posterFrom(mediaUrl(version.video_url));
-                    return poster ? (
-                      <View style={styles.thumbWrap}>
-                        <Image
-                          source={{ uri: poster }}
-                          style={styles.thumb}
-                          resizeMode="cover"
-                        />
-                        <View style={styles.thumbPlay}>
-                          <Glyph name="play" color="#FFFFFF" />
-                        </View>
-                      </View>
-                    ) : null;
-                  })()}
-
-                  {!!version.submitted_at && (
-                    <>
-                      <Text style={styles.uploadLabel}>Uploaded on</Text>
-                      <Text style={styles.uploadDate}>
-                        {longDate(version.submitted_at)}
-                      </Text>
-                    </>
-                  )}
-
-                  <View style={styles.deliverActions}>
-                    <TouchableOpacity
-                      style={[styles.ghostBtn, styles.flex]}
-                      disabled={!version.video_url}
-                      onPress={() => {
-                        const url = mediaUrl(version.video_url);
-                        if (url) Linking.openURL(url).catch(() => {});
-                      }}
-                      accessibilityRole="button"
-                    >
-                      <Glyph name="play" color="#3D4FD8" />
-                      <Text style={styles.ghostBtnText}>Preview</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.softBtn, styles.flex]}
-                      disabled={!version.raw_footage_url && !version.video_url}
-                      onPress={() => {
-                        const url = mediaUrl(
-                          version.raw_footage_url || version.video_url,
-                        );
-                        if (url) Linking.openURL(url).catch(() => {});
-                      }}
-                      accessibilityRole="button"
-                    >
-                      <Glyph name="download" color="#3D4FD8" />
-                      <Text style={styles.ghostBtnText}>Download</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))
+              renderVersionCards()
             )}
 
             {deal.current_state === 'Raw Approved — UGC.ad Editing' && (
@@ -1254,6 +1311,12 @@ function DealDetails({
               </View>
             )}
 
+            {state.toLowerCase().includes('revision') && (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Revision requested</Text>
+                <Text style={styles.bodyText}>{String(revisions.latest_feedback || 'Upload a revised version below. Previous uploads remain available above.')}</Text>
+              </View>
+            )}
             {deal.can_submit_content && canSubmitWork && !!stageDue && (
               <Text style={styles.bodyText}>
                 {stage === 'raw' ? 'Raw video' : 'Edited video'} due by {longDate(stageDue)}
@@ -1273,7 +1336,7 @@ function DealDetails({
                   <>
                     <Glyph name="upload" color="#FFFFFF" />
                     <Text style={styles.primaryBtnText}>
-                      {stage ? `Upload ${stageLabel}` : 'Upload / Submit Work'}
+                      {state.toLowerCase().includes('revision') ? 'Upload revised video' : stage ? `Upload ${stageLabel}` : 'Upload / Submit Work'}
                     </Text>
                   </>
                 )}

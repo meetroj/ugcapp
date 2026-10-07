@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Post a Campaign — the native brief wizard. This mirrors the web
  * /dashboard/business/post-brief flow (Frontend/src/pages/PostABrief.js)
@@ -16,7 +17,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Modal,
   ScrollView,
@@ -28,7 +28,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
-import { createCampaign, getBusinessProfile, getCampaign } from '../api';
+import {
+  createCampaign,
+  getBusinessProfile,
+  getCampaign,
+  getPublicProfile,
+} from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -38,7 +43,31 @@ type Props = {
   onDone: (campaignId: string | null) => void;
   /** Campaign id to duplicate: its fields prefill a fresh draft to edit. */
   duplicateFrom?: string;
+  /**
+   * Private brief for ONE creator. The budget is fixed to that creator's
+   * expected payout (the backend enforces the same figure).
+   */
+  creatorId?: string;
 };
+
+/**
+ * The creator's per-video price, same rule as the backend's
+ * creator_plan_price(): rate_card.expected_payout, else the cheapest
+ * portfolio-card price. 0 means they never set one.
+ */
+function creatorPrice(p: Record<string, any>): number {
+  const digits = (v: unknown) =>
+    parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10) || 0;
+  const profile = p.profile || {};
+  const rc = profile.rate_card || {};
+  const flat = digits(rc.expected_payout || rc.last_salary);
+  if (flat) return flat;
+  const cards = p.portfolio || profile.portfolio_items || profile.portfolio || [];
+  const prices = (Array.isArray(cards) ? cards : [])
+    .map((c: any) => digits(c?.price || c?.price_per_video))
+    .filter((n: number) => n > 0);
+  return prices.length ? Math.min(...prices) : 0;
+}
 
 /**
  * Web parity: same rates used on the review section's cost breakdown.
@@ -1215,7 +1244,13 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
+function BrandPostBrief({
+  token,
+  onBack,
+  onDone,
+  duplicateFrom,
+  creatorId,
+}: Props) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(initialForm);
@@ -1230,6 +1265,9 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
     let active = true;
     (async () => {
       try {
+        // A duplicate or private brief starts clean, never from a leftover draft —
+        // otherwise the draft could land after (or fill gaps in) it.
+        if (duplicateFrom || creatorId) return;
         const raw = await AsyncStorage.getItem(DRAFT_KEY);
         if (active && raw) {
           const saved = JSON.parse(raw) as {
@@ -1257,7 +1295,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
 
   // Duplicate: fetch the source campaign and prefill a fresh draft. Best-effort
   // per field — anything that doesn't map cleanly stays default, and the brand
-  // reviews before publishing. The title gets a "(Copy)" suffix.
+  // reviews before publishing. Keep the original campaign name.
   useEffect(() => {
     if (!duplicateFrom) return;
     let active = true;
@@ -1265,41 +1303,104 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
       try {
         const c: any = await getCampaign(token, duplicateFrom);
         if (!active || !c) return;
-        const str = (v: any) => (v == null ? '' : String(v));
-        const arr = (v: any) => (Array.isArray(v) ? v : []);
-        const dels = arr(c.deliverable_items);
+        // Inverse of buildPayload: every key it sends is read back here, so a
+        // copy carries all 8 sections. Missing values fall back to initialForm.
+        const str = (v: any, d = '') => (v == null || v === '' ? d : String(v));
+        const arr = (v: any) => (Array.isArray(v) ? v.map(String) : []);
+        const bool = (v: any, d: boolean) => (typeof v === 'boolean' ? v : d);
+        const list = (v: any) => (arr(v).length ? arr(v) : ['']);
+        // Never copy an elapsed date into a new brief.
+        const tomorrow = addDays(todayISO(), 1);
+        const future = (d: any) => (str(d) >= tomorrow ? str(d) : '');
+        const dels = Array.isArray(c.deliverable_items) ? c.deliverable_items : [];
+        const storedCat = str(c.product_category || c.category).trim();
+        const knownCat = CATEGORIES.find(
+          x => x !== OTHER_CATEGORY && x.toLowerCase() === storedCat.toLowerCase(),
+        );
+        const type = PRODUCT_TYPES.some(p => p.value === c.product_type)
+          ? str(c.product_type)
+          : initialForm.productType;
+        const bMin = Number(c.budget_min || 0);
+        const bMax = Number(c.per_video_budget || c.budget_max || 0);
+        const ranged = bMax > 0 && bMin > 0 && bMin !== bMax;
         setForm(cur => ({
-          ...cur,
-          campaignName: (str(c.title) ? `${str(c.title)} (Copy)` : '').slice(0, 120),
-          category: str(c.product_category || c.category),
+          ...initialForm,
+          // Brand name always comes from the profile, never the source brief.
+          brandName: cur.brandName,
+          // Section 1: Campaign Basics
+          campaignName: str(c.title).slice(0, 120),
+          category: storedCat ? knownCat || OTHER_CATEGORY : '',
+          customCategory: storedCat && !knownCat ? storedCat : '',
+          productType: type,
+          productTypeOther: str(c.product_type_detail),
           productName: str(c.product_name),
           productDescription: str(c.product_description),
           campaignHook: str(c.campaign_hook),
           keyMessage: str(c.key_message),
-          objectives: arr(c.objectives).map(String),
+          objectives: arr(c.objectives),
           targetAudience: str(c.target_audience),
-          productType: str(c.product_type) === 'digital' ? 'digital' : 'physical',
-          platforms: arr(c.platforms).map(String),
-          rightsDuration: str(c.rights_duration),
-          exclusivity: str(c.exclusivity) || 'None',
-          modificationRights: str(c.modification_rights),
-          tones: arr(c.tones).map(String),
-          pacing: str(c.pacing) || 'No preference',
+          budgetVisible: bool(c.budget_visible, initialForm.budgetVisible),
           scriptProvider: str(c.script_provider) === 'ugc' ? 'ugc' : 'brand',
-          revisions: Number(c.revision_limit ?? c.free_revisions ?? 2) || 2,
-          budgetMode: 'fixed',
-          fixedBudget: str(c.budget || c.budget_max || c.budget_min),
+          scriptText: str(c.script_text),
+          // Section 3: Must-Include
+          productVisible: bool(c.product_visible, initialForm.productVisible),
+          visibilitySeconds: str(c.product_visible_seconds),
+          verbalMention: bool(c.verbal_mention, initialForm.verbalMention),
+          productNames: str(c.verbal_mention_text),
+          requiredPhrases: list(c.required_phrases),
+          requiredShots: list(c.required_shots),
+          callToAction: str(c.call_to_action, initialForm.callToAction),
+          ctaLink: str(c.cta_link),
+          promoCode: str(c.promo_code),
+          hashtags: str(c.hashtags),
+          brandHandleTag: bool(c.brand_handle_tag, initialForm.brandHandleTag),
+          // Section 4: Must-Avoid
+          noCompetitors: bool(c.no_competitors, initialForm.noCompetitors),
+          competitors: str(c.competitors_text),
+          noOtherProducts: bool(c.no_other_products, initialForm.noOtherProducts),
+          noProfanity: bool(c.no_profanity, initialForm.noProfanity),
+          noPolitical: bool(c.no_political, initialForm.noPolitical),
+          avoidFilters: bool(c.avoid_filters, initialForm.avoidFilters),
+          filterTypes: str(c.filter_types_text),
+          avoidText: str(c.avoid_text),
+          // Section 5: Style Guidance
+          tones: arr(c.tone_tags),
+          pacing: str(c.pacing || c.tone_reference, initialForm.pacing),
+          musicPreference: str(c.music_preference, initialForm.musicPreference),
+          referenceVideos: list(c.reference_videos),
+          // Section 6: Usage Rights
+          platforms: arr(c.usage_platforms),
+          rightsDuration: str(c.rights_duration),
+          exclusivity: str(c.exclusivity, initialForm.exclusivity),
+          whitelisting: bool(c.whitelisting, initialForm.whitelisting),
+          modificationRights: str(c.modification_rights),
+          // Section 7: Timeline, Budget & Creator Targeting
+          productShippingBy: future(c.product_shipping_by),
+          draftDeliveryBy: future(c.draft_delivery_by),
+          finalDeliveryBy: future(c.final_delivery_by),
+          revisions: Number(c.free_revisions ?? c.revision_limit ?? 2) || 0,
+          creatorsWanted: Math.max(1, Number(c.creators_wanted) || 1),
+          budgetMode: ranged ? 'range' : 'fixed',
+          fixedBudget: !ranged && bMax > 0 ? String(bMax) : '',
+          budgetMin: ranged ? String(bMin) : '',
+          budgetMax: ranged ? String(bMax) : '',
+          creatorLevel: str(c.creator_level),
+          qualityTier: str(c.content_quality_tier),
+          genderPreference: str(c.gender_preference, initialForm.genderPreference),
+          cityFilter: str(c.city_filter, initialForm.cityFilter),
+          nicheTags: arr(c.creator_niche_tags),
+          // Section 2: Deliverables
           deliverables: dels.length
             ? dels.map((d: any) => ({
                 ...createDeliverable(),
                 type: str(d.type),
                 quantity: Number(d.quantity) || 1,
                 duration: str(d.duration),
-                aspectRatios: arr(d.aspect_ratios).length ? arr(d.aspect_ratios).map(String) : ['9:16'],
+                aspectRatios: arr(d.aspect_ratios).length ? arr(d.aspect_ratios) : ['9:16'],
                 editedRequired: !!d.edited_required,
                 editedBy: d.edited_by === 'ugc' ? 'ugc' : 'creator',
               }))
-            : cur.deliverables,
+            : initialForm.deliverables,
         }));
       } catch {
         // Couldn't load the source — leave the blank form; not fatal.
@@ -1310,12 +1411,42 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
     };
   }, [duplicateFrom, token]);
 
+  // Private brief: fetch the creator's expected payout and lock the budget to
+  // it. null = still loading, 0 = the creator never set a price.
+  const [privatePrice, setPrivatePrice] = useState<number | null>(null);
+  const [privateName, setPrivateName] = useState('');
   useEffect(() => {
-    if (!restored) return;
+    if (!creatorId) return;
+    let active = true;
+    getPublicProfile(token, creatorId)
+      .then(p => {
+        if (!active) return;
+        const price = creatorPrice(p as Record<string, any>);
+        setPrivatePrice(price);
+        setPrivateName(
+          String(p.nickname || p.full_name || '').replace(/^@/, ''),
+        );
+        setForm(cur => ({
+          ...cur,
+          budgetMode: 'fixed',
+          fixedBudget: price ? String(price) : '',
+          creatorsWanted: 1,
+        }));
+      })
+      .catch(() => active && setPrivatePrice(0));
+    return () => {
+      active = false;
+    };
+  }, [creatorId, token]);
+
+  useEffect(() => {
+    // A private brief is tied to one creator; parking it as the shared draft
+    // would leak its locked budget into the next normal campaign.
+    if (!restored || creatorId) return;
     AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ form, step })).catch(
       () => {},
     );
-  }, [form, step, restored]);
+  }, [form, step, restored, creatorId]);
 
   const set = useCallback(
     <K extends keyof FormState>(field: K, value: FormState[K]) =>
@@ -1837,13 +1968,24 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
         draft_delivery_by: form.draftDeliveryBy,
         final_delivery_by: (anyEdited && form.finalDeliveryBy) || form.draftDeliveryBy,
         budget_mode: form.budgetMode,
+        // Sent to ONE creator; the backend fixes the budget to their payout.
+        ...(creatorId
+          ? { selected_creator: creatorId, visibility: 'private' }
+          : {}),
       };
     },
-    [avoidRules, briefText, budget, creatorsCount, form, needsShipping, totalBudget],
+    [avoidRules, briefText, budget, creatorId, creatorsCount, form, needsShipping, totalBudget],
   );
 
   const submit = useCallback(
     async (mode: 'draft' | 'publish') => {
+      if (mode === 'publish' && creatorId && !privatePrice) {
+        Alert.alert(
+          'No price set',
+          "This creator hasn't set their expected payout yet. Message them to agree on one.",
+        );
+        return;
+      }
       // A draft may be partial; publishing must clear every section gate first.
       if (mode === 'publish') {
         const firstBad = STEPS.findIndex((_, index) => !isStepValid(index + 1));
@@ -1870,18 +2012,29 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
         const data = await createCampaign(
           token,
           buildPayload(mode === 'draft' ? 'draft' : 'pending_approval'),
+          mode === 'draft',
         );
         // The brief now lives on the server; keeping the local copy would
         // resurrect it as an unfinished draft the next time the form opens.
         await AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
-        onDone(data?.id ? String(data.id) : null);
+        if (creatorId) {
+          Alert.alert(
+            mode === 'draft' ? 'Draft saved' : 'Submitted for admin review',
+            mode === 'draft'
+              ? 'Your private brief is saved as a draft. The creator has not been notified.'
+              : 'The admin team will review your private brief first. The creator receives the invitation only after approval.',
+            [{ text: 'Done', onPress: () => onDone(data?.id ? String(data.id) : null) }],
+          );
+        } else {
+          onDone(data?.id ? String(data.id) : null);
+        }
       } catch (err: any) {
         setError(err?.message || 'Could not save the campaign.');
       } finally {
         setBusy(null);
       }
     },
-    [buildPayload, isStepValid, onDone, stepIssues, token],
+    [buildPayload, creatorId, isStepValid, onDone, privatePrice, stepIssues, token],
   );
 
   // Reset scroll to the top whenever the step changes — otherwise the next
@@ -1967,15 +2120,16 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
             Section {String.fromCharCode(64 + step)} of H · {STEPS[step - 1]}
           </Text>
         </View>
-        <TouchableOpacity
-          onPress={() => submit('draft')}
-          disabled={busy !== null}
-          accessibilityRole="button"
-        >
-          <Text style={styles.saveDraft}>
-            {busy === 'draft' ? 'Saving…' : 'Save Draft'}
-          </Text>
-        </TouchableOpacity>
+        {/* Drafts preserve the private creator link and never notify creators. */}
+          <TouchableOpacity
+            onPress={() => submit('draft')}
+            disabled={busy !== null}
+            accessibilityRole="button"
+          >
+            <Text style={styles.saveDraft}>
+              {busy === 'draft' ? 'Saving…' : 'Save Draft'}
+            </Text>
+          </TouchableOpacity>
       </View>
 
       <View style={styles.progress}>
@@ -2584,7 +2738,9 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
               <>
                 {/* How many creators this brief hires. Uses the same stepper
                     as the deliverable quantity rows, so the two counts that
-                    drive the wallet debit are entered the same way. */}
+                    drive the wallet debit are entered the same way. A private
+                    brief always hires exactly its one creator. */}
+                {!creatorId && (
                 <View style={styles.field}>
                   <Text style={styles.fieldLabel}>
                     Creators wanted<Text style={styles.required}> *</Text>
@@ -2618,6 +2774,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                       : `The budget below is held for each of the ${creatorsCount} creators. The brief stays open until all ${creatorsCount} are picked.`}
                   </Text>
                 </View>
+                )}
                 <ChipGroup
                   label="Minimum creator level"
                   required
@@ -2698,6 +2855,27 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                   />
                 )}
 
+                {creatorId ? (
+                  // Private brief: the budget is the creator's own price, fixed.
+                  <View style={styles.field}>
+                    <Text style={styles.fieldLabel}>
+                      Budget (fixed)<Text style={styles.required}> *</Text>
+                    </Text>
+                    <Text style={styles.sectionTitle}>
+                      {privatePrice === null
+                        ? 'Loading…'
+                        : privatePrice > 0
+                        ? `Rs. ${privatePrice.toLocaleString('en-IN')} per video`
+                        : 'Price not set'}
+                    </Text>
+                    <Text style={styles.hint}>
+                      {privatePrice
+                        ? `${privateName || 'This creator'}'s expected payout. It can't be changed for a private campaign.`
+                        : "This creator hasn't set an expected payout yet. Message them to agree on one."}
+                    </Text>
+                  </View>
+                ) : (
+                <>
                 <ChipGroup
                   label="Budget"
                   required
@@ -2736,6 +2914,8 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                       placeholder="2500"
                     />
                   </>
+                )}
+                </>
                 )}
               </>
             )}
@@ -2816,8 +2996,9 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
                     </Text>
                   </View>
                   <Text style={styles.summaryNote}>
-                    Published briefs are reviewed by our team before creators
-                    can see them.
+                    {creatorId
+                      ? 'This private brief goes to admin review first. The creator receives the invitation only after approval.'
+                      : 'Published briefs are reviewed by our team before creators can see them.'}
                   </Text>
                 </View>
 
@@ -2862,7 +3043,7 @@ function BrandPostBrief({ token, onBack, onDone, duplicateFrom }: Props) {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={styles.nextText}>
-                {last ? 'Publish Campaign' : 'Continue'}
+                {last ? (creatorId ? 'Submit for Review' : 'Publish Campaign') : 'Continue'}
               </Text>
             )}
           </TouchableOpacity>

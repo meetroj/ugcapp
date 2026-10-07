@@ -3,8 +3,9 @@
  * Reads GET /api/bids/my, which returns each campaign the creator has bid on
  * with the creator's own bid flattened onto it as `my_bid` / `bid_status`.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AppState,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -52,29 +53,62 @@ function formatDate(value: unknown): string {
   });
 }
 
+/** Keep proposals awaiting a decision; hired campaigns belong in My Deals. */
+export function isOpenBid(item: MyBid): boolean {
+  const bidStatus = String(item.bid_status || item.my_bid?.status || 'pending').toLowerCase();
+  if (!['pending', 'submitted', 'bid_submitted', 'shortlisted'].includes(bidStatus)) return false;
+  const campaign = item.campaign || item;
+  const campaignStatus = String(item.campaign_status || campaign.status || '').toLowerCase();
+  if (campaignStatus && campaignStatus !== 'active') return false;
+  const selected = Array.isArray(campaign.selected_creators)
+    ? campaign.selected_creators.filter(Boolean).map(String)
+    : [];
+  if (!selected.length && campaign.selected_creator) selected.push(String(campaign.selected_creator));
+  if (item.my_bid?.creator_id && selected.includes(String(item.my_bid.creator_id))) return false;
+  const wanted = Math.max(1, Number(campaign.creators_wanted) || 1);
+  return selected.length < wanted;
+}
+
 function MyBids({ token, onBack, onMessages, unread }: Props) {
   const [items, setItems] = useState<MyBid[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const mounted = useRef(false);
+  const requestId = useRef(0);
 
   const load = useCallback(async () => {
+    const current = ++requestId.current;
+    const isCurrent = () => mounted.current && current === requestId.current;
     try {
-      setError('');
-      setItems(await getMyBids(token));
+      const fresh = await getMyBids(token);
+      if (isCurrent()) {
+        setError('');
+        setItems(fresh.filter(isOpenBid));
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load your bids.');
+      if (isCurrent()) setError(e instanceof Error ? e.message : 'Could not load your bids.');
+    } finally {
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [token]);
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      await load();
-      if (active) setLoading(false);
-    })();
+    mounted.current = true;
+    load();
+    const interval = setInterval(() => {
+      if (AppState.currentState === 'active') load();
+    }, 10000);
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') load();
+    });
     return () => {
-      active = false;
+      mounted.current = false;
+      clearInterval(interval);
+      subscription.remove();
     };
   }, [load]);
 
@@ -109,16 +143,15 @@ function MyBids({ token, onBack, onMessages, unread }: Props) {
 
             {!error && !items.length ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>No bids yet</Text>
+                <Text style={styles.emptyTitle}>No pending bids</Text>
                 <Text style={styles.emptyBody}>
-                  Bids you place from Browse Campaigns show up here with their
-                  status.
+                  Bids awaiting a decision appear here. Hired campaigns are in My Deals.
                 </Text>
               </View>
             ) : null}
 
             {items.map((item, index) => {
-              const status = String(item.bid_status || 'pending');
+              const status = String(item.bid_status || item.my_bid?.status || 'pending');
               const tint = statusTint(status);
               const title =
                 (item.title as string) ||
@@ -126,7 +159,7 @@ function MyBids({ token, onBack, onMessages, unread }: Props) {
               const when = formatDate(item.submitted_at);
               return (
                 <View
-                  key={String(item.id) || `bid-${index}`}
+                  key={String(item.campaign?.id || item.id || `bid-${index}`)}
                   style={styles.card}
                 >
                   <View style={styles.cardTop}>

@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * My Deals — native screen replacing the web /my-deals page inside the shell.
  * Lists the signed-in creator's deals from GET /api/deals/my, which the backend
@@ -101,7 +102,7 @@ function MyDeals({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
     (async () => {
       await load();

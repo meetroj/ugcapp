@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * Messages — the native conversation list replacing the web /messages page.
  * Reads GET /api/chat/conversations, which already returns the partner's name,
@@ -5,7 +6,7 @@
  * thread hands off to the existing web chat, which owns sending, attachments
  * and the offer/dispute action cards.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Image,
   RefreshControl,
@@ -133,7 +134,7 @@ function BrandMessages({ token, onOpenThread, onBack }: Props) {
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 

@@ -1,3 +1,5 @@
+import { useLiveEffect } from "../liveUpdates";
+import { Alert } from '../components/AppAlert';
 /**
  * Shipment Tracking — the native replacement for the web /shipment/{id} page.
  * Reads GET /api/shipment/{campaign_id}. That endpoint returns the product
@@ -6,10 +8,9 @@
  * status, tracking, product details, pickup address and the checklist, and
  * states plainly that the delivery address is withheld.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   RefreshControl,
   ScrollView,
@@ -239,7 +240,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
     }
   }, [campaignId, creatorId, token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 

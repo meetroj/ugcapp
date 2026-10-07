@@ -1,3 +1,5 @@
+import { useLiveEffect } from "../liveUpdates";
+import { Alert } from '../components/AppAlert';
 /**
  * Chat thread — the native message view for one conversation, replacing the
  * web chat page. Reads GET /api/chat/{other_user_id} and sends through
@@ -8,7 +10,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -215,6 +216,7 @@ function ActionCard({
   onCounter,
   onRespond,
   onOpenDeal,
+  onPostBrief,
 }: {
   item: Item;
   mine: boolean;
@@ -230,10 +232,11 @@ function ActionCard({
   onCounter: () => void;
   onRespond: (action: ActionCardResponse) => void;
   onOpenDeal?: () => void;
+  onPostBrief?: () => void;
 }) {
   const type = item.type as ActionCardType | undefined;
   const label = (type && ACTION_CARD_LABELS[type]) || humanise(String(type || 'Update'));
-  const status = String(item.card_status || 'open');
+  const status = String(item.card_status || item.status || 'open');
   const fields: Record<string, unknown> = item.fields || {};
   const actions: ActionCardResponse[] = Array.isArray(item.available_actions)
     ? item.available_actions
@@ -369,6 +372,19 @@ function ActionCard({
       )}
 
       {/* An accepted invitation is the brand's cue to post the real brief. */}
+      {status === 'accepted' && type === 'private_invitation' && mine && onPostBrief && (
+        <View style={styles.cardActions}>
+          <TouchableOpacity
+            style={[styles.cardBtn, styles.cardBtnPrimary]}
+            onPress={onPostBrief}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.cardBtnText, styles.cardBtnTextPrimary]}>
+              Post a Brief
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {status === 'accepted' && type === 'private_invitation' && !mine && (
         <Text style={styles.cardNote}>
           Accepted — waiting for the brand to post the brief.
@@ -492,7 +508,7 @@ function BrandChatThread({
    */
   const [dealStatus, setDealStatus] = useState<string | null>(null);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let active = true;
     getConversations(token)
       .then(list => {
@@ -512,12 +528,24 @@ function BrandChatThread({
 
   const cards = availableCards(session.role, dealStatus);
 
+  const openPrivateBrief = useCallback(() => {
+    Keyboard.dismiss();
+    onNavigate(
+      `/dashboard/business/post-brief?creator=${encodeURIComponent(otherUserId)}`,
+    );
+  }, [onNavigate, otherUserId]);
+
   const openCard = useCallback((type: ActionCardType) => {
+    // Match the website: invitations create a private campaign for admin review.
+    if (type === 'private_invitation') {
+      openPrivateBrief();
+      return;
+    }
     setCardType(type);
     setCardForm(initialForm(type));
     setCardError('');
     Keyboard.dismiss();
-  }, []);
+  }, [openPrivateBrief]);
 
   const closeCard = useCallback(() => {
     setCardType(null);
@@ -580,7 +608,7 @@ function BrandChatThread({
     [load, respondingTo, token],
   );
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 
@@ -678,7 +706,7 @@ function BrandChatThread({
         {session.role === 'business' && (
           <TouchableOpacity
             style={styles.briefBtn}
-            onPress={() => onNavigate('/dashboard/business/post-brief')}
+            onPress={openPrivateBrief}
             accessibilityRole="button"
           >
             <Icon name="brief" color="#FFFFFF" size={14} />
@@ -791,6 +819,7 @@ function BrandChatThread({
                     // card is sent, exactly as the website does it.
                     onCounter={() => openCard('counter_offer')}
                     onRespond={action => respond(item.id, action)}
+                    onPostBrief={session.role === 'business' ? openPrivateBrief : undefined}
                     onOpenDeal={
                       item.campaign_id || item.deal_id
                         ? () =>

@@ -1,3 +1,5 @@
+import { useLiveEffect } from "../liveUpdates";
+import { Alert } from '../components/AppAlert';
 /**
  * Creator Bids — the native replacement for the web
  * /dashboard/business/pending-bids page. Campaigns are the outer group and
@@ -5,10 +7,9 @@
  * Accept / Decline / Profile all hand off to the existing web flow, because
  * accepting a bid moves money into escrow.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -146,7 +147,7 @@ function BrandBids({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 

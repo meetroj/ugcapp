@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * A creator's public profile, as a brand sees it — the native version of the
  * website's CreatorProfileModal. Reached from the quick-preview sheet on the
@@ -16,7 +17,7 @@
  * already loaded is passed in as `seed` so the header renders immediately
  * instead of flashing empty while the request is in flight.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -276,12 +277,15 @@ function VideoCard({
   const price = String(item.price || '').replace(/[^0-9]/g, '');
   const days = String(item.delivery || '').replace(/[^0-9]/g, '');
   const poster = videoPoster(item.url);
+  const [posterFailed, setPosterFailed] = useState(false);
 
   return (
     <View style={styles.videoCard}>
       <Pressable
         style={styles.videoFrame}
         onPress={() => isVideo(item.url) && setPlaying(p => !p)}
+        accessibilityRole="button"
+        accessibilityLabel={playing ? "Pause portfolio video" : "Play portfolio video"}
       >
         {failed || !item.url ? (
           // Matches the web's "Media unavailable" placeholder rather than a
@@ -303,10 +307,17 @@ function VideoCard({
             ignoreSilentSwitch="ignore"
             onError={() => setFailed(true)}
           />
-        ) : isVideo(item.url) && poster ? (
+        ) : isVideo(item.url) ? (
           // Still poster + play badge; tapping mounts the player above.
           <>
-            <Image source={{ uri: poster }} style={styles.videoMedia} />
+            {poster && !posterFailed ? (
+              <Image source={{ uri: poster }} style={styles.videoMedia} onError={() => setPosterFailed(true)} />
+            ) : (
+              <View style={[styles.videoMedia, styles.videoMissing]}>
+                <Icon name="camera" color="#B9BDD4" size={22} />
+                <Text style={styles.videoMissingText}>Tap to play video</Text>
+              </View>
+            )}
             <View style={styles.playPill}>
               <Icon name="play" color="#FFFFFF" size={11} />
             </View>
@@ -367,7 +378,7 @@ function CreatorPublicProfile({
   // Set while a tab tap is animating, so the scroll handler doesn't fight it.
   const locked = useRef(false);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let alive = true;
     setLoading(true);
     // The profile drives the page; reviews only fill their own section, so a

@@ -1,9 +1,10 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * KYC verification status for creators. The layout is fixed; the banner,
  * status pill and guidance box are driven by the account's KYC status so the
  * same screen covers verified, pending, rejected and not-yet-submitted.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -261,7 +262,7 @@ function KycVerification({
     [token],
   );
 
-  useEffect(() => {
+  useLiveEffect(() => {
     let cancelled = false;
     load(() => cancelled).finally(() => {
       if (!cancelled) {

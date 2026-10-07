@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /**
  * Holds the sign-up / log-in pair and toggles between them. The shared
  * AuthLayout stays mounted while only the form content changes, allowing
@@ -14,8 +15,7 @@ import {
   TouchableOpacity,
   UIManager,
   View,
-  Alert,
-} from 'react-native';
+  } from 'react-native';
 import { Text, TextInput } from '../components/Text';
 import { LoginForm } from './LoginScreen';
 import { SignUpForm } from './SignUpScreen';
@@ -94,19 +94,10 @@ function AuthFlow({ onAuthenticated }: Props) {
     email: string;
     password: string;
     phone: string;
-    name: string;
-    website?: string;
   }) => {
     try {
       onAuthenticated(
-        await signUp(
-          values.role,
-          values.email,
-          values.password,
-          values.phone,
-          values.name,
-          values.website,
-        ),
+        await signUp(values.role, values.email, values.password, values.phone),
       );
     } catch (error) {
       Alert.alert(

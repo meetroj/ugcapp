@@ -1,3 +1,4 @@
+import { useLiveEffect } from "../liveUpdates";
 /**
  * The bell dropdown — a panel that slides down from the header listing the
  * notifications the user has actually received. This is NOT the preferences
@@ -6,7 +7,7 @@
  * Mirrors the website's NotificationBell: reads /notifications/my-notifications,
  * polls the unread count, and marks items read on tap.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
@@ -132,7 +133,7 @@ function NotificationFeed({
       });
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     if (!visible) {
       slide.setValue(0);
       return;

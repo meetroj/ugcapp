@@ -1,3 +1,6 @@
+import { useLiveEffect } from "../liveUpdates";
+import { submissionHistory } from '../submissionHistory';
+import { Alert } from '../components/AppAlert';
 /**
  * Work Review — the native replacement for the web
  * /dashboard/business/work-review page. Lists the submissions waiting on the
@@ -5,12 +8,16 @@
  * row from the design. Both decisions are native: Approve confirms first and
  * posts to POST /api/work/{work_id}/approve, and Request Revision opens the
  * structured composer in WorkRevisionRequest.
+ *
+ * Like the website, tabs also show what is no longer pending, from
+ * GET /api/business/work-review: approved work (with Download) and work sent
+ * back for a revision.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
+  Linking,
   Modal,
   RefreshControl,
   ScrollView,
@@ -20,10 +27,18 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
-import Video from 'react-native-video';
+import VideoPreview from '../components/VideoPreview';
 import { SkeletonList } from '../components/Skeleton';
 import WorkRevisionRequest from './WorkRevisionRequest';
-import { approveWork, BACKEND_URL, getPendingWork, postReview } from '../api';
+import { downloadUrlOf } from './BrandCampaignDetail';
+import {
+  approveWork,
+  BACKEND_URL,
+  getPendingWork,
+  getBusinessDeals,
+  getWorkReview,
+  postReview,
+} from '../api';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -35,6 +50,20 @@ type Props = {
 };
 
 type Work = Record<string, any> & { id: string };
+
+// Same tabs as the website's Work Review. "All" is the default there too.
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'pending_review', label: 'Pending' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'revision_requested', label: 'Revision' },
+];
+const STATUS_LABEL: Record<string, string> = {
+  approved: 'Approved',
+  revision_requested: 'Revision',
+  awaiting_edit: 'With UGC.ad Editors',
+  awaiting_edited: 'Creator Editing',
+};
 
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -134,6 +163,9 @@ function Icon({
       )}
       {name === 'approve' && <Path d="m5.5 12.5 4 4 9-9" {...line} />}
       {name === 'close' && <Path d="m6 6 12 12M18 6 6 18" {...line} />}
+      {name === 'download' && (
+        <Path d="M12 4v11m0 0-4-4m4 4 4-4M5 19.5h14" {...line} />
+      )}
       {name === 'revision' && (
         <>
           <Path d="M4.5 12a7.5 7.5 0 1 1 2.4 5.5" {...line} />
@@ -152,13 +184,17 @@ function BrandWorkReview({
   onMessages,
 }: Props) {
   const [items, setItems] = useState<Work[]>([]);
+  // Everything that is NOT awaiting review (approved, revision requested, with
+  // editors), from the all-statuses list. Pending rows keep coming from
+  // `items`, whose ids are what approve / request-revision expect.
+  const [others, setOthers] = useState<Array<Record<string, any>>>([]);
+  const [tab, setTab] = useState('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // The submission whose revision composer is open.
   const [revising, setRevising] = useState<Work | null>(null);
   // The submission playing in the full-screen preview player.
   const [previewing, setPreviewing] = useState<Work | null>(null);
-  const [previewPaused, setPreviewPaused] = useState(false);
   // The just-approved submission whose creator the brand is being asked to
   // rate. Null hides the sheet.
   const [rating, setRating] = useState<Work | null>(null);
@@ -168,10 +204,16 @@ function BrandWorkReview({
 
   const load = useCallback(async () => {
     try {
-      const list = await getPendingWork(token);
+      const [list, review, deals] = await Promise.all([
+        getPendingWork(token),
+        // Optional extra: if it fails the pending list still works as before.
+        getWorkReview(token).catch(() => []),
+        getBusinessDeals(token).catch(() => []),
+      ]);
       setItems(
         list.map((work, index) => ({ ...work, id: String(work.id ?? index) })),
       );
+      setOthers([...review.filter(row => row.status !== 'pending_review'), ...submissionHistory(deals)]);
     } catch {
       // Backend unreachable — keep whatever is on screen; pull-to-refresh
       // retries the real request.
@@ -181,7 +223,7 @@ function BrandWorkReview({
     }
   }, [token]);
 
-  useEffect(() => {
+  useLiveEffect(() => {
     load();
   }, [load]);
 
@@ -263,6 +305,10 @@ function BrandWorkReview({
     [runApprove],
   );
 
+  const pendingShown = tab === 'all' || tab === 'pending_review' ? items : [];
+  const othersShown =
+    tab === 'all' ? others : others.filter(row => row.status === tab);
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -328,16 +374,45 @@ function BrandWorkReview({
               />
             }
           >
-            {!items.length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tabs}
+            >
+              {TABS.map(t => {
+                const count =
+                  t.key === 'all'
+                    ? items.length + others.length
+                    : t.key === 'pending_review'
+                    ? items.length
+                    : others.filter(row => row.status === t.key).length;
+                const on = tab === t.key;
+                return (
+                  <TouchableOpacity
+                    key={t.key}
+                    style={[styles.tab, on && styles.tabOn]}
+                    onPress={() => setTab(t.key)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text style={[styles.tabText, on && styles.tabTextOn]}>
+                      {t.label} {count}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {!pendingShown.length && !othersShown.length ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>Nothing to review</Text>
+                <Text style={styles.emptyTitle}>Nothing here</Text>
                 <Text style={styles.emptyText}>
                   Submissions from creators appear here when they're ready for
                   your approval.
                 </Text>
               </View>
             ) : (
-              items.map(work => {
+              pendingShown.map(work => {
                 const files = Array.isArray(work.work_files) ? work.work_files : [];
                 const rawPlayable =
                   work.watermarked_url ||
@@ -364,7 +439,7 @@ function BrandWorkReview({
                       style={styles.media}
                       disabled={!playable}
                       onPress={() => {
-                        setPreviewPaused(false);
+                        
                         setPreviewing(work);
                       }}
                       accessibilityRole="button"
@@ -455,7 +530,7 @@ function BrandWorkReview({
                               key={`${f.kind}-${f.url}`}
                               style={styles.secondaryBtn}
                               onPress={() => {
-                                setPreviewPaused(false);
+                                
                                 setPreviewing({ ...work, watermarked_url: f.url, preview_url: f.url, video_url: f.url });
                               }}
                               accessibilityRole="button"
@@ -467,11 +542,16 @@ function BrandWorkReview({
                         </View>
                       )}
 
-                      {/* Confirmed first — approving releases escrow and is
-                        final. */}
+                      <TouchableOpacity style={styles.secondaryBtn}
+                        onPress={() => setPreviewing({ ...work, video_url: playable })}
+                        disabled={!playable} accessibilityRole="button" accessibilityLabel="Open full-screen video">
+                        <Text style={styles.secondaryText}>View full video</Text>
+                      </TouchableOpacity>
+                      <View style={styles.decisionRow}>
                       <TouchableOpacity
                         style={[
                           styles.approveBtn,
+                          styles.decisionButton,
                           approving === work.id && styles.approveBtnOff,
                         ]}
                         onPress={() => confirmApprove(work)}
@@ -486,17 +566,17 @@ function BrandWorkReview({
                             <Text style={styles.approveText}>
                               {work.stage === 'raw'
                                 ? work.edit_mode === 'ugc'
-                                  ? 'Approve raw — UGC.ad edits next'
-                                  : 'Approve raw — creator edits next'
+                                  ? 'Approve raw'
+                                  : 'Approve raw'
                                 : 'Approve'}
                             </Text>
                           </>
                         )}
                       </TouchableOpacity>
 
-                      <View style={styles.secondaryRow}>
                         <TouchableOpacity
-                          style={styles.secondaryBtn}
+                          style={[styles.secondaryBtn, styles.decisionButton]}
+                          disabled={approving === work.id}
                           onPress={() => setRevising(work)}
                           accessibilityRole="button"
                         >
@@ -505,6 +585,8 @@ function BrandWorkReview({
                             Request Revision
                           </Text>
                         </TouchableOpacity>
+                      </View>
+                      <View style={styles.secondaryRow}>
                         <TouchableOpacity
                           style={styles.secondaryBtn}
                           onPress={() => onNavigate('/messages')}
@@ -519,6 +601,98 @@ function BrandWorkReview({
                 );
               })
             )}
+
+            {othersShown.map(row => {
+              const urls: string[] = Array.isArray(row.files) ? row.files : [];
+              const playable = mediaUrl(
+                urls.find(u => isVideoUrl(mediaUrl(u))) || urls[0],
+              );
+              const thumb = posterUrl(playable);
+              const approved = row.status === 'approved' && !row.historical;
+              return (
+                <View key={`other-${row.id}`} style={styles.card}>
+                  <TouchableOpacity
+                    style={styles.media}
+                    disabled={!playable}
+                    onPress={() => {
+                      
+                      setPreviewing({ id: String(row.id), video_url: playable });
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Play video"
+                  >
+                    {thumb ? (
+                      <Image source={{ uri: thumb }} style={styles.mediaImg} />
+                    ) : (
+                      <View style={styles.mediaFallback} />
+                    )}
+                    <View style={styles.playBtn}>
+                      <Icon name="play" color="#15163F" size={20} />
+                    </View>
+                  </TouchableOpacity>
+
+                  <View style={styles.cardBody}>
+                    <View style={styles.titleRow}>
+                      <Text style={styles.title} numberOfLines={1}>
+                        {text(row.title, 'Submission')}
+                      </Text>
+                      <View style={styles.pendingChip}>
+                        <Text style={styles.pendingText}>
+                          {row.historical ? 'Previous upload' : STATUS_LABEL[row.status] || 'Submitted'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.byline}>
+                      by {text(row.creator, 'Creator')} · Submitted on{' '}
+                      {formatDate(row.submittedAt)}
+                    </Text>
+
+                    {approved ? (
+                      <TouchableOpacity
+                        style={styles.approveBtn}
+                        onPress={() => {
+                          const unavailable = () =>
+                            Alert.alert(
+                              'Could not open',
+                              'The download link is unavailable.',
+                            );
+                          // Approved rows carry the clean files; edited first.
+                          const url = downloadUrlOf({
+                            files: row.labeledFiles,
+                            work_files: row.files,
+                          });
+                          if (!url) return unavailable();
+                          Linking.openURL(url).catch(unavailable);
+                        }}
+                        accessibilityRole="button"
+                      >
+                        <Icon name="download" color="#FFFFFF" size={16} />
+                        <Text style={styles.approveText}>Download</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <Text style={styles.waitingNote}>
+                        {row.historical ? 'Previous upload — retained for comparison.' : row.status === 'revision_requested'
+                          ? "Awaiting resubmit — the creator's new cut will appear under Pending."
+                          : row.status === 'awaiting_edit'
+                          ? "UGC.ad's editors are working on this video."
+                          : 'The creator is editing this video.'}
+                      </Text>
+                    )}
+
+                    <View style={styles.secondaryRow}>
+                      <TouchableOpacity
+                        style={styles.secondaryBtn}
+                        onPress={() => onNavigate('/messages')}
+                        accessibilityRole="button"
+                      >
+                        <Icon name="chat" color="#5C6180" size={14} />
+                        <Text style={styles.secondaryText}>Message</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
           </ScrollView>
         )}
       </View>
@@ -618,54 +792,10 @@ function BrandWorkReview({
         </View>
       </Modal>
 
-      {/* Full-screen watermarked preview. Tap the video to pause/resume. */}
-      <Modal
-        visible={!!previewing}
-        animationType="fade"
-        onRequestClose={() => setPreviewing(null)}
-        statusBarTranslucent
-      >
-        {!!previewing && (
-          <View style={styles.previewScreen}>
-            <TouchableOpacity
-              style={styles.previewVideoHit}
-              activeOpacity={1}
-              onPress={() => setPreviewPaused(p => !p)}
-              accessibilityRole="button"
-              accessibilityLabel={previewPaused ? 'Play' : 'Pause'}
-            >
-              <Video
-                source={{
-                  uri: mediaUrl(
-                    previewing.watermarked_url ||
-                      previewing.preview_url ||
-                      previewing.video_url,
-                  ) as string,
-                }}
-                style={styles.previewVideo}
-                paused={previewPaused}
-                resizeMode="contain"
-                repeat
-                controls={false}
-              />
-              {previewPaused && (
-                <View style={styles.previewPlay}>
-                  <Icon name="play" color="#FFFFFF" size={26} />
-                </View>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.previewClose}
-              onPress={() => setPreviewing(null)}
-              accessibilityRole="button"
-              accessibilityLabel="Close preview"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Icon name="close" color="#FFFFFF" size={20} />
-            </TouchableOpacity>
-          </View>
-        )}
-      </Modal>
+      <VideoPreview
+        uri={previewing ? mediaUrl(previewing.watermarked_url || previewing.preview_url || previewing.video_url) : null}
+        onClose={() => setPreviewing(null)}
+      />
     </View>
   );
 }
@@ -870,6 +1000,8 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
 
+  decisionRow: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
+  decisionButton: { flex: 1, marginTop: 0, minHeight: scale(48), height: 'auto', paddingVertical: scale(10) },
   approveBtn: {
     marginTop: scale(13),
     height: scale(46),
@@ -909,6 +1041,22 @@ const styles = StyleSheet.create({
   },
 
   empty: { marginTop: scale(30), padding: scale(22), alignItems: 'center' },
+  tabs: { gap: scale(8), paddingBottom: scale(12) },
+  tab: {
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(8),
+    borderRadius: scale(18),
+    backgroundColor: '#F1F2F8',
+  },
+  tabOn: { backgroundColor: '#15163F' },
+  tabText: { fontSize: fontScale(12), fontWeight: '700', color: '#5C6180' },
+  tabTextOn: { color: '#FFFFFF' },
+  waitingNote: {
+    marginTop: scale(10),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(17),
+    color: '#7C819C',
+  },
   emptyTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
