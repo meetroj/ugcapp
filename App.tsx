@@ -172,12 +172,16 @@ function App(): React.JSX.Element {
           initialPath={homePathFor(session)}
         />
       )}
-      {/* One-time Creator & Brand Agreement gate, overlaid once an authenticated
-          creator/brand hasn't accepted the current version. Acceptance is stored
-          server-side, so agreeing on the website clears it here too (the gate
-          re-checks with the server and never shows for someone who agreed). */}
+      {/* One-time Creator & Brand Agreement gate, overlaid on the dashboard once an
+          approved creator/brand hasn't accepted the current version — never during
+          onboarding or while awaiting approval. Acceptance is stored server-side,
+          so agreeing on the website clears it here too (the gate re-checks with
+          the server and never shows for someone who agreed). */}
       {session &&
         (session.role === 'creator' || session.role === 'business') &&
+        session.approval_status === 'approved' &&
+        session.profile_completed !== false &&
+        !reopenSetup &&
         session.agreement_accepted !== true && (
           <AgreementGate
             token={session.token}
