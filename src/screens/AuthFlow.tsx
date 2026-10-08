@@ -61,13 +61,13 @@ type Mode = 'signup' | 'login' | 'forgot';
 function AuthFlow({ onAuthenticated }: Props) {
   const [mode, setMode] = useState<Mode>('login');
   /**
-   * Credentials held between the two halves of a 2FA login. The password is
-   * kept only in memory and only until the code is accepted or the sheet is
-   * dismissed — the retry has to send it again.
+   * The sign-in to repeat once the user types their 2FA code. Email, Google and
+   * Apple all answer {requires_2fa:true} first, and each retries by resending
+   * what it sent the first time (password, or the Google/Apple token) plus the
+   * code. Held only in memory until the code is accepted or the sheet closes.
    */
   const [pending, setPending] = useState<{
-    email: string;
-    password: string;
+    retry: (code: string) => Promise<AuthUser>;
   } | null>(null);
   const [totp, setTotp] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -115,8 +115,7 @@ function AuthFlow({ onAuthenticated }: Props) {
       // {requires_2fa:true} and no token. That is a second step, not a
       // failure — the app used to report it as "complete this on ugcad.io".
       if (error instanceof TwoFactorRequired) {
-        setPending(values);
-        setTotp('');
+        askForCode(code => login(values.email, values.password, code));
         return;
       }
       Alert.alert(
@@ -126,12 +125,17 @@ function AuthFlow({ onAuthenticated }: Props) {
     }
   };
 
-  /** Retries the login with the authenticator code appended. */
+  const askForCode = (retry: (code: string) => Promise<AuthUser>) => {
+    setPending({ retry });
+    setTotp('');
+  };
+
+  /** Retries whichever sign-in asked for 2FA, with the code appended. */
   const submitTotp = async () => {
     if (!pending || totp.length !== 6 || verifying) return;
     setVerifying(true);
     try {
-      const session = await login(pending.email, pending.password, totp);
+      const session = await pending.retry(totp);
       setPending(null);
       onAuthenticated(session);
     } catch (error) {
@@ -152,7 +156,13 @@ function AuthFlow({ onAuthenticated }: Props) {
   const handleApple = async (role: Role = 'creator') => {
     try {
       const { identityToken, fullName } = await getAppleCredential();
-      onAuthenticated(await appleAuth(identityToken, role, fullName));
+      try {
+        onAuthenticated(await appleAuth(identityToken, role, fullName));
+      } catch (error) {
+        if (!(error instanceof TwoFactorRequired)) throw error;
+        // Apple's token lasts about 10 minutes, long enough to type a code.
+        askForCode(code => appleAuth(identityToken, role, fullName, code));
+      }
     } catch (error) {
       // Dismissing the Apple sheet is a deliberate action, not a failure.
       if (error instanceof AppleSignInCancelled) return;
@@ -171,7 +181,12 @@ function AuthFlow({ onAuthenticated }: Props) {
   const handleGoogle = async (role: Role = 'creator') => {
     try {
       const idToken = await getGoogleIdToken();
-      onAuthenticated(await googleAuth(idToken, role));
+      try {
+        onAuthenticated(await googleAuth(idToken, role));
+      } catch (error) {
+        if (!(error instanceof TwoFactorRequired)) throw error;
+        askForCode(code => googleAuth(idToken, role, code));
+      }
     } catch (error) {
       // Backing out of the account picker is a deliberate action, not a
       // failure — showing an alert for it would be noise.
@@ -228,8 +243,8 @@ function AuthFlow({ onAuthenticated }: Props) {
       </View>
 
       {/* Second factor. Shown over the card rather than as another mode: the
-          email and password are already accepted, this is the same login
-          finishing. */}
+          password (or Google/Apple account) is already accepted, this is the
+          same sign-in finishing. */}
       <Modal
         visible={!!pending}
         transparent

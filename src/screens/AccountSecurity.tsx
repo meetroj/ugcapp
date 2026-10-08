@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Clipboard,
+  Linking,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -50,6 +51,8 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
   const [twoFactorOn, setTwoFactorOn] = useState<boolean | null>(null);
   /** The secret from /2fa/setup, held while the user enters their first code. */
   const [secret, setSecret] = useState('');
+  /** otpauth:// link from /2fa/setup: opens the authenticator with the key filled in. */
+  const [otpauthUrl, setOtpauthUrl] = useState('');
   const [code, setCode] = useState('');
   const [busy2fa, setBusy2fa] = useState(false);
 
@@ -112,6 +115,7 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
     try {
       const result = await setupTwoFactor(token);
       setSecret(String(result?.secret || ''));
+      setOtpauthUrl(String(result?.otpauth_url || ''));
       setCode('');
     } catch (error) {
       fail(error, 'Could not start two-factor setup.');
@@ -301,6 +305,22 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
               Add this key to your authenticator app, then enter the code it
               shows.
             </Text>
+            {!!otpauthUrl && (
+              <TouchableOpacity
+                style={[styles.primary, styles.stacked]}
+                onPress={() =>
+                  Linking.openURL(otpauthUrl).catch(() =>
+                    Alert.alert(
+                      'No authenticator app found',
+                      'Install Google Authenticator or Authy, or copy the key below into the app you use.',
+                    ),
+                  )
+                }
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryText}>Open in authenticator app</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.secretBox}
               onPress={() => {

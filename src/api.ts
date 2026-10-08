@@ -104,9 +104,13 @@ export function login(email: string, password: string, totpToken?: string) {
   return authRequest(
     '/auth/login',
     { email: email.trim(), password },
-    totpToken ? `?totp_token=${encodeURIComponent(totpToken)}` : '',
+    totpQuery(totpToken),
   );
 }
+
+/** Email, Google and Apple all take the 2FA retry code the same way. */
+const totpQuery = (totpToken?: string) =>
+  totpToken ? `?totp_token=${encodeURIComponent(totpToken)}` : '';
 
 /**
  * Dial code every signup is filed under. The form has no country picker, and
@@ -157,11 +161,13 @@ export function signUp(
 export function googleAuth(
   credential: string,
   role: 'creator' | 'brand' = 'creator',
+  totpToken?: string,
 ) {
-  return authRequest('/auth/google', {
-    credential,
-    role: role === 'brand' ? 'business' : 'creator',
-  });
+  return authRequest(
+    '/auth/google',
+    { credential, role: role === 'brand' ? 'business' : 'creator' },
+    totpQuery(totpToken),
+  );
 }
 
 /**
@@ -176,12 +182,17 @@ export function appleAuth(
   identityToken: string,
   role: 'creator' | 'brand' = 'creator',
   fullName?: string,
+  totpToken?: string,
 ) {
-  return authRequest('/auth/apple', {
-    identity_token: identityToken,
-    role: role === 'brand' ? 'business' : 'creator',
-    ...(fullName ? { full_name: fullName } : null),
-  });
+  return authRequest(
+    '/auth/apple',
+    {
+      identity_token: identityToken,
+      role: role === 'brand' ? 'business' : 'creator',
+      ...(fullName ? { full_name: fullName } : null),
+    },
+    totpQuery(totpToken),
+  );
 }
 
 /**
@@ -1819,6 +1830,7 @@ export async function getTwoFactorStatus(
 export async function setupTwoFactor(
   token: string,
 ): Promise<{ secret?: string; otpauth_url?: string; [key: string]: unknown }> {
+  // otpauth_url opens the authenticator app with the account already filled in.
   return send(token, 'POST', '/api/profile/2fa/setup');
 }
 

@@ -169,6 +169,23 @@ test('login appends the authenticator code only when one is supplied', async () 
   expect(sent[0].url).toContain('totp_token=123456');
 });
 
+test('Google and Apple sign-in send the 2FA code on the retry, like email login', async () => {
+  let {sent} = capture({token: 't', user_id: 'u', role: 'creator'});
+  const api = require('../src/api');
+
+  await api.googleAuth('google-token', 'creator');
+  expect(sent[0].url).not.toContain('totp_token');
+  ({sent} = capture({token: 't', user_id: 'u', role: 'creator'}));
+  await api.googleAuth('google-token', 'creator', '654321');
+  expect(sent[0].url).toContain('/api/auth/google?totp_token=654321');
+  expect(bodyOf(sent[0])).toEqual(expect.objectContaining({credential: 'google-token'}));
+
+  ({sent} = capture({token: 't', user_id: 'u', role: 'creator'}));
+  await api.appleAuth('apple-token', 'brand', 'Ana', '654321');
+  expect(sent[0].url).toContain('/api/auth/apple?totp_token=654321');
+  expect(bodyOf(sent[0])).toEqual(expect.objectContaining({identity_token: 'apple-token', role: 'business', full_name: 'Ana'}));
+});
+
 test('a 2FA challenge raises TwoFactorRequired rather than a dead end', async () => {
   g.fetch = (async () => ({
     ok: true,
