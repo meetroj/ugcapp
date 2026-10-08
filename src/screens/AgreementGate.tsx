@@ -11,6 +11,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
+  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   ScrollView,
@@ -32,6 +34,30 @@ type Agreement = {
   sections: Section[];
   accepted?: boolean;
 };
+
+/**
+ * Its own window, not an overlay View. On Android an absolutely positioned View
+ * does not reliably cover the dashboard's WebView, so a tap on this card fell
+ * through to a text field on the page behind and opened the keyboard. A Modal
+ * takes every touch and moves focus off whatever was underneath.
+ */
+function Shell({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    Keyboard.dismiss();
+  }, []);
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      // Back must not skip the agreement.
+      onRequestClose={() => {}}
+    >
+      <View style={styles.overlay}>{children}</View>
+    </Modal>
+  );
+}
 
 export default function AgreementGate({
   token,
@@ -86,12 +112,12 @@ export default function AgreementGate({
 
   if (!data) {
     return (
-      <View style={styles.overlay}>
+      <Shell>
         <View style={[styles.card, { paddingVertical: scale(40) }]}>
           <ActivityIndicator color="#4C5BF3" />
           {!!error && <Text style={styles.err}>{error}</Text>}
         </View>
-      </View>
+      </Shell>
     );
   }
 
@@ -101,7 +127,7 @@ export default function AgreementGate({
   const canAgree = expanded && atBottom && !submitting;
 
   return (
-    <View style={styles.overlay}>
+    <Shell>
       <View style={styles.card}>
         <View style={styles.head}>
           <Text style={styles.title}>{data.title}</Text>
@@ -141,9 +167,9 @@ export default function AgreementGate({
 
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.agree, !canAgree && styles.agreeOff]}
-            disabled={!canAgree}
-            onPress={agree}
+            style={[styles.agree, expanded && !canAgree && styles.agreeOff]}
+            disabled={expanded && !canAgree}
+            onPress={expanded ? agree : viewAll}
             accessibilityRole="button"
           >
             {submitting ? (
@@ -154,13 +180,13 @@ export default function AgreementGate({
                   ? atBottom
                     ? 'Agree & Continue'
                     : 'Scroll to the end'
-                  : 'View full agreement first'}
+                  : 'View full agreement'}
               </Text>
             )}
           </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </Shell>
   );
 }
 

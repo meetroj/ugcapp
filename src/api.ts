@@ -125,7 +125,7 @@ export const SIGNUP_DIAL_CODE = '+91';
  * OTP step — it is contact detail the ops team reads on the application, not a
  * verified second factor.
  */
-export function signUp(
+export async function signUp(
   role: 'creator' | 'brand',
   email: string,
   password: string,
@@ -133,7 +133,7 @@ export function signUp(
   name?: string,
   website?: string,
 ) {
-  return authRequest('/auth/signup', {
+  const session = await authRequest('/auth/signup', {
     email: email.trim(),
     password,
     phone: phone.trim(),
@@ -144,6 +144,15 @@ export function signUp(
     ...(name ? { name: name.trim() } : {}),
     ...(website ? { website: website.trim() } : {}),
   });
+  // A brand-new account has never filled the profile form and is unreviewed.
+  // Older backends leave both flags out of the signup response, and App.tsx
+  // routes on them — without these defaults a new user skipped the profile
+  // form and landed straight on the dashboard.
+  return {
+    ...session,
+    profile_completed: session.profile_completed ?? false,
+    approval_status: session.approval_status ?? 'pending',
+  };
 }
 
 /**
