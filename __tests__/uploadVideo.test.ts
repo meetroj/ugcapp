@@ -3,7 +3,11 @@
  * a signed form and the server converts them in the background; smaller ones go through
  * the server but report progress. Images are covered in api.test.ts and must not change.
  */
+// A module (not a script), so the names below can't clash with other test files.
+export {};
+
 const MB = 1048576;
+const g = globalThis as any;
 
 type Call = {url: string; init?: any};
 
@@ -52,13 +56,13 @@ beforeEach(() => {
   FakeXHR.sent = [];
   FakeXHR.plan = () => ({status: 204});
   // The polling loop sleeps 2 s between checks; make that instant.
-  jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void) => {
+  jest.spyOn(g, 'setTimeout').mockImplementation(((fn: () => void) => {
     fn();
     return 0 as any;
   }) as any);
-  (global as any).XMLHttpRequest = FakeXHR;
+  g.XMLHttpRequest = FakeXHR;
   responses = {};
-  (global as any).fetch = jest.fn(async (url: any, init?: any) => {
+  g.fetch = jest.fn(async (url: any, init?: any) => {
     calls.push({url: String(url), init});
     const key = Object.keys(responses).find(k => String(url).includes(k));
     const body = key ? responses[key] : {};
@@ -121,14 +125,14 @@ test('a video of unknown size is routed direct as well', async () => {
   expect(JSON.parse(calls[0].init.body).size).toBe(0);
 });
 
-test('a 50 MB video goes through the server and reports progress', async () => {
+test('a 20 MB video goes through the server and reports progress', async () => {
   FakeXHR.plan = () => ({status: 200, text: JSON.stringify({file_url: '/uploads/a.mp4'})});
   const {uploadMedia} = require('../src/api');
   const progress: number[] = [];
 
   const url = await uploadMedia(
     'tok',
-    {uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 50 * MB},
+    {uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 20 * MB},
     'file',
     (p: number) => progress.push(p),
   );
@@ -139,6 +143,22 @@ test('a 50 MB video goes through the server and reports progress', async () => {
   expect(FakeXHR.sent[0].headers.Authorization).toBe('Bearer tok');
   expect(progress).toEqual([50, 100]);
 });
+
+test.each([26, 49, 50, 60, 99])(
+  'a %i MB video never touches the server upload route (the server refuses 50 MB and up)',
+  async mb => {
+    s3Responses();
+    const {uploadMedia} = require('../src/api');
+    await uploadMedia(
+      'tok',
+      {uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: mb * MB},
+      'file',
+      () => {},
+    );
+    expect(calls[0].url).toContain('/api/upload/presign');
+    expect(FakeXHR.sent.every(s => !s.url.endsWith('/api/upload/file'))).toBe(true);
+  },
+);
 
 test('a video over 400 MB is refused with the real sizes and sends nothing', async () => {
   const {uploadMedia} = require('../src/api');

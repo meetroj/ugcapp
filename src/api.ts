@@ -789,11 +789,12 @@ export type PickedFile = {
 export const MAX_VIDEO_UPLOAD_MB = 400;
 
 /**
- * Up to this size a video goes through our own server (/upload/file). The hosting
- * proxy in front of the server cuts requests past ~100 MB (the phone then only
- * sees a network error), so larger videos go straight to S3 instead.
+ * Up to this size a video goes through our own server (/upload/file). The web
+ * front of the server refuses any request of 50 MB or more (and a proxy in front
+ * of it cuts ~100 MB), and the phone then only sees a network error. Larger
+ * videos go straight to S3 instead; 25 MB leaves a wide margin.
  */
-const SERVER_VIDEO_UPLOAD_MB = 90;
+const SERVER_VIDEO_UPLOAD_MB = 25;
 
 const UPLOAD_POLL_MS = 2000;
 const UPLOAD_GIVE_UP_MS = 30 * 60 * 1000;
@@ -986,7 +987,7 @@ export async function uploadMedia(
   const name = file.fileName || fallbackName;
   const type = file.type || fallbackType;
 
-  // Videos: up to 400 MB. Past 90 MB (or when the size is unknown) they go
+  // Videos: up to 400 MB. Past 25 MB (or when the size is unknown) they go
   // straight to S3; smaller ones go through the server but report progress.
   if (dest === 'file' && (isVideo || type.startsWith('video/'))) {
     const bytes = file.fileSize || 0;
