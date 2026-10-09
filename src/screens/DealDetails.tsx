@@ -26,6 +26,7 @@ import {
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
+import UploadProgressBar from '../components/UploadProgressBar';
 import {
   archiveDeal,
   getMyDeals,
@@ -397,6 +398,7 @@ function DealDetails({
   }, [refreshDeal]);
   const [tab, setTab] = useState<Tab>('Overview');
   const [submitting, setSubmitting] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   /** Which deal action is in flight, so only that row shows a spinner. */
   const [busyAction, setBusyAction] = useState<string>('');
   /**
@@ -488,10 +490,12 @@ function DealDetails({
     }
     // Only now is there something to upload, so this is where the busy state starts.
     setSubmitting(true);
+    setUploadPercent(0);
     const url = await uploadMedia(
       token as string,
-      { uri: asset.uri, fileName: asset.fileName, type: asset.type },
+      { uri: asset.uri, fileName: asset.fileName, type: asset.type, fileSize: asset.fileSize },
       'file',
+      setUploadPercent,
     );
     if (!url) {
       throw new Error('The upload did not return a file URL.');
@@ -1136,6 +1140,7 @@ function DealDetails({
                     <Text style={styles.primaryBtnText}>{submitting ? 'Uploading…' : 'Upload revised video'}</Text>
                   </TouchableOpacity>
                 )}
+                <UploadProgressBar percent={submitting ? uploadPercent : null} />
               </View>
             )}
             {versions.length > 0 && renderVersionCards()}
@@ -1341,6 +1346,9 @@ function DealDetails({
                   </>
                 )}
               </TouchableOpacity>
+            )}
+            {deal.can_submit_content && canSubmitWork && (
+              <UploadProgressBar percent={submitting ? uploadPercent : null} />
             )}
           </>
         )}

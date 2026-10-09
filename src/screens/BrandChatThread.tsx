@@ -652,6 +652,7 @@ function BrandChatThread({
         uri: asset.uri,
         fileName: asset.fileName,
         type: asset.type,
+        fileSize: asset.fileSize,
       });
       setAttachments(current => [...current, url]);
     } catch (err: any) {

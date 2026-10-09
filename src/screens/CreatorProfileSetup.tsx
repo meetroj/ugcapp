@@ -381,7 +381,7 @@ const STEP2_FIELDS = [
 ];
 
 /** Web caps portfolio video at 100MB and the profile photo at 5MB. */
-const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+const VIDEO_MAX_BYTES = 400 * 1024 * 1024;
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 const onlyDigits = (value: string) => String(value ?? '').replace(/\D/g, '');
@@ -728,7 +728,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       return;
     }
     if ((asset.fileSize || 0) > VIDEO_MAX_BYTES) {
-      setError('Video is too large. Maximum 100MB.');
+      setError('Video is too large. Maximum 400MB.');
       return;
     }
     setVideoUploading(true);
@@ -738,6 +738,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         uri: asset.uri,
         fileName: asset.fileName,
         type: asset.type,
+        fileSize: asset.fileSize,
       });
       if (target === 'edit') {
         setEditDraft(prev => ({ ...prev, videoUrl: url }));

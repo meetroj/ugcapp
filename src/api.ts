@@ -781,7 +781,174 @@ export type PickedFile = {
   uri: string;
   fileName?: string | null;
   type?: string | null;
+  /** Bytes. Lets a video be routed before it is read; unknown means "send it direct". */
+  fileSize?: number | null;
 };
+
+/** Biggest video a user can upload. Must match VIDEO_MAX_BYTES on the server. */
+export const MAX_VIDEO_UPLOAD_MB = 400;
+
+/**
+ * Up to this size a video goes through our own server (/upload/file). The hosting
+ * proxy in front of the server cuts requests past ~100 MB (the phone then only
+ * sees a network error), so larger videos go straight to S3 instead.
+ */
+const SERVER_VIDEO_UPLOAD_MB = 90;
+
+const UPLOAD_POLL_MS = 2000;
+const UPLOAD_GIVE_UP_MS = 30 * 60 * 1000;
+
+const uploadInterrupted = () =>
+  new Error(
+    `The upload was interrupted. Check your connection and try again — videos must be ${MAX_VIDEO_UPLOAD_MB} MB or smaller.`,
+  );
+
+/**
+ * One multipart POST with upload progress. fetch cannot report how many bytes
+ * have left the phone; XMLHttpRequest can. Resolves with the status and body
+ * text; rejects with NetworkError when the connection itself fails.
+ */
+function xhrPost(
+  url: string,
+  body: FormData,
+  headers: Record<string, string>,
+  onProgress?: (percent: number) => void,
+): Promise<{status: number; text: string}> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    Object.keys(headers).forEach(name => xhr.setRequestHeader(name, headers[name]));
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (event: ProgressEvent) => {
+        if (event.lengthComputable && event.total) {
+          onProgress(Math.min(100, Math.round((event.loaded * 100) / event.total)));
+        }
+      };
+    }
+    xhr.onload = () => resolve({status: xhr.status, text: xhr.responseText || ''});
+    xhr.onerror = () => reject(new NetworkError());
+    xhr.ontimeout = () => reject(new NetworkError());
+    xhr.send(body as any);
+  });
+}
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/** The URL a successful upload response carries (the three endpoints name it differently). */
+function uploadedUrl(data: Record<string, unknown>): string {
+  const url = String(data.photo_url || data.banner || data.file_url || data.url || '');
+  // A 2xx carrying no URL used to return the empty string, which every caller
+  // then stored as a perfectly valid "uploaded" value — the spinner stopped and
+  // nothing else happened. Fail loudly instead.
+  if (!url) {
+    throw new Error('Upload finished but the server returned no file URL.');
+  }
+  return url;
+}
+
+/** Small video through our own server, with progress. */
+async function uploadVideoViaServer(
+  token: string,
+  form: FormData,
+  onProgress: (percent: number) => void,
+): Promise<string> {
+  try {
+    const {status, text} = await xhrPost(
+      `${BACKEND_URL}/api/upload/file`,
+      form,
+      {Authorization: `Bearer ${token}`},
+      onProgress,
+    );
+    let data: Record<string, any> = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // not JSON (a proxy error page): fall through to the status check
+    }
+    if (status < 200 || status >= 300) {
+      throw new Error(typeof data?.detail === 'string' ? data.detail : 'Upload failed.');
+    }
+    return uploadedUrl(data);
+  } catch (err) {
+    if (err instanceof NetworkError) throw uploadInterrupted();
+    throw err;
+  }
+}
+
+/**
+ * Large video: phone -> S3 directly with a signed form, then the server converts
+ * it to a browser-playable MP4 in the background while we poll for the result.
+ * `onProgress` reaches 100 when the bytes are sent; the conversion follows.
+ */
+async function uploadVideoViaS3(
+  token: string,
+  file: PickedFile,
+  name: string,
+  type: string,
+  onProgress?: (percent: number) => void,
+): Promise<string> {
+  const form = await json(
+    await request(`${BACKEND_URL}/api/upload/presign`, {
+      method: 'POST',
+      headers: auth(token),
+      body: JSON.stringify({
+        filename: name,
+        content_type: type,
+        size: file.fileSize || 0,
+      }),
+    }),
+  );
+
+  // No Authorization header here: S3 refuses a request carrying a second
+  // credential, and the signed form is the credential for this one.
+  const body = new FormData();
+  Object.keys(form.fields).forEach(field => body.append(field, String(form.fields[field])));
+  body.append('file', {uri: file.uri, name, type} as unknown as Blob); // S3 needs the file last
+  try {
+    const sent = await xhrPost(form.url, body, {}, onProgress);
+    if (sent.status < 200 || sent.status >= 300) {
+      throw new Error(
+        `The upload was rejected. Check the file is a video under ${MAX_VIDEO_UPLOAD_MB} MB and try again.`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof NetworkError) throw uploadInterrupted();
+    throw err;
+  }
+  onProgress?.(100);
+
+  const job = await json(
+    await request(`${BACKEND_URL}/api/upload/finalize`, {
+      method: 'POST',
+      headers: auth(token),
+      body: JSON.stringify({key: form.key, original_filename: name}),
+    }),
+  );
+  const started = Date.now();
+  for (;;) {
+    await sleep(UPLOAD_POLL_MS);
+    try {
+      const status = await json(
+        await request(`${BACKEND_URL}/api/upload/status/${encodeURIComponent(job.job_id)}`, {
+          headers: auth(token),
+        }),
+      );
+      if (status.status === 'done') return uploadedUrl(status.result || {});
+      if (status.status === 'failed') {
+        throw new Error(status.error || 'Could not process this video. Please try again.');
+      }
+    } catch (err) {
+      // A blip while polling is not a failure: keep waiting.
+      const transient =
+        err instanceof NetworkError ||
+        (err instanceof ApiError && (err.status === 502 || err.status === 503));
+      if (!transient) throw err;
+    }
+    if (Date.now() - started > UPLOAD_GIVE_UP_MS) {
+      throw new Error('Processing is taking too long. Please try again in a few minutes.');
+    }
+  }
+}
 
 /**
  * Uploads one picked file as multipart/form-data.
@@ -803,6 +970,7 @@ export async function uploadMedia(
   token: string,
   file: PickedFile,
   dest: 'photo' | 'banner' | 'file' = 'file',
+  onProgress?: (percent: number) => void,
 ): Promise<string> {
   // The picker does not always hand back a name or a MIME type — on Android it
   // routinely omits both for videos. Defaulting those to .jpg / image/jpeg (as
@@ -815,11 +983,33 @@ export async function uploadMedia(
     : 'image/jpeg';
   const fallbackName = `upload_${Date.now()}.${extension || (isVideo ? 'mp4' : 'jpg')}`;
 
+  const name = file.fileName || fallbackName;
+  const type = file.type || fallbackType;
+
+  // Videos: up to 400 MB. Past 90 MB (or when the size is unknown) they go
+  // straight to S3; smaller ones go through the server but report progress.
+  if (dest === 'file' && (isVideo || type.startsWith('video/'))) {
+    const bytes = file.fileSize || 0;
+    if (bytes > MAX_VIDEO_UPLOAD_MB * 1048576) {
+      throw new Error(
+        `This video is ${Math.round(bytes / 1048576)} MB. The maximum is ${MAX_VIDEO_UPLOAD_MB} MB — compress or trim it and try again.`,
+      );
+    }
+    if (!bytes || bytes > SERVER_VIDEO_UPLOAD_MB * 1048576) {
+      return uploadVideoViaS3(token, file, name, type, onProgress);
+    }
+    if (onProgress) {
+      const small = new FormData();
+      small.append('file', {uri: file.uri, name, type} as unknown as Blob);
+      return uploadVideoViaServer(token, small, onProgress);
+    }
+  }
+
   const form = new FormData();
   form.append('file', {
     uri: file.uri,
-    name: file.fileName || fallbackName,
-    type: file.type || fallbackType,
+    name,
+    type,
   } as unknown as Blob);
 
   const path =
@@ -843,16 +1033,7 @@ export async function uploadMedia(
     );
   }
   // upload-banner answers with `banner`; the other two use photo_url/file_url.
-  const url = String(
-    data.photo_url || data.banner || data.file_url || data.url || '',
-  );
-  // A 2xx carrying no URL used to return the empty string, which every caller
-  // then stored as a perfectly valid "uploaded" value — the spinner stopped and
-  // nothing else happened. Fail loudly instead.
-  if (!url) {
-    throw new Error('Upload finished but the server returned no file URL.');
-  }
-  return url;
+  return uploadedUrl(data);
 }
 
 /**
