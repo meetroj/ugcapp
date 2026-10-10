@@ -39,6 +39,7 @@ import {
   type CreatorReview,
   type DirectoryCreator,
 } from '../api';
+import { playableVideoUrl } from '../mediaPreview';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -83,14 +84,6 @@ const videoPoster = (uri: string | null): string => {
   const m = uri.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
   if (m) return `${m[1]}so_0/${m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg')}`;
   return '';
-};
-
-const playableVideoUrl = (uri: string): string => {
-  if (!/^https?:\/\/res\.cloudinary\.com\//i.test(uri) || !/\/video\/upload\//i.test(uri)) {
-    return uri;
-  }
-  if (/\/video\/upload\/f_mp4,vc_h264,/i.test(uri)) return uri;
-  return uri.replace('/video/upload/', '/video/upload/f_mp4,vc_h264,q_auto:good/');
 };
 
 /** ₹ with Indian digit grouping, matching the web page's `inr()`. */

@@ -26,3 +26,16 @@ export function previewOf(uri: string | null | undefined) {
   }
   return null;
 }
+
+/**
+ * A Cloudinary video URL that plays natively: forced to H.264 MP4 (a raw upload can be
+ * HEVC/MOV, which the Android player renders as audio over a black screen). Any other
+ * URL is returned untouched.
+ */
+export const playableVideoUrl = (uri: string): string => {
+  if (!/^https?:\/\/res\.cloudinary\.com\//i.test(uri) || !/\/video\/upload\//i.test(uri)) {
+    return uri;
+  }
+  if (/\/video\/upload\/f_mp4,vc_h264,/i.test(uri)) return uri;
+  return uri.replace('/video/upload/', '/video/upload/f_mp4,vc_h264,q_auto:good/');
+};

@@ -37,11 +37,11 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-async function open() {
+async function open(onOpenCreator?: (c: unknown) => void) {
   let tree!: ReactTestRenderer.ReactTestRenderer;
   await ReactTestRenderer.act(async () => {
     tree = ReactTestRenderer.create(
-      <BrandCreators token="t" onNavigate={() => {}} />,
+      <BrandCreators token="t" onNavigate={() => {}} onOpenCreator={onOpenCreator as never} />,
     );
   });
   // Tap the first creator tile to raise the peek.
@@ -125,4 +125,36 @@ test('the stat rows carry no line between them', async () => {
   expect(
     flat.some(st => st.height === 1 && st.backgroundColor === '#F0F1F8'),
   ).toBe(false);
+});
+
+test('tapping a clip plays it full-screen over the card, not behind it or on another screen', async () => {
+  const onOpenCreator = jest.fn();
+  const tree = await open(onOpenCreator);
+  const clip = tree.root.find(
+    n => typeof n.type !== 'string' && n.props.accessibilityLabel === 'Play clip 1',
+  );
+  await ReactTestRenderer.act(async () => {
+    clip.props.onPress();
+  });
+
+  // A player with real controls (the card's own clips are muted looping previews).
+  const player = tree.root.findAll(
+    n => typeof n.type !== 'string' && n.props?.controls === true && !!n.props?.source?.uri,
+    { deep: true },
+  );
+  expect(player.length).toBeGreaterThan(0);
+  expect(player[0].props.source.uri).toContain('reel.mp4');
+  // It must not have navigated away to the full profile.
+  expect(onOpenCreator).not.toHaveBeenCalled();
+
+  // Closing it returns to the card.
+  const close = tree.root.find(
+    n => typeof n.type !== 'string' && n.props.accessibilityLabel === 'Close video',
+  );
+  await ReactTestRenderer.act(async () => {
+    close.props.onPress();
+  });
+  expect(
+    tree.root.findAll(n => typeof n.type !== 'string' && n.props?.controls === true, { deep: true }),
+  ).toHaveLength(0);
 });

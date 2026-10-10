@@ -35,7 +35,7 @@ import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
 import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, getCreatorDirectory } from '../api';
-import { previewOf } from '../mediaPreview';
+import { playableVideoUrl, previewOf } from '../mediaPreview';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -489,6 +489,12 @@ function CreatorPeekSheet({
     }).start();
   }, [creator, pop]);
 
+  // The clip being watched full-screen. It is its own Modal, opened ON TOP of this
+  // card, so the video is never underneath it and the card never has to be dismissed first.
+  const [watching, setWatching] = useState<string | null>(null);
+  const [watchFailed, setWatchFailed] = useState(false);
+  useEffect(() => { setWatching(null); setWatchFailed(false); }, [creator]);
+
   if (!creator) return null;
 
   const name = text(creator.full_name || creator.name || creator.nickname, 'Creator');
@@ -621,14 +627,16 @@ function CreatorPeekSheet({
               </View>
 
               {/* Three tiles side by side — the work the creator uploaded is
-                  what a brand is judging, so it is shown playing rather than
-                  as a still. Tapping any of them opens the full profile. */}
+                  what a brand is judging. Tapping a video plays it full-screen
+                  over this card; "See all" opens the full profile. */}
               <View style={styles.peekWorkRow}>
                 {clips.slice(0, 3).map((uri, index) => (
                   <TouchableOpacity
                     key={`${uri}-${index}`}
                     style={styles.peekClip}
-                    onPress={onOpenFull}
+                    onPress={() => {
+                      if (isVideo(uri)) { setWatchFailed(false); setWatching(uri); } else onOpenFull();
+                    }}
                     activeOpacity={0.9}
                     accessibilityRole="button"
                     accessibilityLabel={`Play clip ${index + 1}`}
@@ -679,6 +687,43 @@ function CreatorPeekSheet({
           </View>
         </Animated.View>
       </View>
+
+      {/* Nested inside the card's Modal on purpose: iOS can only present a second
+          modal from the one already on screen, and on Android it stacks above it. */}
+      {!!watching && (
+        <Modal
+          visible
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setWatching(null)}
+        >
+          <View style={styles.player}>
+            {watchFailed ? (
+              <Text style={styles.playerError}>This video can't be played right now.</Text>
+            ) : (
+              <Video
+                source={{ uri: playableVideoUrl(watching) }}
+                style={styles.playerVideo}
+                resizeMode="contain"
+                controls
+                playInBackground={false}
+                playWhenInactive={false}
+                ignoreSilentSwitch="ignore"
+                onError={() => setWatchFailed(true)}
+              />
+            )}
+            <TouchableOpacity
+              style={styles.playerClose}
+              onPress={() => setWatching(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close video"
+            >
+              <Icon name="close" color="#FFFFFF" size={18} />
+            </TouchableOpacity>
+          </View>
+        </Modal>
+      )}
     </Modal>
   );
 }
@@ -1229,6 +1274,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(12,16,42,0.55)',
+  },
+
+  // Full-screen clip player, opened over the peek card.
+  player: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
+  playerVideo: { width: '100%', height: '100%' },
+  playerError: {
+    color: '#FFFFFF',
+    fontSize: fontScale(14),
+    textAlign: 'center',
+    paddingHorizontal: scale(32),
+  },
+  playerClose: {
+    position: 'absolute',
+    top: scale(44),
+    right: scale(16),
+    width: scale(40),
+    height: scale(40),
+    borderRadius: scale(20),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.22)',
   },
 
   peekActions: {
