@@ -689,9 +689,8 @@ export async function updateCreatorInfo(
  *
  * This endpoint REPLACES the stored profile object, so the caller must spread
  * the profile it loaded and overwrite only the edited keys — exactly what the
- * web does. It also re-submits the profile for review, which is expected
- * behaviour here rather than a side effect to avoid: the website shows
- * "submitted for review" on the very same save.
+ * web does. For an approved creator the save applies immediately; only a first
+ * submission or a reapplication after a rejection goes to review.
  */
 export async function saveCreatorProfile(
   token: string,

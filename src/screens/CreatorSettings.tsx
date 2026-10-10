@@ -14,9 +14,8 @@ import { Alert } from '../components/AppAlert';
  *
  * The details write REPLACES the whole profile object, so `save` spreads the
  * profile that was loaded and overwrites only edited keys — dropping that
- * spread would wipe onboarding answers. It also re-submits the profile for
- * review; the website does the same on this save ("submitted for review"), so
- * that is expected here rather than a bug. The older PUT /profile/update-info
+ * spread would wipe onboarding answers. For an approved creator the save applies
+ * immediately — nothing goes back to review. The older PUT /profile/update-info
  * is deliberately NOT used: it whitelists bio/gender/country/age_range/
  * languages and silently discards address, skills, setup and pricing.
  */
@@ -1009,7 +1008,7 @@ function CreatorSettings({ token, onBack }: Props) {
             {error ? <Text style={styles.error}>{error}</Text> : null}
             {saved ? (
               <Text style={styles.saved}>
-                Saved — your profile was submitted for review.
+                Saved — your profile is updated.
               </Text>
             ) : null}
 
