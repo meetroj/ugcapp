@@ -817,6 +817,9 @@ function BrandCreators({
         creator.name,
         creator.nickname,
         creator.primary_category,
+        // Every category picked, so searching "beauty" finds a creator whose
+        // first category is fashion.
+        ...(Array.isArray(creator.categories) ? creator.categories : []),
         creator.content_style,
         creator.city_tier,
       ]
