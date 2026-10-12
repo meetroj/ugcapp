@@ -9,7 +9,7 @@ import { Alert } from '../components/AppAlert';
  * severity + timestamp_seconds), an optional `notes` string, and `deadline_at`.
  * The legacy free-text `feedback` field is only used when no items are sent.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -173,8 +173,30 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
    * resubmissions. `revisions` on this doc is the best the client has; it is
    * exact for a first submission and never over-promises free rounds.
    */
-  const used = Array.isArray(work.revisions) ? work.revisions.length : 0;
-  const freeLeft = Math.max(0, FREE_REVISION_LIMIT - used);
+  // The backend sends the real per-deal numbers: `revision_count_used` on the work /
+  // campaign payloads, `revisionsUsed` on the work-review list rows.
+  const count = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const used =
+    count(work.revision_count_used) ??
+    count(work.revisionsUsed) ??
+    (Array.isArray(work.revisions) ? work.revisions.length : 0);
+  const freeLimit =
+    count(work.free_revision_limit) ?? count(work.freeRevisionLimit) ?? FREE_REVISION_LIMIT;
+  const paidFee =
+    count(work.paid_revision_fee) ?? count(work.paidRevisionFee) ?? PAID_REVISION_FEE;
+  const freeLeft = Math.max(0, freeLimit - used);
+
+  // The brand must be told BEFORE sending the second revision that the next one is paid.
+  useEffect(() => {
+    if (freeLeft === 1) {
+      Alert.alert(
+        'This is your second revision',
+        `It is the last free one. Put every change you need in this request — from the third revision onward ₹${paidFee} is deducted from your wallet for each revision.`,
+        [{ text: 'Got it' }],
+      );
+    }
+  }, [freeLeft, paidFee]);
 
   const ordered = useMemo(() => {
     const list = [...comments];
@@ -580,16 +602,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
 
         {freeLeft === 0 && (
           <Text style={styles.feeWarn}>
-            The first {FREE_REVISION_LIMIT} revisions are free. This one costs
-            ₹{PAID_REVISION_FEE} (₹300 of it goes to the creator), charged to
-            your wallet.
+            The first {freeLimit} revisions are free. This one costs
+            ₹{paidFee} (₹300 of it goes to the creator), charged to your
+            wallet.
           </Text>
         )}
         {freeLeft === 1 && (
           <Text style={styles.feeWarn}>
-            This is your last free revision — make sure it covers everything.
-            Revisions after this cost ₹{PAID_REVISION_FEE} each (₹300 goes to
-            the creator).
+            This is your second revision — the last free one. Make sure it
+            covers everything: from the third revision onward ₹{paidFee} is
+            deducted for each revision (₹300 goes to the creator).
           </Text>
         )}
       </ScrollView>

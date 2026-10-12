@@ -377,6 +377,7 @@ const VIDEO_DELIVERABLES = [
   'Short-form',
   'YouTube Short',
   'Long-form video',
+  'Amazon listing video',
 ];
 const PLATFORMS = [
   "Brand's own Instagram",
@@ -2891,7 +2892,7 @@ function BrandPostBrief({
                 ) : (
                 <>
                 <ChipGroup
-                  label="Budget"
+                  label="Budget per video"
                   required
                   options={['Fixed amount', 'Range']}
                   selected={[
@@ -2903,7 +2904,7 @@ function BrandPostBrief({
                 />
                 {form.budgetMode === 'fixed' ? (
                   <Field
-                    label="Fixed budget (Rs.)"
+                    label="Budget per video (Rs.)"
                     required
                     keyboard="numeric"
                     value={form.fixedBudget}
@@ -2913,14 +2914,14 @@ function BrandPostBrief({
                 ) : (
                   <>
                     <Field
-                      label="Min budget (Rs.)"
+                      label="Min budget per video (Rs.)"
                       keyboard="numeric"
                       value={form.budgetMin}
                       onChange={v => set('budgetMin', v)}
                       placeholder="1500"
                     />
                     <Field
-                      label="Max budget (Rs.)"
+                      label="Max budget per video (Rs.)"
                       required
                       keyboard="numeric"
                       value={form.budgetMax}
@@ -2929,6 +2930,11 @@ function BrandPostBrief({
                     />
                   </>
                 )}
+                <Text style={styles.hint}>
+                  This is the amount for ONE video. The total for all videos,
+                  the commission and the listing fee are added up on the
+                  Review step.
+                </Text>
                 </>
                 )}
               </>
@@ -2980,8 +2986,9 @@ function BrandPostBrief({
                   {(totalDeliverables > 1 || creatorsCount > 1) && (
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>
-                        Total videos ({totalDeliverables} x {creatorsCount}{' '}
-                        creator{creatorsCount === 1 ? '' : 's'})
+                        Total budget (₹{budget.toLocaleString('en-IN')} x{' '}
+                        {totalDeliverables * creatorsCount} video
+                        {totalDeliverables * creatorsCount === 1 ? '' : 's'})
                       </Text>
                       <Text style={styles.summaryValue}>
                         ₹{totalBudget.toLocaleString('en-IN')}
