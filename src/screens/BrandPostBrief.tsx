@@ -254,6 +254,8 @@ const TONES = [
   'Educational',
   'Trustworthy',
 ];
+// Same list the website's private brief offers.
+const LANGUAGES = ['Hinglish', 'Hindi', 'English', 'Tamil', 'Telugu', 'Marathi', 'Bengali'];
 const PACING = ['Fast-cut', 'Medium', 'Slow & reflective', 'No preference'];
 const MUSIC = [
   'Original creator audio',
@@ -536,6 +538,7 @@ type FormState = {
   keyMessage: string;
   objectives: string[];
   targetAudience: string;
+  language: string;
   budgetVisible: boolean;
   deliverables: Deliverable[];
   productVisible: boolean;
@@ -605,6 +608,7 @@ const initialForm: FormState = {
   keyMessage: '',
   objectives: [],
   targetAudience: '',
+  language: 'Hinglish',
   budgetVisible: true,
   deliverables: [createDeliverable()],
   productVisible: true,
@@ -1339,6 +1343,7 @@ function BrandPostBrief({
           keyMessage: str(c.key_message),
           objectives: arr(c.objectives),
           targetAudience: str(c.target_audience),
+          language: str(c.language, initialForm.language),
           budgetVisible: bool(c.budget_visible, initialForm.budgetVisible),
           scriptProvider: str(c.script_provider) === 'ugc' ? 'ugc' : 'brand',
           scriptText: str(c.script_text),
@@ -1779,6 +1784,7 @@ function BrandPostBrief({
         `Key message: ${form.keyMessage}`,
         `Objectives: ${form.objectives.join(', ')}`,
         `Target audience: ${form.targetAudience}`,
+        `Video language: ${form.language}`,
         `Budget visibility: ${
           form.budgetVisible
             ? 'Visible to creators'
@@ -1909,6 +1915,7 @@ function BrandPostBrief({
 
         // Structured sections (BriefSectionsMixin) — queryable, not just prose.
         target_audience: form.targetAudience,
+        language: form.language,
         budget_visible: form.budgetVisible,
         // Quantity drives the escrow hold and the completion gate, so this list
         // must match exactly what the brand priced on the review section.
@@ -2310,6 +2317,13 @@ function BrandPostBrief({
                   placeholder="Urban women 25-35 interested in clean skincare."
                   min={20}
                   max={200}
+                />
+                <ChipGroup
+                  label="Video language"
+                  required
+                  options={LANGUAGES}
+                  selected={[form.language]}
+                  onToggle={v => set('language', v)}
                 />
                 <Segment
                   label="Show the budget to creators?"
@@ -2937,6 +2951,7 @@ function BrandPostBrief({
                     .map(item => `${item.quantity} x ${item.type || 'not set'}`)
                     .join(', ')}
                 />
+                <ReviewRow label="Video language" value={form.language} />
                 <ReviewRow label="Tone" value={form.tones.join(', ')} />
                 <ReviewRow
                   label="Usage rights"

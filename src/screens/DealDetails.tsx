@@ -1241,6 +1241,7 @@ function DealDetails({
             />
             <KeyValue label="Campaign Hook" value={campaign.hook || '—'} />
             <KeyValue label="Key Message" value={campaign.key_message || '—'} />
+            <KeyValue label="Video Language" value={campaign.language || '—'} />
             <KeyValue
               label="Objectives"
               value={

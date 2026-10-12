@@ -701,6 +701,7 @@ function CampaignDetails({
       ['Hook', textOf(campaign.hook || campaign.campaign_hook)],
       ['Key message', textOf(campaign.key_message)],
       ['Target audience', textOf(campaign.audience || campaign.target_audience)],
+      ['Video language', textOf(campaign.language)],
     ] as Array<[string, string]>
   ).filter(([, value]) => !!value);
 
