@@ -450,6 +450,7 @@ type Data = {
   flexible: boolean;
   lastSalary: string;
   expectedPayout: string;
+  editingPayout: string;
   payoutPeriod: string;
   deliveryDays: string;
   topics: string[];
@@ -491,6 +492,7 @@ const EMPTY: Data = {
   flexible: false,
   lastSalary: '',
   expectedPayout: '',
+  editingPayout: '',
   payoutPeriod: 'Per Video',
   deliveryDays: '',
   topics: ['None'],
@@ -832,6 +834,10 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
           ? niches
           : current.contentCategories;
 
+        const rates = profile!.rate_card || {};
+        merged.expectedPayout = String(rates.raw_payout || rates.expected_payout || merged.expectedPayout);
+        merged.editingPayout = String(rates.editing_payout || merged.editingPayout);
+
         // Structured samples carry the price/category/delivery the flat
         // `portfolio` URL list cannot. Ids are regenerated so a restored item
         // can never collide with one added in this session.
@@ -924,6 +930,8 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         rate_card: {
           last_salary: data.lastSalary || '',
           expected_payout: data.expectedPayout || '',
+          raw_payout: data.expectedPayout || '',
+          editing_payout: data.editingPayout || 0,
           payout_period: data.payoutPeriod || '',
           delivery_days: data.deliveryDays ? Number(data.deliveryDays) : '',
         },
@@ -1642,7 +1650,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
 
               <Text style={styles.sectionTitle}>Rates</Text>
               <Field
-                label="Expected payout"
+                label="Raw video payout per video (₹)"
                 required
                 value={data.expectedPayout}
                 onChange={v => set('expectedPayout', v)}
@@ -1650,6 +1658,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                 keyboard="phone-pad"
                 error={bad('expectedPayout')}
               />
+              <Field label="Additional editing payout per video (₹)" value={data.editingPayout} onChange={v => set('editingPayout', v)} placeholder="1000" keyboard="phone-pad" />
               <Select
                 label="Payout period"
                 value={data.payoutPeriod}
