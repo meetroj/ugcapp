@@ -60,7 +60,7 @@ function creatorPrice(p: Record<string, any>): number {
     parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10) || 0;
   const profile = p.profile || {};
   const rc = profile.rate_card || {};
-  const flat = digits(rc.expected_payout || rc.last_salary);
+  const flat = digits(rc.raw_payout || rc.expected_payout || rc.last_salary);
   if (flat) return flat;
   const cards = p.portfolio || profile.portfolio_items || profile.portfolio || [];
   const prices = (Array.isArray(cards) ? cards : [])
@@ -586,6 +586,7 @@ type FormState = {
   finalDeliveryBy: string;
   budgetMode: 'fixed' | 'range';
   fixedBudget: string;
+  editingFee: string;
   budgetMin: string;
   budgetMax: string;
   /** How many creators this brief hires. Sent as `creators_wanted`. */
@@ -650,6 +651,7 @@ const initialForm: FormState = {
   finalDeliveryBy: '',
   budgetMode: 'fixed',
   fixedBudget: '',
+  editingFee: '',
   budgetMin: '',
   budgetMax: '',
   creatorsWanted: 1,
@@ -1387,6 +1389,7 @@ function BrandPostBrief({
           revisions: Number(c.free_revisions ?? c.revision_limit ?? 2) || 0,
           creatorsWanted: Math.max(1, Number(c.creators_wanted) || 1),
           budgetMode: ranged ? 'range' : 'fixed',
+          editingFee: String(c.editing_fee_per_video || ''),
           fixedBudget: !ranged && bMax > 0 ? String(bMax) : '',
           budgetMin: ranged ? String(bMin) : '',
           budgetMax: ranged ? String(bMax) : '',
@@ -1436,6 +1439,7 @@ function BrandPostBrief({
           ...cur,
           budgetMode: 'fixed',
           fixedBudget: price ? String(price) : '',
+          editingFee: String(((p as Record<string, any>).profile?.rate_card || {}).editing_payout || 0),
           creatorsWanted: 1,
         }));
       })
@@ -1502,7 +1506,9 @@ function BrandPostBrief({
     (sum, item) => sum + Math.max(1, Number(item.quantity) || 1),
     0,
   );
-  const totalBudget = budget * totalDeliverables * creatorsCount;
+  const editedQuantity = form.deliverables.reduce((sum, item) => sum + (item.editedRequired && item.editedBy !== 'ugc' ? Number(item.quantity) || 1 : 0), 0);
+  const editingTotal = Math.max(0, Number(form.editingFee) || 0) * editedQuantity * creatorsCount;
+  const totalBudget = budget * totalDeliverables * creatorsCount + editingTotal;
   const commission = Math.round(totalBudget * COMMISSION_RATE);
   const listingFee = listingFeeFor(creatorsCount, totalDeliverables);
   const totalDebit = totalBudget + commission + listingFee;
@@ -1910,6 +1916,7 @@ function BrandPostBrief({
         // one-creator brief.
         creators_wanted: creatorsCount,
         per_video_budget: budget,
+        editing_fee_per_video: Math.max(0, Number(form.editingFee) || 0),
         total_budget: totalBudget,
         currency: 'INR',
         brand_name: form.brandName,
@@ -2904,7 +2911,7 @@ function BrandPostBrief({
                 />
                 {form.budgetMode === 'fixed' ? (
                   <Field
-                    label="Budget per video (Rs.)"
+                    label="Raw budget per video (₹)"
                     required
                     keyboard="numeric"
                     value={form.fixedBudget}
@@ -2939,6 +2946,8 @@ function BrandPostBrief({
                 )}
               </>
             )}
+
+            {step === 7 && editedQuantity > 0 && <Field label="Additional editing payout per video (₹)" editable={!creatorId} keyboard="numeric" value={form.editingFee} onChange={v => set('editingFee', v)} placeholder="1000" />}
 
             {step === 8 && (
               <>
@@ -2977,18 +2986,19 @@ function BrandPostBrief({
                 {anyEdited && <ReviewRow label="Edited video by" value={form.finalDeliveryBy} />}
 
                 <View style={styles.summary}>
+                  <ReviewRow label="Raw videos" value={`₹${budget} × ${totalDeliverables} videos × ${creatorsCount} creator(s)`} />
+                  {editedQuantity > 0 && <ReviewRow label="Creator editing" value={`₹${Number(form.editingFee || 0)} × ${editedQuantity} videos × ${creatorsCount} creator(s) = ₹${editingTotal}`} />}
+
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>Budget per video</Text>
                     <Text style={styles.summaryValue}>
                       ₹{budget.toLocaleString('en-IN')}
                     </Text>
                   </View>
-                  {(totalDeliverables > 1 || creatorsCount > 1) && (
+                  {(totalDeliverables > 1 || creatorsCount > 1 || editingTotal > 0) && (
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>
-                        Total budget (₹{budget.toLocaleString('en-IN')} x{' '}
-                        {totalDeliverables * creatorsCount} video
-                        {totalDeliverables * creatorsCount === 1 ? '' : 's'})
+                        Total creator budget (raw videos + editing)
                       </Text>
                       <Text style={styles.summaryValue}>
                         ₹{totalBudget.toLocaleString('en-IN')}

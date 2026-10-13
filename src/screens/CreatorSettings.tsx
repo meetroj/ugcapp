@@ -464,7 +464,8 @@ function CreatorSettings({ token, onBack }: Props) {
             profile.weekly || profile.availability_calendar?.weekly || '',
           flexible: !!profile.flexible,
           topics: Array.isArray(profile.topics) ? profile.topics : [],
-          expectedPayout: rate.expected_payout || profile.expectedPayout || '',
+          expectedPayout: rate.raw_payout || rate.expected_payout || profile.expectedPayout || '',
+          editingPayout: rate.editing_payout || '',
           deliveryDays: String(
             profile.delivery_days || rate.delivery_days || '',
           ),
@@ -667,6 +668,8 @@ function CreatorSettings({ token, onBack }: Props) {
         rate_card: {
           ...((loaded.rate_card || {}) as Form),
           expected_payout: form.expectedPayout,
+          raw_payout: form.expectedPayout,
+          editing_payout: form.editingPayout || 0,
           payout_period: 'Per Video',
           delivery_days: Number(form.deliveryDays),
         },
@@ -984,12 +987,13 @@ function CreatorSettings({ token, onBack }: Props) {
               }
             >
               <Field
-                label="Expected Payout"
+                label="Raw video payout per video (₹)"
                 value={String(form.expectedPayout || '')}
                 onChange={v => set('expectedPayout', v)}
                 placeholder="For example 5000"
                 numeric
               />
+              <Field label="Additional editing payout per video (₹)" value={String(form.editingPayout || '')} onChange={v => set('editingPayout', v)} placeholder="1000" numeric />
               <View style={styles.group}>
                 <Text style={styles.label}>Payout Period</Text>
                 <View style={[styles.input, styles.readonly]}>
