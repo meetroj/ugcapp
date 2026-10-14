@@ -79,8 +79,8 @@ function aadhaarValid(value: string): boolean {
 /** The three documents the backend requires, in the order the form asks. */
 const DOCS = [
   { key: 'pan_doc_url', label: 'PAN card' },
-  { key: 'aadhaar_front_url', label: 'Aadhaar — front' },
-  { key: 'aadhaar_back_url', label: 'Aadhaar — back' },
+  { key: 'aadhaar_front_url', label: 'Aadhaar - front' },
+  { key: 'aadhaar_back_url', label: 'Aadhaar - back' },
 ] as const;
 
 type DocKey = (typeof DOCS)[number]['key'];
@@ -307,7 +307,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.intro}>
-            Check your details against your documents before you submit —
+            Check your details against your documents before you submit -
             mismatches are the most common reason KYC is rejected.
           </Text>
 
@@ -454,7 +454,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
               <View style={styles.docText}>
                 <Text style={styles.docLabel}>{doc.label}</Text>
                 <Text style={styles.docState}>
-                  {docs[doc.key] ? 'Attached — tap to replace' : 'Tap to attach'}
+                  {docs[doc.key] ? 'Attached - tap to replace' : 'Tap to attach'}
                 </Text>
               </View>
               {uploading === doc.key && (

@@ -75,8 +75,10 @@ test('the peek is centred rather than pinned to the bottom', async () => {
   expect(card.borderTopLeftRadius).toBeUndefined();
 });
 
-test('the peek leads with a playable clip', async () => {
+test('the peek leads with a clip that opens a playable video', async () => {
   const tree = await open();
+  const play = tree.root.find(n => typeof n.type !== 'string' && n.props.accessibilityLabel === 'Play clip 1');
+  await ReactTestRenderer.act(async () => { play.props.onPress(); });
   // The clips play through react-native-video now. The inline-HTML player this
   // replaced was governed by the browser autoplay policy, which left the tiles
   // on their loading spinner on device instead of ever playing.
@@ -84,30 +86,27 @@ test('the peek leads with a playable clip', async () => {
     n =>
       typeof n.type !== 'string' &&
       !!n.props?.source?.uri &&
-      n.props?.repeat === true,
+      n.props?.controls === true,
     { deep: true },
   );
   expect(players.length).toBeGreaterThan(0);
   const hero = players[0].props;
   expect(hero.source.uri).toContain('reel.mp4');
-  // Muted + looping: the tile is a preview surface, not a player.
-  expect(hero.muted).toBe(true);
-  expect(hero.repeat).toBe(true);
+  expect(hero.controls).toBe(true);
 });
 
 
-test('Recent work shows at most three clips', async () => {
+test('Recent work exposes three playable clip buttons', async () => {
   const tree = await open();
   const players = tree.root.findAll(
     n =>
       typeof n.type !== 'string' &&
-      !!n.props?.source?.uri &&
-      n.props?.repeat === true,
+      /^Play clip \d+$/.test(n.props.accessibilityLabel || ''),
     { deep: true },
   );
   // Counted by distinct clip, not by node: the test mock forwards Video's
   // props to a View, so every player matches twice.
-  const clips = new Set(players.map(n => n.props.source.uri));
+  const clips = new Set(players.map(n => n.props.accessibilityLabel));
   // The fixture supplies four; the section is capped at three.
   expect(clips.size).toBe(3);
 });

@@ -29,9 +29,20 @@ const CREATOR: AuthUser = {
   profile_completed: true,
 };
 
+const mounted: ReactTestRenderer.ReactTestRenderer[] = [];
+const create = ReactTestRenderer.create;
+afterEach(async () => {
+  await ReactTestRenderer.act(async () => { mounted.splice(0).forEach(tree => tree.unmount()); });
+});
+
 beforeEach(() => {
   (AsyncStorage as unknown as {__reset: () => void}).__reset();
   jest.restoreAllMocks();
+  jest.spyOn(ReactTestRenderer, 'create').mockImplementation((...args: Parameters<typeof create>) => {
+    const tree = create(...args);
+    mounted.push(tree);
+    return tree;
+  });
 });
 
 describe('session storage', () => {

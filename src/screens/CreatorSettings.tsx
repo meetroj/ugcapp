@@ -761,7 +761,7 @@ function CreatorSettings({ token, onBack }: Props) {
               })}
               {work.length === 0 && (
                 <Text style={styles.emptyHint}>
-                  No clips yet — add up to {MAX_WORK}.
+                  No clips yet - add up to {MAX_WORK}.
                 </Text>
               )}
             </View>
@@ -1012,7 +1012,7 @@ function CreatorSettings({ token, onBack }: Props) {
             {error ? <Text style={styles.error}>{error}</Text> : null}
             {saved ? (
               <Text style={styles.saved}>
-                Saved — your profile is updated.
+                Saved - your profile is updated.
               </Text>
             ) : null}
 

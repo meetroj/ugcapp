@@ -193,7 +193,7 @@ function MyDeals({
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>No deals yet</Text>
                 <Text style={styles.emptyBody}>
-                  Apply to a campaign from Browse Campaigns — accepted
+                  Apply to a campaign from Browse Campaigns - accepted
                   applications turn into deals and show up here.
                 </Text>
               </View>

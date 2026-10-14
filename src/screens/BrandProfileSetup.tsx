@@ -295,7 +295,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           }
         : {
             status: 'invalid',
-            msg: "We couldn't reach this website — check the address.",
+            msg: "We couldn't reach this website - check the address.",
           },
     );
   }, [form.website, token]);
@@ -371,7 +371,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           }
         : {
             status: 'invalid' as const,
-            msg: "We couldn't reach this website — check the address.",
+            msg: "We couldn't reach this website - check the address.",
           };
       setWebCheck(web);
     }

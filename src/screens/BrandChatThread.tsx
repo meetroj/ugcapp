@@ -387,7 +387,7 @@ function ActionCard({
       )}
       {status === 'accepted' && type === 'private_invitation' && !mine && (
         <Text style={styles.cardNote}>
-          Accepted — waiting for the brand to post the brief.
+          Accepted - waiting for the brand to post the brief.
         </Text>
       )}
 
@@ -669,7 +669,7 @@ function BrandChatThread({
     async (reason: string) => {
       try {
         await reportUser(token, { reported_user_id: otherUserId, reason });
-        setError('Thanks — our team will review this report.');
+        setError('Thanks - our team will review this report.');
       } catch (err: any) {
         setError(String(err?.message || err) || 'Could not report.');
       }

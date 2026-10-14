@@ -120,7 +120,7 @@ const parseDate = (value: unknown) => {
 
 const shortDate = (value: unknown) => {
   const date = parseDate(value);
-  if (!date) return '—';
+  if (!date) return '-';
   return date.toLocaleDateString('en-IN', {
     day: 'numeric',
     month: 'short',
@@ -530,7 +530,7 @@ function DealDetails({
         stage === 'raw'
           ? 'Your raw video was sent to the brand. Once they approve it, ' +
               (editFlow?.mode === 'ugc' ? "you're paid and UGC.ad edits it." : 'you can upload the edited video.')
-          : 'Your work was sent to the brand for review — it now shows under Deliverables.',
+          : 'Your work was sent to the brand for review - it now shows under Deliverables.',
       );
     } catch (error) {
       Alert.alert(
@@ -951,13 +951,13 @@ function DealDetails({
             <View style={styles.fact}>
               <Text style={styles.factLabel}>Brand</Text>
               <Text style={styles.factValue} numberOfLines={1}>
-                {brand.name || '—'}
+                {brand.name || '-'}
               </Text>
             </View>
             <View style={styles.fact}>
               <Text style={styles.factLabel}>Creator</Text>
               <Text style={styles.factValue} numberOfLines={1}>
-                {creator.name || '—'}
+                {creator.name || '-'}
               </Text>
             </View>
             <View style={styles.fact}>
@@ -1231,28 +1231,28 @@ function DealDetails({
             <Text style={styles.sectionTitle}>Campaign Brief</Text>
 
             <Text style={styles.groupTitle}>Campaign Basics</Text>
-            <KeyValue label="Campaign" value={campaign.title || '—'} />
-            <KeyValue label="Brand" value={brand.name || '—'} />
-            <KeyValue label="Category" value={campaign.category || '—'} />
-            <KeyValue label="Product" value={campaign.product_name || '—'} />
+            <KeyValue label="Campaign" value={campaign.title || '-'} />
+            <KeyValue label="Brand" value={brand.name || '-'} />
+            <KeyValue label="Category" value={campaign.category || '-'} />
+            <KeyValue label="Product" value={campaign.product_name || '-'} />
             <KeyValue
               label="Product Description"
-              value={campaign.product_description || '—'}
+              value={campaign.product_description || '-'}
             />
-            <KeyValue label="Campaign Hook" value={campaign.hook || '—'} />
-            <KeyValue label="Key Message" value={campaign.key_message || '—'} />
-            <KeyValue label="Video Language" value={campaign.language || '—'} />
+            <KeyValue label="Campaign Hook" value={campaign.hook || '-'} />
+            <KeyValue label="Key Message" value={campaign.key_message || '-'} />
+            <KeyValue label="Video Language" value={campaign.language || '-'} />
             <KeyValue
               label="Objectives"
               value={
                 Array.isArray(campaign.objectives)
                   ? campaign.objectives.join(', ')
-                  : campaign.objectives || '—'
+                  : campaign.objectives || '-'
               }
             />
             <KeyValue
               label="Target Audience"
-              value={campaign.target_audience || '—'}
+              value={campaign.target_audience || '-'}
             />
 
             {Array.isArray(deal.brief_sections) &&
@@ -1309,10 +1309,10 @@ function DealDetails({
               renderVersionCards()
             )}
 
-            {deal.current_state === 'Raw Approved — UGC.ad Editing' && (
+            {deal.current_state === 'Raw Approved - UGC.ad Editing' && (
               <View style={styles.card}>
                 <Text style={styles.bodyText}>
-                  Your raw video was approved. UGC.ad's team is editing it — nothing more to upload.
+                  Your raw video was approved. UGC.ad's team is editing it - nothing more to upload.
                 </Text>
               </View>
             )}

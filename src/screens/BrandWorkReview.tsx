@@ -507,7 +507,7 @@ function BrandWorkReview({
                             <Text style={styles.metaValue}>
                               {formatDate(
                                 work.submitted_at || work.created_at,
-                              ) || '—'}
+                              ) || '-'}
                             </Text>
                           </View>
                         </View>
@@ -516,7 +516,7 @@ function BrandWorkReview({
                           <View>
                             <Text style={styles.metaLabel}>Campaign</Text>
                             <Text style={styles.metaValue} numberOfLines={1}>
-                              {campaign || '—'}
+                              {campaign || '-'}
                             </Text>
                           </View>
                         </View>
@@ -671,8 +671,8 @@ function BrandWorkReview({
                       </TouchableOpacity>
                     ) : (
                       <Text style={styles.waitingNote}>
-                        {row.historical ? 'Previous upload — retained for comparison.' : row.status === 'revision_requested'
-                          ? "Awaiting resubmit — the creator's new cut will appear under Pending."
+                        {row.historical ? 'Previous upload - retained for comparison.' : row.status === 'revision_requested'
+                          ? "Awaiting resubmit - the creator's new cut will appear under Pending."
                           : row.status === 'awaiting_edit'
                           ? "UGC.ad's editors are working on this video."
                           : 'The creator is editing this video.'}

@@ -32,7 +32,7 @@ function mockApi(me: Record<string, unknown>, unread = 0) {
                 {user_id: 'a', nickname: 'A', unread_count: unread},
                 {user_id: 'b', nickname: 'B', unread_count: 0},
               ]
-            : me,
+            : url.includes('/chat/unread-count') ? { unread_count: unread } : me,
         ),
     }),
   ) as unknown as typeof fetch;

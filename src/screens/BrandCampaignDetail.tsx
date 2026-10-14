@@ -678,7 +678,7 @@ function BrandCampaignDetail({
           <SummaryCell
             icon="calendar"
             label="Launched on"
-            value={formatDate(campaign.created_at) || '—'}
+            value={formatDate(campaign.created_at) || '-'}
           />
           <View style={styles.summaryDivider} />
           <SummaryCell
@@ -760,13 +760,13 @@ function BrandCampaignDetail({
 
               {String(campaign.status) === 'awaiting_brand_confirmation' && (
                 <View style={styles.scriptCard}>
-                  <Text style={styles.scriptTitle}>📝 Your script is ready — review it</Text>
+                  <Text style={styles.scriptTitle}>📝 Your script is ready - review it</Text>
                   <Text style={styles.scriptSub}>
                     UGC.ad wrote this script for your campaign. Creators only see the brief after you confirm.
                   </Text>
                   <ScrollView style={styles.scriptBox} nestedScrollEnabled>
                     <Text style={styles.scriptText}>
-                      {text(campaign.script_text, 'No script text attached — contact support.')}
+                      {text(campaign.script_text, 'No script text attached - contact support.')}
                     </Text>
                   </ScrollView>
                   {changesOpen && (
@@ -774,7 +774,7 @@ function BrandCampaignDetail({
                       style={styles.scriptInput}
                       value={changeNote}
                       onChangeText={setChangeNote}
-                      placeholder="What should the team change? Be specific — tone, hook, product points…"
+                      placeholder="What should the team change? Be specific - tone, hook, product points…"
                       placeholderTextColor="#9498B0"
                       multiline
                     />
@@ -791,7 +791,7 @@ function BrandCampaignDetail({
                           {scriptBusy ? (
                             <ActivityIndicator size="small" color="#FFFFFF" />
                           ) : (
-                            <Text style={styles.scriptBtnPrimaryText}>Confirm — send to creators</Text>
+                            <Text style={styles.scriptBtnPrimaryText}>Confirm - send to creators</Text>
                           )}
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -1065,13 +1065,13 @@ function BrandCampaignDetail({
                       label="Location"
                       value={text(
                         campaign.creator_location || campaign.creator_city,
-                        '—',
+                        '-',
                       )}
                     />
                     <CreatorFact
                       icon="globe"
                       label="Language"
-                      value={text(campaign.creator_language, '—')}
+                      value={text(campaign.creator_language, '-')}
                     />
                     <CreatorFact
                       icon="clapper"
@@ -1095,7 +1095,7 @@ function BrandCampaignDetail({
                       value={
                         campaign.creator_starting_rate
                           ? rupees(campaign.creator_starting_rate)
-                          : '—'
+                          : '-'
                       }
                     />
                   </View>
@@ -1355,7 +1355,7 @@ function BrandCampaignDetail({
                         </Text>
                         {revisionRequested && (
                           <Text style={styles.workHistory}>
-                            Revision requested — awaiting the creator's revised video.
+                            Revision requested - awaiting the creator's revised video.
                             This upload stays available for comparison.
                           </Text>
                         )}

@@ -289,7 +289,7 @@ function KycVerification({
       label: 'Legal Name',
       value: textOf(
         kyc.legal_name || kyc.full_name || kyc.name,
-        submitted ? '—' : 'Not provided',
+        submitted ? '-' : 'Not provided',
       ),
     },
     {
@@ -297,7 +297,7 @@ function KycVerification({
       label: 'PAN',
       value: textOf(
         kyc.pan || kyc.pan_number || kyc.document_number,
-        submitted ? '—' : 'Not provided',
+        submitted ? '-' : 'Not provided',
       ),
     },
     {
@@ -305,7 +305,7 @@ function KycVerification({
       label: 'Payout Method',
       value: textOf(
         kyc.payout_method || kyc.payment_method,
-        submitted ? '—' : 'Not set',
+        submitted ? '-' : 'Not set',
       ),
     },
     {
@@ -313,7 +313,7 @@ function KycVerification({
       label: 'Submitted On',
       value: textOf(
         kyc.submitted_on || kyc.submitted_at || kyc.created_at,
-        submitted ? '—' : 'Not submitted',
+        submitted ? '-' : 'Not submitted',
       ),
     },
   ];

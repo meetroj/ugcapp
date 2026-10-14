@@ -21,6 +21,7 @@ import {
   getSavedBriefs,
   getUnreadCount,
   placeBid,
+  getMe,
   removeSavedBrief,
   type AuthUser,
 } from '../api';
@@ -284,9 +285,11 @@ export default function BrowseCampaigns({
   onNotifications,
   onMessages,
   unread = 0,
+  onNavigate,
 }: {
   token: string;
   session: AuthUser;
+  onNavigate?: (path: string) => void;
   /** Opens the notification feed from the header bell. */
   onNotifications?: () => void;
   /** Opens Messages from the header chat icon. */
@@ -418,7 +421,13 @@ export default function BrowseCampaigns({
         saved={saved.includes(selected.id)}
         onToggleSave={() => toggleSave(selected.id)}
         onBack={() => setScreen('browse')}
-        onBid={() => setScreen('bid')}
+        onBid={async () => {
+          const current = await getMe(token).catch(() => session);
+          const kyc = (current.kyc || {}) as Record<string, any>;
+          if (kyc.status !== 'verified' && !current.kyc_verified) { onNavigate?.('/kyc'); return; }
+          if (current.profile_completed === false) { onNavigate?.('/settings?tab=profile'); return; }
+          setScreen('bid');
+        }}
       />
     );
   if (screen === 'bid' && selected)
@@ -777,14 +786,14 @@ function CampaignDetails({
             <Icon name="wallet" color="#514CF2" />
             <View>
               <Text style={styles.statLabel}>Budget</Text>
-              <Text style={styles.statValue}>{budget || '—'}</Text>
+              <Text style={styles.statValue}>{budget || '-'}</Text>
             </View>
           </View>
           <View style={styles.statBox}>
             <Icon name="clock" color="#514CF2" />
             <View>
               <Text style={styles.statLabel}>Delivery</Text>
-              <Text style={styles.statValue}>{delivery || '—'}</Text>
+              <Text style={styles.statValue}>{delivery || '-'}</Text>
             </View>
           </View>
         </View>
@@ -901,8 +910,6 @@ function SubmitBid({
   onSubmitted: () => void;
 }) {
   const [amount, setAmount] = useState('');
-  const [rawAmount, setRawAmount] = useState('');
-  const [editedAmount, setEditedAmount] = useState('');
   const [days, setDays] = useState('');
   const [proposal, setProposal] = useState('');
   const [sending, setSending] = useState(false);
@@ -913,11 +920,9 @@ function SubmitBid({
   ).some(
     (d: any) => d?.edited_required && (d?.edited_by || 'creator') === 'creator',
   );
-  const total = split
-    ? (Number(rawAmount) || 0) + (Number(editedAmount) || 0)
-    : Number(amount) || 0;
+  const total = Number(amount) || 0;
   const submit = async () => {
-    const pricesFilled = split ? !!rawAmount && !!editedAmount : !!amount;
+    const pricesFilled = total > 0;
     if (!pricesFilled || !days || !proposal.trim()) {
       setMessage('Please complete all fields.');
       return;
@@ -931,9 +936,7 @@ function SubmitBid({
       await placeBid(token, campaign.id, {
         amount: total,
         bid_amount: total,
-        ...(split
-          ? { raw_amount: Number(rawAmount), edited_amount: Number(editedAmount) }
-          : {}),
+
         delivery_days: Number(days),
         proposal,
         message: proposal,
@@ -967,45 +970,10 @@ function SubmitBid({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {split ? (
-          <>
-            <BidField label="Payout for raw video (₹)" icon="wallet">
-              <TextInput
-                value={rawAmount}
-                onChangeText={setRawAmount}
-                keyboardType="numeric"
-                placeholder="e.g. 1000"
-                placeholderTextColor="#9BA0B8"
-                style={styles.bidInput}
-              />
-            </BidField>
-            <BidField label="Payout for edited video (₹)" icon="wallet">
-              <TextInput
-                value={editedAmount}
-                onChangeText={setEditedAmount}
-                keyboardType="numeric"
-                placeholder="e.g. 1000"
-                placeholderTextColor="#9BA0B8"
-                style={styles.bidInput}
-              />
-            </BidField>
-            <Text style={styles.fieldLabel}>
-              This brief needs you to edit the video too. Total bid: ₹
-              {total.toLocaleString('en-IN')}
-            </Text>
-          </>
-        ) : (
-          <BidField label="Bid Amount (₹)" icon="wallet">
-            <TextInput
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="numeric"
-              placeholder="Enter your bid amount"
-              placeholderTextColor="#9BA0B8"
-              style={styles.bidInput}
-            />
-          </BidField>
-        )}
+        <BidField label={split ? 'Combined payout per video (₹)' : 'Bid Amount per video (₹)'} icon="wallet">
+          <TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="Enter your bid amount" placeholderTextColor="#9BA0B8" style={styles.bidInput} />
+        </BidField>
+        {split && <Text style={styles.fieldLabel}>One bid includes both the raw video and the edited video.</Text>}
         <BidField label="Estimated Delivery (days)" icon="calendar">
           <TextInput
             value={days}

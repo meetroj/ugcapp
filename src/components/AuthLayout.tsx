@@ -124,6 +124,9 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
         ]}
         resizeMode="cover"
       />
+      <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + scale(12), left: scale(16), zIndex: 2 }}>
+        <Text style={{ fontFamily: 'ReadexPro-SemiBold', fontWeight: '600', fontSize: fontScale(23), color: colors.white }}>UGCad.io</Text>
+      </View>
 
       {/*
         'padding' on BOTH platforms. KeyboardAvoidingView measures the overlap

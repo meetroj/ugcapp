@@ -88,7 +88,7 @@ function WithdrawalRequest({ token, available, onBack, onVerifyKyc }: Props) {
               <Text style={styles.doneTitle}>Request submitted</Text>
               <Text style={styles.doneBody}>
                 Your withdrawal request for {money(value)} was received. Payouts
-                are handled manually by the UGCad team — contact
+                are handled manually by the UGCad team - contact
                 support@ugcad.io if you don't hear back.
               </Text>
               <TouchableOpacity

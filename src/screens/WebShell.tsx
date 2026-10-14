@@ -621,6 +621,7 @@ function WebShell({
         />
       ) : showingBrowseCampaigns ? (
         <BrowseCampaigns
+          onNavigate={navigateTo}
           token={token}
           session={session}
           unread={unread}

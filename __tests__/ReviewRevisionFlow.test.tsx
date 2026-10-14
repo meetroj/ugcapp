@@ -36,7 +36,7 @@ const deal = { deal_id: 'd1', campaign: { id: 'c1', title: 'Launch' }, creator: 
   content_submission: { versions: [oldVersion] }, revision_tracker: { latest_feedback: 'Change the opening' } };
 
 test('creator refresh keeps the previous upload and revised upload adds a new version', async () => {
-  const next = { ...deal, current_state: 'Content Submitted — Awaiting Review', can_submit_content: false,
+  const next = { ...deal, current_state: 'Content Submitted - Awaiting Review', can_submit_content: false,
     content_submission: { versions: [oldVersion, { id: 'v2', version: 2, status: 'submitted', video_url: 'https://cdn.example.com/new.mp4' }] } };
   (getMyDeals as jest.Mock).mockResolvedValue([deal]);
   (launchImageLibrary as jest.Mock).mockResolvedValue({ assets: [{ uri: 'file:///new.mp4', type: 'video/mp4', fileName: 'new.mp4' }] });
@@ -63,7 +63,7 @@ test('creator deal automatically refreshes in foreground', async () => {
   jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, callback) => {
     foreground = callback; return { remove: jest.fn() };
   });
-  (getMyDeals as jest.Mock).mockResolvedValue([{ ...deal, current_state: 'Content Submitted — Awaiting Review' }]);
+  (getMyDeals as jest.Mock).mockResolvedValue([{ ...deal, current_state: 'Content Submitted - Awaiting Review' }]);
   await act(async () => {
     tree = Renderer.create(<DealDetails deal={deal} token="t" onBack={() => {}} onChat={() => {}} />);
   });

@@ -507,7 +507,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                   <View style={styles.flex}>
                     <Text style={styles.infoLabel}>Tracking number</Text>
                     <Text style={styles.infoValue}>
-                      {text(shipment?.tracking_number, '—')}
+                      {text(shipment?.tracking_number, '-')}
                     </Text>
                   </View>
                 </View>
@@ -516,7 +516,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                   <View style={styles.flex}>
                     <Text style={styles.infoLabel}>Courier</Text>
                     <Text style={styles.infoValue}>
-                      {text(shipment?.courier_name, '—')}
+                      {text(shipment?.courier_name, '-')}
                     </Text>
                   </View>
                 </View>
@@ -525,7 +525,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                   <View style={styles.flex}>
                     <Text style={styles.infoLabel}>Expected delivery</Text>
                     <Text style={styles.infoValue}>
-                      {formatDate(shipment?.expected_delivery) || '—'}
+                      {formatDate(shipment?.expected_delivery) || '-'}
                     </Text>
                   </View>
                 </View>
@@ -540,7 +540,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                       <View style={styles.flex}>
                         <Text style={styles.infoLabel}>Description</Text>
                         <Text style={styles.infoValue}>
-                          {description || '—'}
+                          {description || '-'}
                         </Text>
                       </View>
                     </View>
@@ -549,7 +549,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                       <View style={styles.flex}>
                         <Text style={styles.infoLabel}>Weight</Text>
                         <Text style={styles.infoValue}>
-                          {weight ? `${weight} kg` : '—'}
+                          {weight ? `${weight} kg` : '-'}
                         </Text>
                       </View>
                     </View>
@@ -558,7 +558,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                       <View style={styles.flex}>
                         <Text style={styles.infoLabel}>Dimensions</Text>
                         <Text style={styles.infoValue}>
-                          {dimensions || '—'}
+                          {dimensions || '-'}
                         </Text>
                       </View>
                     </View>
@@ -856,7 +856,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 <ActivityIndicator size="small" color="#3D4FD8" />
               ) : (
                 <Text style={styles.slipText}>
-                  {slip ? 'Slip attached — tap to replace' : 'Attach a photo of the slip'}
+                  {slip ? 'Slip attached - tap to replace' : 'Attach a photo of the slip'}
                 </Text>
               )}
             </TouchableOpacity>

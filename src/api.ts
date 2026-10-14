@@ -800,7 +800,7 @@ const UPLOAD_GIVE_UP_MS = 30 * 60 * 1000;
 
 const uploadInterrupted = () =>
   new Error(
-    `The upload was interrupted. Check your connection and try again — videos must be ${MAX_VIDEO_UPLOAD_MB} MB or smaller.`,
+    `The upload was interrupted. Check your connection and try again - videos must be ${MAX_VIDEO_UPLOAD_MB} MB or smaller.`,
   );
 
 /**
@@ -992,7 +992,7 @@ export async function uploadMedia(
     const bytes = file.fileSize || 0;
     if (bytes > MAX_VIDEO_UPLOAD_MB * 1048576) {
       throw new Error(
-        `This video is ${Math.round(bytes / 1048576)} MB. The maximum is ${MAX_VIDEO_UPLOAD_MB} MB — compress or trim it and try again.`,
+        `This video is ${Math.round(bytes / 1048576)} MB. The maximum is ${MAX_VIDEO_UPLOAD_MB} MB - compress or trim it and try again.`,
       );
     }
     if (!bytes || bytes > SERVER_VIDEO_UPLOAD_MB * 1048576) {

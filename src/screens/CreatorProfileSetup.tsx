@@ -508,6 +508,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [addingMore, setAddingMore] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [videoUploading, setVideoUploading] = useState(false);
   /**
@@ -866,7 +867,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
   const addPortfolioItem = useCallback(() => {
     if (!draft.videoUrl) {
       const message =
-        'Upload the video first — the sample is the video, so there is nothing to add without it.';
+        'Upload the video first - the sample is the video, so there is nothing to add without it.';
       setError(message);
       Alert.alert('No video yet', message);
       return;
@@ -881,6 +882,12 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
     }));
     setDraft({ price: '', category: '', delivery: '', videoUrl: '' });
   }, [draft]);
+
+  useEffect(() => {
+    if (!draft.videoUrl || Number(draft.price) <= 0 || Number(draft.delivery) <= 0 || !draft.category || videoUploading) return;
+    const timer = setTimeout(() => { addPortfolioItem(); setAddingMore(false); }, 800);
+    return () => clearTimeout(timer);
+  }, [draft, videoUploading, addPortfolioItem]);
 
   const removePortfolioItem = useCallback(
     (id: string) =>
@@ -963,7 +970,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
         setProbing(false);
         if (verdict === 'invalid') {
           setShowErrors(true);
-          setError("That Instagram account doesn't exist — enter a real profile.");
+          setError("That Instagram account doesn't exist - enter a real profile.");
           return;
         }
         // 'valid' and 'uncertain' both fall through: Instagram's login wall
@@ -976,7 +983,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
       // and simply holds the wrong thing — say what is actually wrong.
       setError(
         checks.instagramLive === false
-          ? "That Instagram account doesn't exist — enter a real profile."
+          ? "That Instagram account doesn't exist - enter a real profile."
           : checks.linksValid === false
           ? 'One of your social links is not a profile on that platform.'
           : checks.mapLink === false
@@ -1060,13 +1067,13 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               <Text style={styles.thanksStrong}>24-48 hours</Text>. Keep an eye
               on your inbox!
             </Text>
-            <TouchableOpacity
+            {onLogout && <TouchableOpacity
               style={styles.submit}
-              onPress={onDone}
+              onPress={onLogout}
               accessibilityRole="button"
             >
-              <Text style={styles.submitText}>Continue →</Text>
-            </TouchableOpacity>
+              <Text style={styles.submitText}>Back to sign in</Text>
+            </TouchableOpacity>}
           </View>
         </ScrollView>
       </View>
@@ -1548,10 +1555,10 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
               )}
 
               {data.portfolio.length > 0 && (
-                <Text style={styles.pfAddMore}>+ Add More Videos</Text>
+                <TouchableOpacity onPress={() => setAddingMore(true)} accessibilityRole="button"><Text style={styles.pfAddMore}>+ Add More Videos</Text></TouchableOpacity>
               )}
 
-              <View
+              {(data.portfolio.length === 0 || addingMore) && <View
                 style={[styles.draftBox, bad('portfolio') && styles.inputError]}
               >
                 {/* The web calls this a drag & drop zone; on a phone it is a
@@ -1574,7 +1581,7 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                     </>
                   )}
                 </TouchableOpacity>
-                <Text style={styles.uploadHint}>Upload (max 100 MB)</Text>
+                <Text style={styles.uploadHint}>Upload (max 400 MB)</Text>
 
                 <TextInput
                   style={[styles.input, styles.pfEditSpacer]}
@@ -1611,14 +1618,8 @@ function CreatorProfileSetup({ token, session, onDone, onLogout }: Props) {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={addPortfolioItem}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.addButtonText}>Add to Profile</Text>
-                </TouchableOpacity>
-              </View>
+                <Text style={styles.uploadHint}>Added automatically after price, delivery time and category are filled.</Text>
+              </View>}
 
               <Chips
                 label="Languages"

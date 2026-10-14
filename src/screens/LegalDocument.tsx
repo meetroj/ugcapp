@@ -88,7 +88,7 @@ const DOCS: Record<LegalDocId, Doc> = {
       },
       {
         heading: 'Content and usage rights',
-        body: 'Usage rights are defined in each brief — platforms, duration and exclusivity. Rights transfer to the brand on approval and payment, subject to those terms. Creators keep ownership of anything outside the agreed scope.',
+        body: 'Usage rights are defined in each brief - platforms, duration and exclusivity. Rights transfer to the brand on approval and payment, subject to those terms. Creators keep ownership of anything outside the agreed scope.',
       },
       {
         heading: 'Off-platform dealing',
@@ -118,7 +118,7 @@ const DOCS: Record<LegalDocId, Doc> = {
       },
       {
         heading: 'Keep it on the platform',
-        body: 'Messages, files and payments stay on UGCad. This protects both sides — escrow, dispute resolution and evidence all depend on it.',
+        body: 'Messages, files and payments stay on UGCad. This protects both sides - escrow, dispute resolution and evidence all depend on it.',
       },
       {
         heading: 'Content standards',

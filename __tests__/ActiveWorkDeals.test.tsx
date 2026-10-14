@@ -27,7 +27,7 @@ const buttons = (label: string) => tree.root.findAll((node: any) =>
 const deal = (state: string, campaign = {}) => ({ deal_id: 'c1', current_state: state, campaign });
 
 test('newly hired multi-creator campaign is visible in Active', async () => {
-  await render([deal('Accepted — Awaiting Shipment', {
+  await render([deal('Accepted - Awaiting Shipment', {
     status: 'active', creators_wanted: 4, selected_creators: ['other', 'me'],
   })]);
   expect(buttons('Filter: Active').length).toBeGreaterThan(0);
@@ -35,12 +35,12 @@ test('newly hired multi-creator campaign is visible in Active', async () => {
 });
 
 test('pending booking opens Requests even with an accepted lifecycle state', async () => {
-  await render([deal('Accepted — Awaiting Shipment', { booking_status: 'pending_creator' })]);
+  await render([deal('Accepted - Awaiting Shipment', { booking_status: 'pending_creator' })]);
   expect(buttons('Filter: Requests').length).toBeGreaterThan(0);
   expect(buttons('View deal details').length).toBeGreaterThan(0);
 });
 
-test.each(['Disputed', 'Unpaid — Incomplete', 'Content Submitted — Awaiting Review'])(
+test.each(['Disputed', 'Unpaid - Incomplete', 'Content Submitted - Awaiting Review'])(
   '%s remains visible in Active', async state => {
     await render([deal(state)]);
     expect(buttons('View deal details').length).toBeGreaterThan(0);
@@ -48,7 +48,7 @@ test.each(['Disputed', 'Unpaid — Incomplete', 'Content Submitted — Awaiting 
 );
 
 test('paid completed deals stay out of Active', async () => {
-  await render([deal('Paid — Complete')]);
+  await render([deal('Paid - Complete')]);
   expect(buttons('View deal details')).toHaveLength(0);
 });
 
@@ -60,7 +60,7 @@ test('foreground refresh shows deals hired after the list loaded', async () => {
   });
   await render([]);
   expect(buttons('View deal details')).toHaveLength(0);
-  (getMyDeals as jest.Mock).mockResolvedValue([deal('Received — Content in Progress')]);
+  (getMyDeals as jest.Mock).mockResolvedValue([deal('Received - Content in Progress')]);
   await act(async () => { listener('active'); });
   expect(buttons('View deal details').length).toBeGreaterThan(0);
 });

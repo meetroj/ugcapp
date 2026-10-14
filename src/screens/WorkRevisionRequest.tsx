@@ -192,7 +192,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
     if (freeLeft === 1) {
       Alert.alert(
         'This is your second revision',
-        `It is the last free one. Put every change you need in this request — from the third revision onward ₹${paidFee} is deducted from your wallet for each revision.`,
+        `It is the last free one. Put every change you need in this request - from the third revision onward ₹${paidFee} is deducted from your wallet for each revision.`,
         [{ text: 'Got it' }],
       );
     }
@@ -609,7 +609,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
         )}
         {freeLeft === 1 && (
           <Text style={styles.feeWarn}>
-            This is your second revision — the last free one. Make sure it
+            This is your second revision - the last free one. Make sure it
             covers everything: from the third revision onward ₹{paidFee} is
             deducted for each revision (₹300 goes to the creator).
           </Text>

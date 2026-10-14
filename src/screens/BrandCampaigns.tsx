@@ -99,7 +99,7 @@ function tintFor(title: string) {
 /** Rupee amounts print in full here — the mockup shows "Rs. 5,000". */
 const money = (value: unknown) => {
   const amount = Number(value) || 0;
-  if (!amount) return '—';
+  if (!amount) return '-';
   return `Rs. ${amount.toLocaleString('en-IN')}`;
 };
 

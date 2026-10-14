@@ -432,7 +432,7 @@ const PRODUCT_TYPES = [
   {
     value: 'digital',
     label: 'Digital / App',
-    hint: 'App, software or download — nothing to ship',
+    hint: 'App, software or download - nothing to ship',
   },
   {
     value: 'service',
@@ -903,7 +903,7 @@ function DateField({
         <Text style={[styles.hint, styles.hintBad]}>
           {invalid
             ? 'Enter a real date as DD-MM-YYYY.'
-            : 'Cannot be today — earliest is tomorrow.'}
+            : 'Cannot be today - earliest is tomorrow.'}
         </Text>
       )}
       {!invalid && !tooEarly && !!hint && <Text style={styles.hint}>{hint}</Text>}
@@ -1246,7 +1246,7 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.reviewRow}>
       <Text style={styles.reviewLabel}>{label}</Text>
-      <Text style={styles.reviewValue}>{value || '—'}</Text>
+      <Text style={styles.reviewValue}>{value || '-'}</Text>
     </View>
   );
 }
@@ -2171,7 +2171,7 @@ function BrandPostBrief({
           {resumed && (
             <View style={styles.resumed}>
               <Text style={styles.resumedText}>
-                Resumed your unfinished brief — continuing from
+                Resumed your unfinished brief - continuing from
                 {` ${STEPS[step - 1]}`}.
               </Text>
               <TouchableOpacity
@@ -2229,7 +2229,7 @@ function BrandPostBrief({
                   )}
                   {!needsShipping && (
                     <Text style={styles.typeNote}>
-                      No physical product — the shipping date is skipped.
+                      No physical product - the shipping date is skipped.
                     </Text>
                   )}
                 </View>
@@ -2250,7 +2250,7 @@ function BrandPostBrief({
                   placeholder="Your brand"
                   hint={
                     form.brandName
-                      ? 'Comes from your brand profile — every campaign is published under this name. Change it in Profile > Brand profile.'
+                      ? 'Comes from your brand profile - every campaign is published under this name. Change it in Profile > Brand profile.'
                       : 'Add a brand name in Profile > Brand profile and it will fill in here.'
                   }
                 />
@@ -2453,7 +2453,7 @@ function BrandPostBrief({
                       }
                       hint={
                         item.editedBy === 'ugc'
-                          ? "UGC.ad's team edits this deliverable — our admin team is notified once you submit the brief."
+                          ? "UGC.ad's team edits this deliverable - our admin team is notified once you submit the brief."
                           : 'The creator edits and delivers the finished cut themselves.'
                       }
                     />
@@ -2489,7 +2489,7 @@ function BrandPostBrief({
                   }
                   hint={
                     form.scriptProvider === 'ugc'
-                      ? "UGC.ad's team writes the script during brief review — our admin team is notified once you submit, and the script appears in the brief before the creator starts."
+                      ? "UGC.ad's team writes the script during brief review - our admin team is notified once you submit, and the script appears in the brief before the creator starts."
                       : 'Enter the script below. It will be shown to the creator as part of the brief.'
                   }
                 />
@@ -2581,8 +2581,8 @@ function BrandPostBrief({
                       form.ctaLink &&
                       !ctaLinkValid(form.callToAction, form.ctaLink)
                         ? CTA_INPUT[form.callToAction].type === 'handle'
-                          ? 'Enter a valid @handle or profile link — no random text.'
-                          : 'Enter a valid link (e.g. https://yourbrand.com) — no random text.'
+                          ? 'Enter a valid @handle or profile link - no random text.'
+                          : 'Enter a valid link (e.g. https://yourbrand.com) - no random text.'
                         : undefined
                     }
                   />
@@ -2844,7 +2844,7 @@ function BrandPostBrief({
                     value={form.productShippingBy}
                     onChange={v => set('productShippingBy', v)}
                     min={tomorrowISO}
-                    hint="Cannot be today — earliest is tomorrow."
+                    hint="Cannot be today - earliest is tomorrow."
                   />
                 )}
                 <DateField
