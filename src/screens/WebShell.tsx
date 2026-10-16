@@ -173,6 +173,11 @@ function hostOf(url: string): string {
   return match ? match[1].toLowerCase() : '';
 }
 
+/** The website's login page. Reaching it inside the app means the web session ended. */
+function isWebLoginPath(pathname: string): boolean {
+  return /^\/(auth|login)\/?$/.test(pathname);
+}
+
 function isInternal(url: string): boolean {
   const host = hostOf(url);
   return INTERNAL_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
@@ -543,6 +548,13 @@ function WebShell({
     canGoBack.current = nav.canGoBack;
     try {
       const url = new URL(nav.url);
+      // The website signed out (admin Sign out, or an expired session redirected to
+      // its login). In the app that must be the app's own logout, exactly like the
+      // creator/brand native logout: clear the session and show the native login.
+      if (isInternal(nav.url) && isWebLoginPath(url.pathname)) {
+        onLogout?.();
+        return;
+      }
       // Links followed inside the WebView are normalised too: a link tapped on
       // a web page must reach the same native screen the bottom nav would, or
       // the app drifts back onto the desktop site one tap at a time.
@@ -561,7 +573,7 @@ function WebShell({
         setCurrentPath(path);
       }
     } catch {}
-  }, []);
+  }, [onLogout]);
 
   // Keep third-party flows (OAuth, payments, mailto/tel) out of the webview.
   const onShouldStartLoad = useCallback((req: ShouldStartLoadRequest) => {
@@ -577,12 +589,19 @@ function WebShell({
     }
 
     if (isInternal(url)) {
+      // Website logout lands on its login page; never show the web login in the app.
+      try {
+        if (isWebLoginPath(new URL(url).pathname)) {
+          onLogout?.();
+          return false;
+        }
+      } catch {}
       return true;
     }
 
     Linking.openURL(url).catch(() => {});
     return false;
-  }, []);
+  }, [onLogout]);
 
   const onLoadEnd = useCallback(() => {
     setLoading(false);
