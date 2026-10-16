@@ -7,7 +7,7 @@
     "android:ports": "adb reverse tcp:3000 tcp:3000 && adb reverse tcp:8000 tcp:8000",
     "ios": "react-native run-ios",
     "lint": "eslint .",
-    "start": "react-native start",
+    "start": "node api.js && react-native start",
     "test": "jest"
   },
   "dependencies": {
