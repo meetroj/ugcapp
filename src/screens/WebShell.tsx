@@ -59,6 +59,7 @@ import Reviews from './Reviews';
 import NotificationSettings from './NotificationSettings';
 import NotificationFeed from './NotificationFeed';
 import type {
+  WebViewMessageEvent,
   WebViewNavigation,
   ShouldStartLoadRequest,
 } from 'react-native-webview/lib/WebViewTypes';
@@ -201,7 +202,11 @@ function WebShell({
   // the page we are returning *to*, and without this flag it would push that
   // page onto the stack again — the stack would grow on every back press and
   // the user could never reach the exit.
-  const goingBack = useRef(false);
+  // Path we were on when a WebView back started (null when none is in flight).
+  const goingBack = useRef<string | null>(null);
+  // Admin overlays (detail / sheet / More) open on the current web page, as reported by
+  // the website. Back closes those first, through the WebView's own history.
+  const webOverlays = useRef(0);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -209,7 +214,10 @@ function WebShell({
   useLiveUpdates(token);
   const [currentPath, setCurrentPath] = useState(initialPath);
   const pathRef = useRef(initialPath);
-  const stackRef = useRef<string[]>([]);
+  // `web` marks a step taken INSIDE the WebView (link, redirect, search update): going back
+  // over it uses the WebView's own history, so the website restores the exact page, its
+  // filters and scroll, and URL-only replacements never become extra Back stops.
+  const stackRef = useRef<{ path: string; web: boolean }[]>([]);
   const [webPath, setWebPath] = useState(initialPath);
   const [feedOpen, setFeedOpen] = useState(false);
   // Display name for the open chat thread. The list knows it; the URL only
@@ -464,7 +472,7 @@ function WebShell({
         return;
       }
       if (pathRef.current !== path) {
-        stackRef.current = [...stackRef.current, pathRef.current];
+        stackRef.current = [...stackRef.current, { path: pathRef.current, web: false }];
       }
       pathRef.current = path;
       setCurrentPath(path);
@@ -481,10 +489,10 @@ function WebShell({
     if (stackRef.current.length === 0) {
       return false;
     }
-    const previous = stackRef.current[stackRef.current.length - 1];
+    const previous = stackRef.current[stackRef.current.length - 1].path;
     // Returning to a web path remounts the WebView at that URL, which fires
     // onNavigationStateChange; the flag stops it re-pushing what we just popped.
-    goingBack.current = false;
+    goingBack.current = null;
     stackRef.current = stackRef.current.slice(0, -1);
     pathRef.current = previous;
     setCurrentPath(previous);
@@ -508,6 +516,22 @@ function WebShell({
     },
     [goBack],
   );
+
+  const webBack = useCallback(() => {
+    goingBack.current = pathRef.current;
+    // Safety net: if the WebView reports no navigation (e.g. nothing to go back to),
+    // the next real navigation must not be mistaken for this back step.
+    setTimeout(() => { goingBack.current = null; }, 1500);
+    webRef.current?.goBack();
+  }, []);
+
+  /** The website reports how many admin overlays are open (see OverlayBack.js). */
+  const onWebMessage = useCallback((event: WebViewMessageEvent) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data?.type === 'ugcad-overlay') webOverlays.current = Number(data.depth) || 0;
+    } catch {}
+  }, []);
 
   // Hardware back closes overlays first, then walks back through the screens
   // we pushed, then through the WebView's own history. Only when all three are
@@ -533,16 +557,23 @@ function WebShell({
         }
         return false;
       }
-      if (goBack()) return true;
-      if (canGoBack.current) {
-        goingBack.current = true;
-        webRef.current?.goBack();
+      // A website overlay (admin detail, sheet, More) closes first, then a step taken inside
+      // the WebView goes back through the WebView's own history, so the user lands on the
+      // exact page they came from with its filters and scroll intact.
+      const top = stackRef.current[stackRef.current.length - 1];
+      if (canGoBack.current && (webOverlays.current > 0 || top?.web)) {
+        webBack();
         return true;
       }
-      return goBack();
+      if (goBack()) return true;
+      if (canGoBack.current) {
+        webBack();
+        return true;
+      }
+      return false;
     });
     return () => sub.remove();
-  }, [errored, feedOpen, goBack, showingNative, homePath]);
+  }, [errored, feedOpen, goBack, webBack, showingNative, homePath]);
 
   const onNavStateChange = useCallback((nav: WebViewNavigation) => {
     canGoBack.current = nav.canGoBack;
@@ -559,8 +590,15 @@ function WebShell({
       // a web page must reach the same native screen the bottom nav would, or
       // the app drifts back onto the desktop site one tap at a time.
       const path = normalizePath(url.pathname + url.search);
-      if (goingBack.current) {
-        goingBack.current = false;
+      if (goingBack.current !== null) {
+        const from = goingBack.current;
+        goingBack.current = null;
+        if (path !== from) {
+          // Landed on an earlier page: drop every recorded step after it (this also
+          // absorbs URL-only updates the WebView never kept as separate history).
+          const at = stackRef.current.map(e => e.path).lastIndexOf(path);
+          stackRef.current = at >= 0 ? stackRef.current.slice(0, at) : stackRef.current.slice(0, -1);
+        }
         pathRef.current = path;
         setCurrentPath(path);
         return;
@@ -568,7 +606,7 @@ function WebShell({
       // Links followed inside the WebView also become history entries, so the
       // back button treats web and native screens the same way.
       if (pathRef.current !== path) {
-        stackRef.current = [...stackRef.current, pathRef.current];
+        stackRef.current = [...stackRef.current, { path: pathRef.current, web: true }];
         pathRef.current = path;
         setCurrentPath(path);
       }
@@ -952,6 +990,7 @@ function WebShell({
           mediaPlaybackRequiresUserAction={false}
           // --- navigation control ---
           onNavigationStateChange={onNavStateChange}
+          onMessage={onWebMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
           setSupportMultipleWindows={false}
           // --- lifecycle ---
