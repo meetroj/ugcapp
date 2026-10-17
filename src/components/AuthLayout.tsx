@@ -12,6 +12,7 @@ import React, { useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   useWindowDimensions,
@@ -136,11 +137,22 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
         (the old Android value) made the component a no-op, leaving the keyboard
         on top of the lower fields. When the window DOES resize, the measured
         overlap is 0 and nothing is added, so this is safe either way.
+
+        iOS opts out: switching between the email, phone-pad and new-password
+        keyboards (plus the strong-password bar) could leave the padding stuck
+        after the keyboard closed, cutting the card off under the email field
+        until the screen was reopened. On iOS the ScrollView insets its content
+        for the keyboard instead, which never changes the layout.
       */}
-      <KeyboardAvoidingView style={styles.flex} behavior="padding">
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior="padding"
+        enabled={Platform.OS === 'android'}
+      >
         <ScrollView
           style={styles.flex}
           contentContainerStyle={styles.scroll}
+          automaticallyAdjustKeyboardInsets
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}

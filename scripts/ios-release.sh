@@ -46,7 +46,9 @@ if [ -z "$BUILD_NUMBER" ]; then
 fi
 echo "==> Build number: $BUILD_NUMBER"
 
-[ -d Pods ] || pod install
+# Always: Podfile.lock lags package.json (it was missing RNAppleAuthentication),
+# and a stale Pods folder would ship without the newer native modules.
+pod install
 
 echo "==> Archiving"
 xcodebuild -workspace ugcapp.xcworkspace -scheme ugcapp -configuration Release \

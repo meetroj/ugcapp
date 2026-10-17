@@ -16,6 +16,7 @@ import React, {
 import {
   Animated,
   AppState,
+  BackHandler,
   FlatList,
   Dimensions,
   Easing,
@@ -203,6 +204,7 @@ function Icon({
         <Path d="M20.5 12.2c0 3.9-3.8 7-8.5 7-1 0-2-.1-2.9-.4L4 20.5l1.4-4A6.6 6.6 0 0 1 3.5 12c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7Z" {...line} />
       )}
       {name === 'chevron' && <Path d="m9.5 6 6 6-6 6" {...line} />}
+      {name === 'back' && <Path d="m14.5 6-6 6 6 6" {...line} />}
       {name === 'close' && <Path d="M6 6l12 12M18 6 6 18" {...line} />}
       {name === 'play' && <Path d="M8 5.5v13l11-6.5-11-6.5Z" fill={color} />}
       {name === 'bookmark' && (
@@ -742,6 +744,15 @@ function BrandCreators({
   // best-match ordered, which is what the endpoint defaults to anyway.
   const sort = 'best_match';
   const [query, setQuery] = useState('');
+  // The team's hand-picked shortlist (admin: Users > creator > Mark UGCAD Approved),
+  // same collection as the website's ?collection=ugcad-approved.
+  const [approvedOnly, setApprovedOnly] = useState(false);
+  // Android Back leaves the collection before it leaves the tab.
+  useEffect(() => {
+    if (!approvedOnly) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { setApprovedOnly(false); return true; });
+    return () => sub.remove();
+  }, [approvedOnly]);
   const [searchFocused, setSearchFocused] = useState(false);
   const deferredQuery = useDeferredValue(query);
   const [activeRow, setActiveRow] = useState(0);
@@ -811,8 +822,9 @@ function BrandCreators({
   // query, and the list is small enough to filter in place.
   const visible = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
-    if (!needle) return creators;
-    return creators.filter(creator =>
+    const pool = approvedOnly ? creators.filter(creator => !!creator.ugcad_approved) : creators;
+    if (!needle) return pool;
+    return pool.filter(creator =>
       [
         creator.name,
         creator.nickname,
@@ -826,7 +838,7 @@ function BrandCreators({
         .filter(Boolean)
         .some(field => String(field).toLowerCase().includes(needle)),
     );
-  }, [creators, deferredQuery]);
+  }, [creators, deferredQuery, approvedOnly]);
   const rows = useMemo(() => [
     visible.slice(0, Math.ceil(visible.length / 2)),
     visible.slice(Math.ceil(visible.length / 2)),
@@ -855,6 +867,25 @@ function BrandCreators({
             autoCorrect={false}
           />
         </View>
+
+        {approvedOnly ? (
+          <View style={styles.approvedHead}>
+            <TouchableOpacity style={styles.approvedBack} onPress={() => setApprovedOnly(false)}
+              accessibilityRole="button" hitSlop={scale(8)}>
+              <Icon name="back" color="#4C4DD6" size={15} />
+              <Text style={styles.approvedBackText}>Back to All Creators</Text>
+            </TouchableOpacity>
+            <Text style={styles.approvedTitle}>Creators Approved by Our UGCAD Team</Text>
+            <Text style={styles.approvedSub}>Every creator here has been reviewed and approved by the UGCAD team.</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.approvedLink} onPress={() => setApprovedOnly(true)}
+            accessibilityRole="button">
+            <Icon name="verified" color="#1FA971" size={17} />
+            <Text style={styles.approvedLinkText} numberOfLines={1}>Meet Creators Approved by Our UGCAD Team</Text>
+            <Icon name="chevron" color="#4C4DD6" size={15} />
+          </TouchableOpacity>
+        )}
 
         {loading ? (
           // Two strips of 9:16 tiles, matching the reel rows below rather than
@@ -897,9 +928,15 @@ function BrandCreators({
           >
             {!visible.length ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>No creators found</Text>
+                <Text style={styles.emptyTitle}>
+                  {approvedOnly ? 'No approved creators to show' : 'No creators found'}
+                </Text>
                 <Text style={styles.emptyText}>
-                  {query
+                  {approvedOnly
+                    ? query
+                      ? 'None of the UGCAD approved creators match your search.'
+                      : 'The UGCAD team has not approved any creators for this collection yet. Check back soon.'
+                    : query
                     ? 'Try a different search term.'
                     : 'The directory is empty right now.'}
                 </Text>
@@ -988,6 +1025,38 @@ const styles = StyleSheet.create({
     // Android's default vertical padding makes the row taller than 44.
     paddingVertical: 0,
   },
+
+  // "Meet Creators Approved by Our UGCAD Team" link and the collection's heading.
+  approvedLink: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(12),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+  },
+  approvedLinkText: {
+    flexShrink: 1,
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C4DD6',
+  },
+  approvedHead: { marginHorizontal: scale(16), marginBottom: scale(14) },
+  approvedBack: { flexDirection: 'row', alignItems: 'center', gap: scale(4), alignSelf: 'flex-start' },
+  approvedBackText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C4DD6',
+  },
+  approvedTitle: {
+    marginTop: scale(10),
+    fontSize: fontScale(18),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  approvedSub: { marginTop: scale(4), fontSize: fontScale(12), color: '#5C6079' },
 
   loading: { marginTop: scale(40) },
   content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(30) + NAV_CLEARANCE },
