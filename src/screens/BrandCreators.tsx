@@ -34,6 +34,7 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
+import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, getCreatorDirectory } from '../api';
 import { playableVideoUrl, previewOf } from '../mediaPreview';
@@ -53,6 +54,15 @@ type Props = {
 };
 
 type Creator = Record<string, any> & { id: string };
+
+// Every category a creator picked (the directory's `categories`, else their first),
+// lowercased - the same rule the website's Browse Creators filter uses.
+export const categoriesOf = (creator: Creator): string[] =>
+  (Array.isArray(creator.categories) && creator.categories.length ? creator.categories : [creator.primary_category])
+    .map(value => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+const categoryLabel = (value: string) =>
+  value.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
 
 // One decoder for the entire directory, mounted only in the vertically visible row.
 const PREVIEW_BUFFER = {
@@ -204,6 +214,13 @@ function Icon({
         <Path d="M20.5 12.2c0 3.9-3.8 7-8.5 7-1 0-2-.1-2.9-.4L4 20.5l1.4-4A6.6 6.6 0 0 1 3.5 12c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7Z" {...line} />
       )}
       {name === 'chevron' && <Path d="m9.5 6 6 6-6 6" {...line} />}
+      {name === 'filter' && (
+        <>
+          <Path d="M4 7h10M18 7h2M4 17h4M12 17h8" {...line} />
+          <Circle cx="16" cy="7" r="2" {...line} />
+          <Circle cx="10" cy="17" r="2" {...line} />
+        </>
+      )}
       {name === 'back' && <Path d="m14.5 6-6 6 6 6" {...line} />}
       {name === 'close' && <Path d="M6 6l12 12M18 6 6 18" {...line} />}
       {name === 'play' && <Path d="M8 5.5v13l11-6.5-11-6.5Z" fill={color} />}
@@ -753,6 +770,9 @@ function BrandCreators({
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { setApprovedOnly(false); return true; });
     return () => sub.remove();
   }, [approvedOnly]);
+  // Category filter (website parity): 'all' or one lowercased category.
+  const [category, setCategory] = useState('all');
+  const [filterOpen, setFilterOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const deferredQuery = useDeferredValue(query);
   const [activeRow, setActiveRow] = useState(0);
@@ -822,7 +842,9 @@ function BrandCreators({
   // query, and the list is small enough to filter in place.
   const visible = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
-    const pool = approvedOnly ? creators.filter(creator => !!creator.ugcad_approved) : creators;
+    const pool = creators.filter(creator =>
+      (!approvedOnly || !!creator.ugcad_approved) &&
+      (category === 'all' || categoriesOf(creator).includes(category)));
     if (!needle) return pool;
     return pool.filter(creator =>
       [
@@ -838,7 +860,14 @@ function BrandCreators({
         .filter(Boolean)
         .some(field => String(field).toLowerCase().includes(needle)),
     );
-  }, [creators, deferredQuery, approvedOnly]);
+  }, [creators, deferredQuery, approvedOnly, category]);
+  // Categories present in the current collection, most creators first, with counts.
+  const categoryOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    (approvedOnly ? creators.filter(creator => !!creator.ugcad_approved) : creators)
+      .forEach(creator => new Set(categoriesOf(creator)).forEach(value => counts.set(value, (counts.get(value) || 0) + 1)));
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [creators, approvedOnly]);
   const rows = useMemo(() => [
     visible.slice(0, Math.ceil(visible.length / 2)),
     visible.slice(Math.ceil(visible.length / 2)),
@@ -854,6 +883,7 @@ function BrandCreators({
       />
 
       <View style={styles.sheet}>
+        <View style={styles.searchRow}>
         <View style={styles.searchWrap}>
           <Icon name="search" color="#9498B0" size={17} />
           <TextInput
@@ -867,6 +897,23 @@ function BrandCreators({
             autoCorrect={false}
           />
         </View>
+          <TouchableOpacity testID="creator-filter-button" style={[styles.filterBtn, category !== 'all' && styles.filterBtnActive]}
+            onPress={() => setFilterOpen(true)} accessibilityRole="button"
+            accessibilityLabel={category === 'all' ? 'Filter by category' : `Filter: ${categoryLabel(category)}`}>
+            <Icon name="filter" color={category === 'all' ? '#15163F' : '#4C4DD6'} size={19} />
+            {category !== 'all' && <View style={styles.filterDot} />}
+          </TouchableOpacity>
+        </View>
+
+        {category !== 'all' && (
+          <View style={styles.activeFilterRow}>
+            <TouchableOpacity testID="creator-filter-clear" style={styles.activeFilterChip} onPress={() => setCategory('all')}
+              accessibilityRole="button" accessibilityLabel={`Remove filter ${categoryLabel(category)}`}>
+              <Text style={styles.activeFilterText} numberOfLines={1}>{categoryLabel(category)}</Text>
+              <Icon name="close" color="#4C4DD6" size={13} />
+            </TouchableOpacity>
+          </View>
+        )}
 
         {approvedOnly ? (
           <View style={styles.approvedHead}>
@@ -932,7 +979,9 @@ function BrandCreators({
                   {approvedOnly ? 'No approved creators to show' : 'No creators found'}
                 </Text>
                 <Text style={styles.emptyText}>
-                  {approvedOnly
+                  {category !== 'all'
+                    ? `No creators in ${categoryLabel(category)}${query ? ' match your search' : ''}. Try another category or clear the filter.`
+                    : approvedOnly
                     ? query
                       ? 'None of the UGCAD approved creators match your search.'
                       : 'The UGCAD team has not approved any creators for this collection yet. Check back soon.'
@@ -956,6 +1005,19 @@ function BrandCreators({
           </ScrollView>
         )}
       </View>
+
+      <ChoiceSheet
+        visible={filterOpen}
+        title="Filter by category"
+        options={[
+          { label: `${category === 'all' ? '✓ ' : ''}All categories`, onPress: () => setCategory('all') },
+          ...categoryOptions.map(([value, count]) => ({
+            label: `${category === value ? '✓ ' : ''}${categoryLabel(value)} (${count})`,
+            onPress: () => setCategory(value),
+          })),
+        ]}
+        onClose={() => setFilterOpen(false)}
+      />
 
       <CreatorPeekSheet
         creator={peek}
@@ -1002,12 +1064,43 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  searchWrap: {
+  // Search field + Filter button share one row.
+  searchRow: {
     marginTop: scale(16),
-    // The sort chips used to supply the gap below the search bar; with them
-    // gone the bar carries its own bottom spacing.
     marginBottom: scale(12),
     marginHorizontal: scale(16),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+  },
+  filterBtn: {
+    width: scale(44),
+    height: scale(44),
+    borderRadius: scale(12),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EDEEF6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBtnActive: { borderColor: '#C9CAF7', backgroundColor: '#EEEFFF' },
+  filterDot: { position: 'absolute', top: scale(8), right: scale(8), width: scale(7), height: scale(7), borderRadius: scale(4), backgroundColor: '#4C4DD6' },
+  activeFilterRow: { flexDirection: 'row', marginHorizontal: scale(16), marginTop: -scale(4), marginBottom: scale(12) },
+  activeFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+    maxWidth: '100%',
+    paddingHorizontal: scale(12),
+    height: scale(32),
+    borderRadius: scale(16),
+    backgroundColor: '#EEEFFF',
+    borderWidth: 1,
+    borderColor: '#C9CAF7',
+  },
+  activeFilterText: { fontSize: fontScale(13), fontFamily: 'Inter-SemiBold', fontWeight: '600', color: '#4C4DD6', flexShrink: 1 },
+  searchWrap: {
+    flex: 1,
     height: scale(44),
     borderRadius: scale(12),
     backgroundColor: '#FFFFFF',

@@ -17,7 +17,7 @@
  *   />
  */
 import React from 'react';
-import { Modal, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Dimensions, Modal, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from './Text';
 import { scale, fontScale } from '../theme';
 
@@ -49,7 +49,8 @@ export default function ChoiceSheet({
         <View style={styles.card}>
           <Text style={styles.title}>{title}</Text>
           {!!message && <Text style={styles.message}>{message}</Text>}
-          <View style={styles.options}>
+          {/* Long lists (e.g. creator categories) scroll; Cancel stays reachable below. */}
+          <ScrollView style={styles.optionsScroll} contentContainerStyle={styles.options} bounces={false}>
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
@@ -70,6 +71,8 @@ export default function ChoiceSheet({
                 </Text>
               </TouchableOpacity>
             ))}
+          </ScrollView>
+          <View style={styles.cancelRow}>
             <TouchableOpacity style={styles.option} onPress={onClose} accessibilityRole="button">
               <Text style={styles.cancelText}>{cancelLabel}</Text>
             </TouchableOpacity>
@@ -92,7 +95,9 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: fontScale(18), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163F' },
   message: { marginTop: scale(8), fontSize: fontScale(13.5), lineHeight: fontScale(20), color: '#5C6079' },
-  options: { marginTop: scale(14), gap: scale(2) },
+  optionsScroll: { marginTop: scale(14), maxHeight: Dimensions.get('window').height * 0.55 },
+  options: { gap: scale(2) },
+  cancelRow: { marginTop: scale(2) },
   option: { paddingVertical: scale(13), alignItems: 'center' },
   optionText: { fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '700', color: '#4C4DD6' },
   destructive: { color: '#D6407F' },
