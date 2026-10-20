@@ -64,8 +64,11 @@ import {
   editModeOf,
   findCreatorDeal,
   hireMessage,
+  hireUnfunded,
+  hireUnfundedMessage,
   hiredCreatorIds,
   revisionChanges,
+  WALLET_RECHARGE_PATH,
   workStatusOf,
 } from '../brandHiring';
 import { errorMessage } from '../payoutRules';
@@ -610,10 +613,18 @@ function BrandCampaignDetail({
                 const result = await selectCreator(token, campaignId, creatorId);
                 // Only a physical brief has a product to ship.
                 const ship = campaign?.requires_shipment || campaign?.shipment_required;
-                Alert.alert(
-                  'Hired',
-                  `${hireMessage(result, who)}${ship ? ' Ship the product to get started.' : ''}`,
-                );
+                if (hireUnfunded(result)) {
+                  // A short wallet still hires; prompt (not block) to fund the escrow.
+                  Alert.alert('Hired', hireUnfundedMessage(result, who), [
+                    { text: 'Later', style: 'cancel' },
+                    { text: 'Add funds', onPress: () => onNavigate(WALLET_RECHARGE_PATH) },
+                  ]);
+                } else {
+                  Alert.alert(
+                    'Hired',
+                    `${hireMessage(result, who)}${ship ? ' Ship the product to get started.' : ''}`,
+                  );
+                }
                 load();
               } catch (e) {
                 // Includes a short wallet ("needs Rs. X more") worded by the backend.
@@ -627,7 +638,7 @@ function BrandCampaignDetail({
         ],
       );
     },
-    [campaign, campaignId, load, token],
+    [campaign, campaignId, load, onNavigate, token],
   );
 
   const handleDeclineBid = useCallback(

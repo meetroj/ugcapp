@@ -665,6 +665,41 @@ export async function removeSavedBrief(
 }
 
 /**
+ * Saved creators (brands only, shared by the whole brand team workspace).
+ * `GET /api/business/saved-creators` -> `{ creator_ids }`; the creator id travels
+ * in the path for save (POST) and unsave (DELETE), neither takes a body.
+ */
+export async function getSavedCreators(token: string): Promise<string[]> {
+  const data = await json(
+    await request(`${BACKEND_URL}/api/business/saved-creators`, { headers: auth(token) }),
+  );
+  const ids = (data as { creator_ids?: unknown }).creator_ids;
+  return Array.isArray(ids) ? ids.map(String) : [];
+}
+
+/** Saves a creator to the brand shortlist. Returns the backend's new saved state. */
+export async function saveCreator(token: string, creatorId: string): Promise<boolean> {
+  const data = await json(
+    await request(
+      `${BACKEND_URL}/api/business/saved-creators/${encodeURIComponent(creatorId)}`,
+      { method: 'POST', headers: auth(token) },
+    ),
+  );
+  return (data as { saved?: boolean }).saved !== false;
+}
+
+/** Removes a creator from the shortlist. Returns the backend's new saved state. */
+export async function unsaveCreator(token: string, creatorId: string): Promise<boolean> {
+  const data = await json(
+    await request(
+      `${BACKEND_URL}/api/business/saved-creators/${encodeURIComponent(creatorId)}`,
+      { method: 'DELETE', headers: auth(token) },
+    ),
+  );
+  return (data as { saved?: boolean }).saved === true;
+}
+
+/**
  * Bids. `GET /api/bids/my` returns the campaigns this creator has bid on, each
  * flattened with `my_bid` and `bid_status` alongside the campaign fields.
  */
@@ -1311,8 +1346,9 @@ export async function selectCreator(
 ): Promise<Record<string, any>> {
   // The backend takes creator_id as a QUERY param, not a body field — sending
   // it in the body left it missing, so every "Accept" 422'd as "request failed".
-  // Returns the hire summary (amount, slots_left, fully_staffed) the UI words its
-  // confirmation from.
+  // Returns the hire summary (amount, amount_charged, funded, slots_left,
+  // fully_staffed) the UI words its confirmation from; funded === false means
+  // the wallet was short and the escrow is not funded yet.
   const data = await send<Record<string, any>>(
     token,
     'POST',

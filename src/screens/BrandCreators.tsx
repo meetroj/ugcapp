@@ -36,7 +36,8 @@ import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
 import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonReelRow } from '../components/Skeleton';
-import { BACKEND_URL, NetworkError, getCreatorDirectory } from '../api';
+import { BACKEND_URL, NetworkError, getCreatorDirectory, getSavedCreators, saveCreator, unsaveCreator } from '../api';
+import { ToastBar, useToast } from '../components/Toast';
 import { playableVideoUrl, previewOf } from '../mediaPreview';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -262,6 +263,9 @@ function Icon({
       {name === 'bookmark' && (
         <Path d="M6.5 3.5h11v17l-5.5-4-5.5 4v-17Z" {...line} />
       )}
+      {name === 'bookmarkFilled' && (
+        <Path d="M6.5 3.5h11v17l-5.5-4-5.5 4v-17Z" {...line} fill={color} />
+      )}
       {name === 'muted' && (
         <>
           <Path d="M11 5 6.5 8.5H3.5v7h3L11 19V5Z" {...line} />
@@ -282,6 +286,9 @@ const ReelTile = React.memo(function ReelTileContent({
   onOpen,
   onMessage,
   onRequestPlay,
+  onToggleSave,
+  saved,
+  saving,
   index,
   play,
   allowOriginal,
@@ -290,6 +297,10 @@ const ReelTile = React.memo(function ReelTileContent({
   onOpen: (creator: Creator) => void;
   onMessage: (creator: Creator) => void;
   onRequestPlay: (index: number) => void;
+  onToggleSave: (creator: Creator) => void;
+  /** In this brand's saved list, and a save/unsave request still running. */
+  saved: boolean;
+  saving: boolean;
   index: number;
   allowOriginal: boolean;
   /** True for the few tiles currently in the middle of the screen. */
@@ -378,6 +389,21 @@ const ReelTile = React.memo(function ReelTileContent({
           />
         )}
 
+        {/* 44px touch target in the top-right corner; the tier badge is top-left. */}
+        <TouchableOpacity
+          style={[styles.reelSave, saving && styles.reelSaving]}
+          onPress={event => { event.stopPropagation(); onToggleSave(creator); }}
+          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel={saved ? `Remove ${name} from saved creators` : `Save ${name}`}
+          accessibilityState={{ selected: saved, busy: saving }}
+          testID={`creator-save-${creator.id}`}
+        >
+          <View style={styles.reelSaveDot}>
+            <Icon name={saved ? 'bookmarkFilled' : 'bookmark'} color={saved ? '#4C4DD6' : '#15163F'} size={15} />
+          </View>
+        </TouchableOpacity>
+
         {!!text(creator.level_label) && (
           <View style={styles.reelBadge}>
             <Text style={styles.reelBadgeText}>
@@ -444,12 +470,15 @@ const ReelTile = React.memo(function ReelTileContent({
 
 
 /** Swipeable, virtualized row. Scrolling releases the decoder until settling. */
-const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen, onMessage }: {
+const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen, onMessage, savedIds, savingIds, onToggleSave }: {
   creators: Creator[];
   active: boolean;
   onActivate: () => void;
   onOpen: (creator: Creator) => void;
   onMessage: (creator: Creator) => void;
+  savedIds: Set<string>;
+  savingIds: Set<string>;
+  onToggleSave: (creator: Creator) => void;
 }) {
   const [scrolling, setScrolling] = useState(false);
   const [playingSlot, setPlayingSlot] = useState<number | null>(null);
@@ -486,14 +515,17 @@ const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivat
     setPlayingSlot(index);
     setScrolling(false);
   }, [onActivate]);
+  // FlatList only re-renders tiles when extraData changes, so the save state is part of it.
+  const saveKey = useMemo(() => `${[...savedIds].join(',')}|${[...savingIds].join(',')}`, [savedIds, savingIds]);
   const renderItem = useCallback(({ item, index }: { item: Creator; index: number }) => (
     <ReelTile creator={item} index={index} onOpen={onOpen} onMessage={onMessage} onRequestPlay={requestPlay}
+      onToggleSave={onToggleSave} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)}
       play={active && !scrolling && playingSlot === index} allowOriginal={requestedSlot === index} />
-  ), [active, scrolling, playingSlot, requestedSlot, onOpen, onMessage, requestPlay]);
+  ), [active, scrolling, playingSlot, requestedSlot, onOpen, onMessage, requestPlay, onToggleSave, savedIds, savingIds]);
   if (!creators.length) return null;
   return <FlatList horizontal data={creators} renderItem={renderItem}
     keyExtractor={creator => creator.id}
-    extraData={`${active}-${scrolling}-${playingSlot}-${requestedSlot}`}
+    extraData={`${active}-${scrolling}-${playingSlot}-${requestedSlot}-${saveKey}`}
     initialNumToRender={3} maxToRenderPerBatch={3} windowSize={3}
     getItemLayout={(_, index) => ({ length: TILE_STRIDE, offset: ROW_PADDING + index * TILE_STRIDE, index })}
     viewabilityConfig={viewabilityConfig} onViewableItemsChanged={onViewableItemsChanged}
@@ -823,6 +855,13 @@ function BrandCreators({
   }, [approvedOnly]);
   // Category filter (website parity): 'all' or one lowercased category.
   const [category, setCategory] = useState('all');
+  // The brand's saved shortlist (ids), shared with the website via the backend.
+  const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
+  const [savingIds, setSavingIds] = useState<Set<string>>(() => new Set());
+  const [savedStatus, setSavedStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [savedOnly, setSavedOnly] = useState(false);
+  const savingRef = useRef<Set<string>>(new Set());   // blocks double taps on one creator
+  const toast = useToast();
   const [filterOpen, setFilterOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const deferredQuery = useDeferredValue(query);
@@ -900,12 +939,55 @@ function BrandCreators({
 
   useLiveEffect(() => { load(); }, [load]);
 
+  const loadSaved = useCallback(async () => {
+    setSavedStatus('loading');
+    try {
+      const ids = await getSavedCreators(token);
+      if (!mounted.current) return;
+      setSavedIds(new Set(ids));
+      setSavedStatus('ready');
+    } catch {
+      if (mounted.current) setSavedStatus('error');
+    }
+  }, [token]);
+  useEffect(() => { loadSaved(); }, [loadSaved]);
+
+  // Optimistic: the bookmark flips at once and is put back, with a toast, if the call fails.
+  const toggleSave = useCallback(async (creator: Creator) => {
+    const id = creator.id;
+    if (savingRef.current.has(id)) return;
+    const was = savedIds.has(id);
+    savingRef.current.add(id);
+    setSavingIds(prev => new Set(prev).add(id));
+    const apply = (on: boolean) => setSavedIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+    apply(!was);
+    try {
+      if (was) await unsaveCreator(token, id); else await saveCreator(token, id);
+      if (mounted.current) toast.show(was ? 'Removed from saved' : 'Creator saved to your list');
+    } catch (error) {
+      if (mounted.current) {
+        apply(was);
+        toast.show(error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message ? error.message : 'Could not update saved creators');
+      }
+    } finally {
+      savingRef.current.delete(id);
+      if (mounted.current) setSavingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+    }
+  }, [savedIds, token, toast.show]);
+
   // Search is client-side: the directory endpoint takes filters, not a text
   // query, and the list is small enough to filter in place.
   const visible = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
     const pool = creators.filter(creator =>
       (!approvedOnly || !!creator.ugcad_approved) &&
+      (!savedOnly || savedIds.has(creator.id)) &&
       (category === 'all' || categoriesOf(creator).includes(category)));
     if (!needle) return pool;
     return pool.filter(creator =>
@@ -922,7 +1004,7 @@ function BrandCreators({
         .filter(Boolean)
         .some(field => String(field).toLowerCase().includes(needle)),
     );
-  }, [creators, deferredQuery, approvedOnly, category]);
+  }, [creators, deferredQuery, approvedOnly, category, savedOnly, savedIds]);
   // Categories present in the current collection, most creators first, with counts.
   const categoryOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -984,6 +1066,27 @@ function BrandCreators({
             </TouchableOpacity>
           </View>
         )}
+
+        {/* "Saved" filter: only the creators this brand bookmarked. If the list could
+            not be loaded the chip says so and a tap retries. */}
+        <View style={styles.savedRow}>
+          <TouchableOpacity
+            testID="creator-saved-chip"
+            style={[styles.savedChip, savedOnly && styles.savedChipOn]}
+            onPress={() => {
+              if (savedStatus === 'error') { loadSaved(); return; }
+              setSavedOnly(on => !on);
+            }}
+            accessibilityRole="button"
+            accessibilityState={{ selected: savedOnly }}
+            accessibilityLabel={savedStatus === 'error' ? 'Saved creators could not load. Tap to retry' : 'Show only saved creators'}
+          >
+            <Icon name={savedOnly ? 'bookmarkFilled' : 'bookmark'} color={savedOnly ? '#FFFFFF' : '#4C4DD6'} size={14} />
+            <Text style={[styles.savedChipText, savedOnly && styles.savedChipTextOn]}>
+              {savedStatus === 'error' ? 'Saved (tap to retry)' : savedStatus === 'ready' ? `Saved (${savedIds.size})` : 'Saved'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         {approvedOnly ? (
           <View style={styles.approvedHead}>
@@ -1062,10 +1165,17 @@ function BrandCreators({
             {!visible.length && loadError && !creators.length ? null : !visible.length ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>
-                  {approvedOnly ? 'No approved creators to show' : 'No creators found'}
+                  {savedOnly && savedStatus === 'ready' && !savedIds.size ? 'No saved creators yet'
+                    : approvedOnly ? 'No approved creators to show' : 'No creators found'}
                 </Text>
                 <Text style={styles.emptyText}>
-                  {category !== 'all'
+                  {savedOnly && savedStatus === 'ready' && !savedIds.size
+                    ? 'Tap the bookmark on a creator to save them here for later.'
+                    : savedOnly && savedStatus === 'loading'
+                    ? 'Loading your saved creators...'
+                    : savedOnly && savedStatus === 'error'
+                    ? "Couldn't load your saved creators. Tap the Saved chip to retry."
+                    : category !== 'all'
                     ? `No creators in ${categoryLabel(category)}${query ? ' match your search' : ''}. Try another category or clear the filter.`
                     : approvedOnly
                     ? query
@@ -1080,11 +1190,13 @@ function BrandCreators({
               <View style={styles.rows}>
                 <View testID="creator-directory-row-0" onLayout={event => { rowLayouts.current[0] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[0]} active={playbackAllowed && activeRow === 0}
-                    onActivate={activateFirst} onOpen={setPeek} onMessage={messageCreator} />
+                    onActivate={activateFirst} onOpen={setPeek} onMessage={messageCreator}
+                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave} />
                 </View>
                 <View testID="creator-directory-row-1" onLayout={event => { rowLayouts.current[1] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[1]} active={playbackAllowed && activeRow === 1}
-                    onActivate={activateSecond} onOpen={setPeek} onMessage={messageCreator} />
+                    onActivate={activateSecond} onOpen={setPeek} onMessage={messageCreator}
+                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave} />
                 </View>
               </View>
             )}
@@ -1121,6 +1233,7 @@ function BrandCreators({
           if (creator) onNavigate(`/messages/${creator.id}`);
         }}
       />
+      <ToastBar message={toast.message} />
     </View>
   );
 }
@@ -1267,6 +1380,25 @@ const styles = StyleSheet.create({
   clipReady: { opacity: 1 },
   clipLoading: { opacity: 0 },
   reelClip: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  // 44x44 touch area; the visible dot inside is smaller.
+  reelSave: { position: 'absolute', top: 0, right: 0, width: scale(44), height: scale(44), alignItems: 'center', justifyContent: 'center' },
+  reelSaving: { opacity: 0.5 },
+  reelSaveDot: { width: scale(30), height: scale(30), borderRadius: scale(15), alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.92)' },
+  savedRow: { flexDirection: 'row', marginHorizontal: scale(16), marginBottom: scale(12) },
+  savedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+    minHeight: scale(44),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(22),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#C9CAF7',
+  },
+  savedChipOn: { backgroundColor: '#4C4DD6', borderColor: '#4C4DD6' },
+  savedChipText: { fontSize: fontScale(13), fontFamily: 'Inter-SemiBold', fontWeight: '600', color: '#4C4DD6' },
+  savedChipTextOn: { color: '#FFFFFF' },
   reelPlay: {
     position: 'absolute',
     right: scale(8),

@@ -27,6 +27,9 @@ afterEach(() => {
   if (tree) act(() => tree.unmount());
   jest.clearAllTimers(); jest.useRealTimers(); jest.restoreAllMocks();
 });
+// The tab also asks for the saved-creators list; these tests count directory loads only.
+const directoryCalls = () =>
+  (fetch as jest.Mock).mock.calls.filter(([url]) => !String(url).includes('saved-creators')).length;
 async function open() {
   await act(async () => { tree = Renderer.create(<BrandCreators token="t" onNavigate={() => {}} />); });
   act(() => onStateChange('active'));
@@ -62,7 +65,7 @@ test('idle screen has no scrolling intervals or generated scrolling commands', a
   expect(scrolling).not.toHaveBeenCalled();
   expect(setInterval).not.toHaveBeenCalled();
   expect(players()).toHaveLength(1);
-  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(directoryCalls()).toBe(1);
 });
 
 test('horizontal drag and momentum unload the player until settling', async () => {
@@ -150,7 +153,7 @@ test('multiple refresh presses coalesce while the directory request is pending',
     const refresh = tree.root.findByType(RefreshControl).props.onRefresh;
     refresh(); refresh(); refresh();
   });
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(directoryCalls()).toBe(2);
   await act(async () => { resolve({ ok: true, status: 200, json: async () => directory }); });
 });
 

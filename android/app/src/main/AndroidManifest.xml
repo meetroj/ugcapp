@@ -43,6 +43,16 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!-- Reset-code and team-invite emails open the app. autoVerify needs https://www.ugcad.io/.well-known/assetlinks.json -->
+        <intent-filter android:autoVerify="true">
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" android:host="www.ugcad.io" android:pathPrefix="/auth" />
+            <data android:scheme="https" android:host="www.ugcad.io" android:pathPrefix="/team/accept" />
+            <data android:scheme="https" android:host="ugcad.io" android:pathPrefix="/auth" />
+            <data android:scheme="https" android:host="ugcad.io" android:pathPrefix="/team/accept" />
+        </intent-filter>
       </activity>
     </application>
 </manifest>

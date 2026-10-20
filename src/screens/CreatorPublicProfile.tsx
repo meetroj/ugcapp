@@ -17,7 +17,7 @@ import { useLiveEffect } from "../liveUpdates";
  * already loaded is passed in as `seed` so the header renders immediately
  * instead of flashing empty while the request is in flight.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -39,9 +39,13 @@ import {
   getCampaign,
   getCreatorReviews,
   getPublicProfile,
+  getSavedCreators,
+  saveCreator,
+  unsaveCreator,
   type CreatorReview,
   type DirectoryCreator,
 } from '../api';
+import { ToastBar, useToast } from '../components/Toast';
 import { playableVideoUrl } from '../mediaPreview';
 import { scale, fontScale } from '../theme';
 
@@ -238,10 +242,12 @@ export function relTime(value: unknown, now = Date.now()): string {
   return `${years} year${years > 1 ? 's' : ''} ago`;
 }
 
-function Icon({ name, color = '#7C819C', size = 18 }: {
+function Icon({ name, color = '#7C819C', size = 18, fill = false }: {
   name: string;
   color?: string;
   size?: number;
+  /** Solid shape (bookmark only): the saved state. */
+  fill?: boolean;
 }) {
   const line = {
     stroke: color,
@@ -301,7 +307,7 @@ function Icon({ name, color = '#7C819C', size = 18 }: {
           <Path d="m9.3 11.9 1.9 1.9 3.5-3.7" {...line} />
         </>
       )}
-      {name === 'bookmark' && <Path d="M6.5 3.8h11v16.4l-5.5-4-5.5 4V3.8Z" {...line} />}
+      {name === 'bookmark' && <Path d="M6.5 3.8h11v16.4l-5.5-4-5.5 4V3.8Z" {...line} fill={fill ? color : 'none'} />}
       {name === 'camera' && (
         <>
           <Path d="M3.5 8.8h3.2l1.4-2.3h7.8l1.4 2.3h3.2v10.4h-17V8.8Z" {...line} />
@@ -473,6 +479,15 @@ function CreatorPublicProfile({
   const [watching, setWatching] = useState<string | null>(null);
   const [watchFailed, setWatchFailed] = useState(false);
 
+  // Brand shortlist (shared with the website): is this creator saved?
+  const [saved, setSaved] = useState(false);
+  const [savedStatus, setSavedStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);   // blocks a double tap while the request runs
+  const mountedRef = useRef(true);
+  const toast = useToast();
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const scrollRef = useRef<ScrollViewInstance>(null);
   // Section offsets, measured on layout so a tab tap can scroll to one.
   const offsets = useRef<Record<Tab, number>>({ videos: 0, details: 0, reviews: 0 });
@@ -514,6 +529,43 @@ function CreatorPublicProfile({
       alive = false;
     };
   }, [creatorId, token, reload]);
+
+  const loadSaved = useCallback(async () => {
+    setSavedStatus('loading');
+    try {
+      const ids = await getSavedCreators(token);
+      if (!mountedRef.current) return;
+      setSaved(ids.includes(String(creatorId)));
+      setSavedStatus('ready');
+    } catch {
+      if (mountedRef.current) setSavedStatus('error');
+    }
+  }, [token, creatorId]);
+  useEffect(() => { loadSaved(); }, [loadSaved, reload]);
+
+  // Optimistic: flips at once, rolls back with a toast if the call fails.
+  const toggleSave = useCallback(async () => {
+    if (savingRef.current) return;
+    if (savedStatus === 'error') { loadSaved(); return; }
+    const was = saved;
+    savingRef.current = true;
+    setSaving(true);
+    setSaved(!was);
+    try {
+      if (was) await unsaveCreator(token, creatorId); else await saveCreator(token, creatorId);
+      if (mountedRef.current) toast.show(was ? 'Removed from saved' : 'Creator saved to your list');
+    } catch (error) {
+      if (mountedRef.current) {
+        setSaved(was);
+        toast.show(error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message ? error.message : 'Could not update saved creators');
+      }
+    } finally {
+      savingRef.current = false;
+      if (mountedRef.current) setSaving(false);
+    }
+  }, [saved, savedStatus, loadSaved, token, creatorId, toast.show]);
 
   // Who wrote each review and which campaign it was for (the website's review
   // cards show the brand, price, duration and delivered clip). Best effort: a
@@ -722,6 +774,20 @@ function CreatorPublicProfile({
             accessibilityLabel="Go back"
           >
             <Icon name="back" color="#15163F" size={20} />
+          </TouchableOpacity>
+          {/* Save to the shortlist, top-right (44px target). */}
+          <TouchableOpacity
+            style={[styles.saveHit, (saving || savedStatus === 'loading') && styles.saveBusy]}
+            onPress={toggleSave}
+            disabled={saving || savedStatus === 'loading'}
+            accessibilityRole="button"
+            accessibilityLabel={savedStatus === 'error' ? 'Saved list could not load. Tap to retry' : saved ? 'Remove from saved creators' : 'Save creator'}
+            accessibilityState={{ selected: saved, busy: saving }}
+            testID="profile-save"
+          >
+            <View style={styles.saveDot}>
+              <Icon name="bookmark" color={saved ? '#4C4DD6' : '#15163F'} size={19} fill={saved} />
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -1168,6 +1234,7 @@ function CreatorPublicProfile({
           </TouchableOpacity>
         </View>
       </Modal>
+      <ToastBar message={toast.message} />
     </View>
   );
 }
@@ -1187,6 +1254,25 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: scale(44),
     left: scale(16),
+    width: scale(36),
+    height: scale(36),
+    borderRadius: scale(18),
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  saveHit: {
+    position: 'absolute',
+    top: scale(40),
+    right: scale(12),
+    width: scale(44),
+    height: scale(44),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveBusy: { opacity: 0.5 },
+  saveDot: {
     width: scale(36),
     height: scale(36),
     borderRadius: scale(18),

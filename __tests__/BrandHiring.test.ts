@@ -14,6 +14,8 @@ import {
   findContactInfo,
   findCreatorDeal,
   hireMessage,
+  hireUnfunded,
+  hireUnfundedMessage,
   hiredCreatorIds,
   isOpenForBids,
   paginate,
@@ -84,6 +86,17 @@ describe('bid tabs, sort and delivery', () => {
     );
     expect(hireMessage({ amount: 2500, slots_left: 0, fully_staffed: true }, 'Arushi')).toContain('fully staffed');
     expect(hireMessage(undefined, 'Arushi')).toBe('Arushi hired! Payment held in escrow.');
+  });
+
+  test('an unfunded hire is only flagged by funded === false and names the amount', () => {
+    expect(hireUnfunded({ funded: false })).toBe(true);
+    expect(hireUnfunded({ funded: true })).toBe(false);
+    expect(hireUnfunded({})).toBe(false);
+    expect(hireUnfunded(undefined)).toBe(false);
+    expect(hireUnfundedMessage({ funded: false, amount_charged: 3300 }, 'Arushi')).toBe(
+      'Arushi is hired, but your wallet is short. Add Rs. 3,300 to fund the escrow so work can start.',
+    );
+    expect(hireUnfundedMessage({ funded: false }, 'Arushi')).toContain('Add funds to fund');
   });
 });
 

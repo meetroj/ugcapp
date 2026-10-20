@@ -44,10 +44,10 @@ const campaign = {
   ],
 };
 
-async function render(list: any[] = [campaign]) {
+async function render(list: any[] = [campaign], onNavigate: (p: string) => void = () => {}) {
   (getCampaigns as jest.Mock).mockResolvedValue(list);
   await act(async () => {
-    tree = Renderer.create(<BrandBids token="t" onBack={() => {}} onNavigate={() => {}} />);
+    tree = Renderer.create(<BrandBids token="t" onBack={() => {}} onNavigate={onNavigate} />);
   });
 }
 
@@ -113,6 +113,32 @@ test('accepting asks first, then tells the brand the amount is in escrow and ref
   const done = (Alert.alert as jest.Mock).mock.calls.find(call => call[0] === 'Creator hired')!;
   expect(done[1]).toBe('Arushi hired! Rs. 3,000 held in escrow. 1 slot still open.');
   expect(getCampaigns).toHaveBeenCalledTimes(2);
+});
+
+test('a hire with a short wallet prompts to add funds and opens the recharge, without blocking', async () => {
+  (selectCreator as jest.Mock).mockResolvedValue({ amount: 3000, amount_charged: 3300, funded: false, slots_left: 1 });
+  const go = jest.fn();
+  await render([campaign], go);
+  await act(async () => { button('Accept bid from Arushi').props.onPress(); });
+  const confirm = (Alert.alert as jest.Mock).mock.calls[0];
+  await act(async () => { await confirm[2].find((b: any) => b.text === 'Accept').onPress(); });
+  const done = (Alert.alert as jest.Mock).mock.calls.find(call => call[0] === 'Creator hired')!;
+  expect(done[1]).toBe('Arushi is hired, but your wallet is short. Add Rs. 3,300 to fund the escrow so work can start.');
+  expect(go).not.toHaveBeenCalled();
+  done[2].find((b: any) => b.text === 'Add funds').onPress();
+  expect(go).toHaveBeenCalledWith('/dashboard/business/wallet?view=recharge');
+  expect(getCampaigns).toHaveBeenCalledTimes(2);
+});
+
+test('a funded hire keeps the normal message and a single OK', async () => {
+  (selectCreator as jest.Mock).mockResolvedValue({ amount: 3000, amount_charged: 3300, funded: true, slots_left: 1 });
+  await render();
+  await act(async () => { button('Accept bid from Arushi').props.onPress(); });
+  const confirm = (Alert.alert as jest.Mock).mock.calls[0];
+  await act(async () => { await confirm[2].find((b: any) => b.text === 'Accept').onPress(); });
+  const done = (Alert.alert as jest.Mock).mock.calls.find(call => call[0] === 'Creator hired')!;
+  expect(done[1]).toBe('Arushi hired! Rs. 3,300 held in escrow. 1 slot still open.');
+  expect(done[2]).toBeUndefined();
 });
 
 test('a refused hire shows the backend reason', async () => {

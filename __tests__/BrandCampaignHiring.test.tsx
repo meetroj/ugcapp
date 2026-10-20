@@ -114,6 +114,20 @@ test('hiring words the escrow and slots, and only mentions shipping for a physic
   expect(done[1]).toBe('Arushi hired! Rs. 3,000 held in escrow. This brief is now fully staffed.');
 });
 
+test('a hire with a short wallet prompts to add funds and opens the recharge', async () => {
+  (selectCreator as jest.Mock).mockResolvedValue({ amount: 3000, amount_charged: 3300, funded: false, slots_left: 0 });
+  const go = jest.fn();
+  await render({ id: 'c1', title: 'Launch', status: 'active', creators_wanted: 1, requires_shipment: true,
+    bids: [{ creator_id: 'u1', creator_name: 'Arushi', amount: 3000 }] }, { onNavigate: go });
+  await tap('Accept & Hire');
+  const confirm = (Alert.alert as jest.Mock).mock.calls[0];
+  await act(async () => { await confirm[2].find((b: any) => b.text === 'Hire').onPress(); });
+  const done = (Alert.alert as jest.Mock).mock.calls.find(call => call[0] === 'Hired')!;
+  expect(done[1]).toBe('Arushi is hired, but your wallet is short. Add Rs. 3,300 to fund the escrow so work can start.');
+  done[2].find((b: any) => b.text === 'Add funds').onPress();
+  expect(go).toHaveBeenCalledWith('/dashboard/business/wallet?view=recharge');
+});
+
 test('a physical brief reminds the brand to ship', async () => {
   (selectCreator as jest.Mock).mockResolvedValue({ amount: 3000, slots_left: 0 });
   await render({ id: 'c1', title: 'Launch', status: 'active', creators_wanted: 1, requires_shipment: true,

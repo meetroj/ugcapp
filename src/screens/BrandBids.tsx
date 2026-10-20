@@ -10,6 +10,7 @@ import { Alert } from '../components/AppAlert';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  type AlertButton,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -38,9 +39,12 @@ import {
   creatorsWanted,
   hasProposal,
   hireMessage,
+  hireUnfunded,
+  hireUnfundedMessage,
   hiredCreatorIds,
   isOpenForBids,
   sortBids,
+  WALLET_RECHARGE_PATH,
   type BidSort,
 } from '../brandHiring';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
@@ -171,7 +175,7 @@ function BrandBids({
 
   const runAction = useCallback(
     async (
-      action: () => Promise<{ title: string; message: string } | void>,
+      action: () => Promise<{ title: string; message: string; buttons?: AlertButton[] } | void>,
       failure: string,
     ) => {
       if (actingRef.current) return;
@@ -180,7 +184,7 @@ function BrandBids({
         const done = await action();
         // Re-read from the server so the row shows the persisted status.
         await load();
-        if (done) Alert.alert(done.title, done.message);
+        if (done) Alert.alert(done.title, done.message, done.buttons);
       } catch (error) {
         // The helpers throw carrying the backend's own `detail` (already
         // hired, wallet short, view-only team role, ...), which is more useful
@@ -253,6 +257,17 @@ function BrandBids({
                   campaign.id,
                   String(bid.creator_id ?? ''),
                 );
+                // A short wallet still hires; prompt (not block) to fund the escrow.
+                if (hireUnfunded(result)) {
+                  return {
+                    title: 'Creator hired',
+                    message: hireUnfundedMessage(result, who),
+                    buttons: [
+                      { text: 'Later', style: 'cancel' },
+                      { text: 'Add funds', onPress: () => onNavigate(WALLET_RECHARGE_PATH) },
+                    ],
+                  };
+                }
                 return {
                   title: 'Creator hired',
                   message: hireMessage(result, who),
@@ -263,7 +278,7 @@ function BrandBids({
         ],
       );
     },
-    [runAction, token],
+    [onNavigate, runAction, token],
   );
 
   const confirmDecline = useCallback(

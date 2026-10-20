@@ -133,6 +133,23 @@ export function hireMessage(result: Rec | null | undefined, who: string): string
   return `${who} hired! ${escrow}${slots}`;
 }
 
+/** Where "Add funds" goes after a hire left the escrow unfunded. */
+export const WALLET_RECHARGE_PATH = '/dashboard/business/wallet?view=recharge';
+
+/**
+ * The backend hires even when the brand's wallet is short: the escrow exists but
+ * is NOT funded (funded === false). A missing flag means funded (older server).
+ */
+export const hireUnfunded = (result: Rec | null | undefined) => result?.funded === false;
+
+/** The non-blocking prompt shown instead of the normal success text when the escrow is unfunded. */
+export function hireUnfundedMessage(result: Rec | null | undefined, who: string): string {
+  const owed = Number(result?.amount_charged) || 0;
+  return `${who} is hired, but your wallet is short. Add ${
+    owed ? money(owed) : 'funds'
+  } to fund the escrow so work can start.`;
+}
+
 /* ============================== Work review ============================= */
 
 /** The file extension of a submitted file, upper case ("MP4"); '' when unknown. */
