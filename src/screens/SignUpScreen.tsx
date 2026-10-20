@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import AuthLayout from '../components/AuthLayout';
 import AuthInput from '../components/AuthInput';
+import ChoiceSheet from '../components/ChoiceSheet';
 import RoleSelector, { type Role } from '../components/RoleSelector';
 import { SIGNUP_DIAL_CODE } from '../api';
 import { scale } from '../theme';
@@ -20,28 +21,45 @@ import {
  * requires exactly 10 digits. There is no OTP - the number is contact detail
  * the ops team reads on the application, not a verified second factor.
  *
- * The form has no country picker, so every number is sent as +91. Checking the
- * length here means a wrong number is caught before the request instead of
- * coming back as a 400.
+ * The same four dial codes and lengths as the website (and the backend's
+ * SIGNUP_PHONE_LEN). Checking the length here means a wrong number is caught
+ * before the request instead of coming back as a 400.
  */
-const PHONE_DIGITS = 10;
+export const DIAL_CODES = ['+91', '+1', '+44', '+61'];
+const PHONE_LEN: Record<string, number> = {
+  '+91': 10,
+  '+1': 10,
+  '+44': 10,
+  '+61': 9,
+};
+
+/** National-number length for a dial code. */
+export function phoneLength(dial: string = SIGNUP_DIAL_CODE): number {
+  return PHONE_LEN[dial] || 10;
+}
 
 /**
  * Digits only. A pasted "+91 98765 43210" arrives with the country code merged
  * in, so drop it when that is the only reason the number is too long - the same
  * rule the backend applies.
  */
-export function normalizePhone(raw: string): string {
+export function normalizePhone(
+  raw: string,
+  dial: string = SIGNUP_DIAL_CODE,
+): string {
   const digits = String(raw || '').replace(/\D/g, '');
-  const cc = SIGNUP_DIAL_CODE.replace(/\D/g, '');
-  if (digits.startsWith(cc) && digits.length > PHONE_DIGITS) {
+  const cc = dial.replace(/\D/g, '');
+  if (digits.startsWith(cc) && digits.length > phoneLength(dial)) {
     return digits.slice(cc.length);
   }
   return digits;
 }
 
-export function isValidPhone(raw: string): boolean {
-  return normalizePhone(raw).length === PHONE_DIGITS;
+export function isValidPhone(
+  raw: string,
+  dial: string = SIGNUP_DIAL_CODE,
+): boolean {
+  return normalizePhone(raw, dial).length === phoneLength(dial);
 }
 
 type Props = {
@@ -53,7 +71,13 @@ type Props = {
     email: string;
     password: string;
     phone: string;
+    dialCode: string;
   }) => Promise<void>;
+  /** Email kept by the parent so it carries over to the other auth forms. */
+  email?: string;
+  onEmailChange?: (email: string) => void;
+  /** Role preselected by a link such as /auth?mode=signup&role=business. */
+  initialRole?: Role;
   /**
    * Google sign-in. The button only renders when this is provided.
    *
@@ -66,19 +90,40 @@ type Props = {
   onApple?: (role: Role) => void;
 };
 
-export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) {
-  const [role, setRole] = useState<Role>('creator');
-  const [email, setEmail] = useState('');
+export function SignUpForm({
+  onGoToLogin,
+  onSubmit,
+  onGoogle,
+  onApple,
+  email: emailProp,
+  onEmailChange,
+  initialRole = 'creator',
+}: Props) {
+  const [role, setRole] = useState<Role>(initialRole);
+  const [localEmail, setLocalEmail] = useState('');
+  const email = emailProp ?? localEmail;
+  const setEmail = (value: string) => {
+    setLocalEmail(value);
+    onEmailChange?.(value);
+  };
   const [phone, setPhone] = useState('');
+  const [dialCode, setDialCode] = useState(SIGNUP_DIAL_CODE);
+  const [dialOpen, setDialOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const digits = phoneLength(dialCode);
+  // Shown under the field as soon as something is typed, like the website.
+  const phoneError =
+    phone.trim() && !isValidPhone(phone, dialCode)
+      ? `Enter a valid ${digits}-digit mobile number.`
+      : undefined;
 
   const submit = async () => {
     if (!email.trim() || !phone.trim() || !password || loading) return;
-    if (!isValidPhone(phone)) {
+    if (!isValidPhone(phone, dialCode)) {
       Alert.alert(
         'Check your mobile number',
-        `Enter a valid ${PHONE_DIGITS}-digit mobile number, for example 98765 43210.`,
+        `Enter a valid ${digits}-digit mobile number.`,
       );
       return;
     }
@@ -95,7 +140,8 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) 
         role,
         email,
         password,
-        phone: normalizePhone(phone),
+        phone: normalizePhone(phone, dialCode),
+        dialCode,
       });
     } finally {
       setLoading(false);
@@ -122,14 +168,30 @@ export function SignUpForm({ onGoToLogin, onSubmit, onGoogle, onApple }: Props) 
       <AuthInput
         label="Mobile number"
         icon="phone"
-        placeholder="98765 43210"
+        placeholder={`${digits}-digit number`}
         keyboardType="phone-pad"
         textContentType="telephoneNumber"
         autoComplete="tel"
         maxLength={20}
         value={phone}
         onChangeText={setPhone}
+        prefixLabel={`${dialCode} \u25BE`}
+        onPrefixPress={() => setDialOpen(true)}
+        error={phoneError}
         compact
+      />
+      <ChoiceSheet
+        visible={dialOpen}
+        title="Country code"
+        options={DIAL_CODES.map(code => ({
+          label: code,
+          onPress: () => {
+            setDialCode(code);
+            // Re-trim a number typed for the previous country's length.
+            setPhone(cur => normalizePhone(cur, code).slice(0, phoneLength(code)));
+          },
+        }))}
+        onClose={() => setDialOpen(false)}
       />
 
       <AuthInput

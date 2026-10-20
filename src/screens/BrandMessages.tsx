@@ -3,8 +3,8 @@ import { useLiveEffect } from "../liveUpdates";
  * Messages — the native conversation list replacing the web /messages page.
  * Reads GET /api/chat/conversations, which already returns the partner's name,
  * photo, last snippet, unread count and thread classification. Opening a
- * thread hands off to the existing web chat, which owns sending, attachments
- * and the offer/dispute action cards.
+ * thread opens the native Chat screen (BrandChatThread). Used by both roles:
+ * a brand sees creators by first name, a creator sees the business name.
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -17,7 +17,8 @@ import {
 } from 'react-native';import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
-import { BACKEND_URL, getConversations } from '../api';
+import { BACKEND_URL, getConversations, NetworkError } from '../api';
+import { chatPeerName, conversationPreview } from '../actionCards';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -25,6 +26,8 @@ type Props = {
   onNavigate: (path: string) => void;
   /** Opens one thread in the native Chat screen. */
   onOpenThread: (userId: string, nickname: string) => void;
+  /** The signed-in role: decides how the other person is named and the empty text. */
+  role?: string;
   /**
    * Returns to whichever screen opened Messages. Messages is reachable from
    * several tabs, so this pops the shell's history rather than jumping to a
@@ -66,16 +69,6 @@ function ago(value: unknown): string {
   return `${Math.floor(days / 7)}w`;
 }
 
-/** The partner's display name — a brand's company name, else a person's name. */
-function displayName(conversation: Conversation): string {
-  return text(
-    conversation.business_name ||
-      conversation.full_name ||
-      conversation.nickname,
-    'Unknown user',
-  );
-}
-
 function Icon({
   name,
   color = '#7C819C',
@@ -110,24 +103,38 @@ function Icon({
   );
 }
 
-function BrandMessages({ token, onOpenThread, onBack }: Props) {
+function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Why the list could not load ('' = fine). A failed first load must not read
+  // as "No conversations".
+  const [loadError, setLoadError] = useState('');
+  // A brand sees creators by first name; a creator sees the business name.
+  const displayName = useCallback(
+    (row: Conversation) => chatPeerName(row, role),
+    [role],
+  );
 
   const load = useCallback(async () => {
     try {
       const list = await getConversations(token);
+      setLoadError('');
       setConversations(
         list.map((row, index) => ({
           ...row,
           user_id: String(row.user_id ?? index),
         })),
       );
-    } catch {
-      // Keep the current list; pull-to-refresh retries.
+    } catch (error) {
+      // A failed refresh keeps the list on screen; only an empty screen needs the message.
+      setLoadError(
+        error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : "Couldn't load your messages.",
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -145,11 +152,11 @@ function BrandMessages({ token, onOpenThread, onBack }: Props) {
     return conversations.filter(row => {
       if (wanted && String(row.thread_classification) !== wanted) return false;
       if (!needle) return true;
-      return [displayName(row), row.last_item_snippet]
+      return [displayName(row), conversationPreview(row)]
         .filter(Boolean)
         .some(field => String(field).toLowerCase().includes(needle));
     });
-  }, [conversations, filter, query]);
+  }, [conversations, filter, query, displayName]);
 
   const countFor = useCallback(
     (key: string) => {
@@ -243,12 +250,28 @@ function BrandMessages({ token, onOpenThread, onBack }: Props) {
               />
             }
           >
-            {!visible.length ? (
+            {!visible.length && loadError && !conversations.length ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>{loadError}</Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : !visible.length ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>No conversations</Text>
                 <Text style={styles.emptyText}>
                   {query
                     ? 'Try a different search term.'
+                    : role === 'creator'
+                    ? 'Messages with brands appear here.'
                     : 'Messages with creators appear here.'}
                 </Text>
               </View>
@@ -296,7 +319,7 @@ function BrandMessages({ token, onOpenThread, onBack }: Props) {
                         ]}
                         numberOfLines={2}
                       >
-                        {text(row.last_item_snippet, 'No messages yet')}
+                        {text(conversationPreview(row), 'No messages yet')}
                       </Text>
                       {!!text(row.associated_deal_status) && (
                         <View style={styles.statusChip}>
@@ -497,6 +520,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  retryBtn: {
+    marginTop: scale(14),
+    minHeight: scale(44),
+    paddingHorizontal: scale(28),
+    borderRadius: scale(12),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   empty: { marginTop: scale(40), padding: scale(22), alignItems: 'center' },
   emptyTitle: {
     fontSize: fontScale(14),

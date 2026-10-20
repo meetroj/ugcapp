@@ -2,17 +2,19 @@ import { useLiveEffect } from "../liveUpdates";
 import { Alert } from '../components/AppAlert';
 /**
  * Chat thread — the native message view for one conversation, replacing the
- * web chat page. Reads GET /api/chat/{other_user_id} and sends through
- * POST /api/chat/send. Offer / counter-offer / dispute cards are shown here
- * read-only and link to the campaign they belong to; acting on them moves
- * money, so those decisions live on the campaign screen rather than in chat.
+ * web chat page. Reads GET /api/chat/{other_user_id} (polled while open, with
+ * GET /chat/{id}/typing) and sends through POST /api/chat/send. Offer, counter,
+ * revision and dispute cards are sent and answered here exactly as on the
+ * website (POST /chat/action-cards, /respond); files go through /upload/file.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -26,29 +28,59 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SkeletonBlock } from '../components/Skeleton';
 import ChoiceSheet from '../components/ChoiceSheet';
+import BottomSheet from '../components/BottomSheet';
+import { ToastBar, useToast } from '../components/Toast';
+import { RateBrandSheet } from './DealSheets';
+import { findContactInfo } from '../brandHiring';
 import {
   BACKEND_URL,
+  getChatTyping,
+  getChatWarnings,
   getConversations,
   getMessages,
   respondToActionCard,
   sendActionCard,
+  sendChatTyping,
   reportUser,
   sendMessage,
   uploadMedia,
   type ActionCardResponse,
   type ActionCardType,
   type AuthUser,
+  type Conversation,
 } from '../api';
 import {
   ACTION_CARD_FIELDS,
   ACTION_CARD_LABELS,
   ACTION_CARD_LIMITS,
   DECLINE_REASONS,
+  MAX_ATTACHMENTS,
+  NEED_BRIEF_MESSAGE,
   OFFER_CARD_TYPES,
+  REPORT_REASONS,
   RESPONSE_LABELS,
+  actionCardsOnly,
+  attachmentKind,
+  attachmentName,
+  attachmentProblem,
   availableCards,
+  buildCardFields,
+  canReviewFromChat,
+  cardDealPath,
+  cardFieldLabel,
+  chatPeerName,
+  counterPrefill,
+  dateInDays,
+  displayMessage,
   initialForm,
+  isImageUrl,
+  isoToDisplay,
+  maskDate,
+  messageAttachments,
+  outgoingMessage,
+  readLabel,
   validateCard,
+  type AttachmentKind,
 } from '../actionCards';
 import { scale, fontScale } from '../theme';
 
@@ -217,6 +249,9 @@ function ActionCard({
   onRespond,
   onOpenDeal,
   onPostBrief,
+  onNeedBrief,
+  needBriefBusy,
+  dealLabel,
 }: {
   item: Item;
   mine: boolean;
@@ -233,10 +268,15 @@ function ActionCard({
   onRespond: (action: ActionCardResponse) => void;
   onOpenDeal?: () => void;
   onPostBrief?: () => void;
+  /** Creator side of an accepted invitation: asks the brand for the full brief. */
+  onNeedBrief?: () => void;
+  needBriefBusy?: boolean;
+  dealLabel?: string;
 }) {
   const type = item.type as ActionCardType | undefined;
   const label = (type && ACTION_CARD_LABELS[type]) || humanise(String(type || 'Update'));
-  const status = String(item.card_status || item.status || 'open');
+  // display_status is "expired" once an offer's deadline has passed.
+  const status = String(item.display_status || item.card_status || item.status || 'open');
   const fields: Record<string, unknown> = item.fields || {};
   const actions: ActionCardResponse[] = Array.isArray(item.available_actions)
     ? item.available_actions
@@ -266,9 +306,11 @@ function ActionCard({
         .slice(0, 6)
         .map(key => (
           <View key={key} style={styles.cardRow}>
-            <Text style={styles.cardKey}>{humanise(key)}</Text>
+            <Text style={styles.cardKey}>{cardFieldLabel(type, key, fields[key])}</Text>
             <Text style={styles.cardVal} numberOfLines={3}>
-              {fieldValue(fields[key])}
+              {isoToDisplay(fields[key]) && type === 'counter_offer' && key === 'timeline'
+                ? isoToDisplay(fields[key])
+                : fieldValue(fields[key])}
             </Text>
           </View>
         ))}
@@ -390,6 +432,22 @@ function ActionCard({
           Accepted - waiting for the brand to post the brief.
         </Text>
       )}
+      {status === 'accepted' && type === 'private_invitation' && !mine && !!onNeedBrief && (
+        <View style={styles.cardActions}>
+          <TouchableOpacity
+            style={styles.cardBtn}
+            onPress={onNeedBrief}
+            disabled={needBriefBusy}
+            accessibilityRole="button"
+          >
+            {needBriefBusy ? (
+              <ActivityIndicator color="#3F4468" size="small" />
+            ) : (
+              <Text style={styles.cardBtnText}>Need brief</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {!!onOpenDeal && (
         <TouchableOpacity
@@ -397,7 +455,7 @@ function ActionCard({
           onPress={onOpenDeal}
           accessibilityRole="button"
         >
-          <Text style={styles.cardLinkText}>Open the campaign</Text>
+          <Text style={styles.cardLinkText}>{dealLabel || 'Open the campaign'}</Text>
           <Icon name="chevron" color="#3D4FD8" size={13} />
         </TouchableOpacity>
       )}
@@ -419,6 +477,11 @@ const STATUS_TINT: Record<string, { backgroundColor: string }> = {
   expired: { backgroundColor: '#F1F2F8' },
 };
 
+/** A file uploaded and waiting to ride along with the next message. */
+type Attachment = { url: string; name: string; kind: AttachmentKind };
+
+const OFFLINE = "You're offline. Check your connection and try again.";
+
 function BrandChatThread({
   token,
   session,
@@ -430,10 +493,14 @@ function BrandChatThread({
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  // Why the thread could not load ('' = fine). Only shown while nothing is on
+  // screen, so a failed refresh never wipes a conversation being read.
+  const [loadError, setLoadError] = useState('');
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [error, setError] = useState('');
-  // Uploaded attachment URLs waiting to ride along with the next message.
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const { message: toast, show: showToast } = useToast();
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const insets = useSafeAreaInsets();
@@ -469,6 +536,9 @@ function BrandChatThread({
   const [cardForm, setCardForm] = useState<Record<string, string>>({});
   const [cardError, setCardError] = useState('');
   const [sendingCard, setSendingCard] = useState(false);
+  const cardBusy = useRef(false);
+  /** The offer a counter-offer answers: its deal_id rides along and it is closed as "countered". */
+  const [counteringCard, setCounteringCard] = useState<Item | null>(null);
 
   /** The received card being declined, which needs a structured reason. */
   const [declineId, setDeclineId] = useState<string | null>(null);
@@ -480,43 +550,48 @@ function BrandChatThread({
   const load = useCallback(async () => {
     try {
       const list = await getMessages(token, otherUserId);
-      setItems(
-        list
-          .map((item, index) => ({ ...item, id: String(item.id ?? index) }))
-          .sort((a: Item, b: Item) => {
-            const left =
-              new Date(String(a.timestamp || a.created_at || '')).getTime() ||
-              0;
-            const right =
-              new Date(String(b.timestamp || b.created_at || '')).getTime() ||
-              0;
-            return left - right;
-          }),
+      const next = list
+        .map((item, index) => ({ ...item, id: String(item.id ?? index) }))
+        .sort((a: Item, b: Item) => {
+          const left =
+            new Date(String(a.timestamp || a.created_at || '')).getTime() || 0;
+          const right =
+            new Date(String(b.timestamp || b.created_at || '')).getTime() || 0;
+          return left - right;
+        });
+      setLoadError('');
+      // The thread is polled every few seconds: keep the same array when
+      // nothing changed so an idle conversation does not re-render.
+      setItems(prev =>
+        JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
       );
-    } catch {
-      // Keep what's on screen.
+    } catch (err: any) {
+      setLoadError(
+        err?.name === 'NetworkError' ? OFFLINE : "Couldn't load this conversation.",
+      );
     } finally {
       setLoading(false);
     }
   }, [otherUserId, token]);
 
   /**
-   * Deal state for this thread, which decides whether "Revision Request" is
-   * offered. It rides on the conversations list rather than a dedicated
-   * endpoint, so it is fetched separately and is allowed to fail — a missing
-   * status simply hides the one button that depends on it.
+   * The other person's row on the conversations list. It carries the deal
+   * state (which decides whether "Revision Request" is offered), their role and
+   * name, and the campaign a review needs. It rides on the list rather than a
+   * dedicated endpoint, so it is allowed to fail: the buttons that depend on it
+   * are simply left out.
    */
-  const [dealStatus, setDealStatus] = useState<string | null>(null);
+  const [conv, setConv] = useState<Conversation | null>(null);
 
   useLiveEffect(() => {
     let active = true;
     getConversations(token)
       .then(list => {
         if (!active) return;
-        const row = list.find(
-          item => String(item.user_id) === String(otherUserId),
+        setConv(
+          list.find(item => String(item.user_id) === String(otherUserId)) ??
+            null,
         );
-        setDealStatus(row?.associated_deal_status ?? null);
       })
       .catch(() => {
         // Non-critical: the action row just omits revision_request.
@@ -526,7 +601,56 @@ function BrandChatThread({
     };
   }, [otherUserId, token]);
 
+  const dealStatus = conv?.associated_deal_status ?? null;
+  // The list passes the name it already shows; a deep link has none, so it is
+  // read off the conversation row the same way the list names people.
+  const peerName =
+    title || (conv ? chatPeerName(conv, session.role) : '') || 'Conversation';
   const cards = availableCards(session.role, dealStatus);
+
+  // GET /chat/warnings: a policy strike can limit the account to action cards.
+  const [warnings, setWarnings] = useState<Record<string, unknown> | null>(null);
+  const loadWarnings = useCallback(() => {
+    getChatWarnings(token)
+      .then(setWarnings)
+      .catch(() => {
+        // Non-critical: the server still refuses a blocked message.
+      });
+  }, [token]);
+  useEffect(loadWarnings, [loadWarnings]);
+  const cardsOnly = actionCardsOnly(warnings);
+
+  // "<name> is typing...": polled with the thread, and our own typing is
+  // announced at most every 2.5 s (the website's rhythm).
+  const [typing, setTyping] = useState(false);
+  const lastTypingSent = useRef(0);
+  const pollTyping = useCallback(() => {
+    getChatTyping(token, otherUserId)
+      .then(setTyping)
+      .catch(() => setTyping(false));
+  }, [otherUserId, token]);
+  const signalTyping = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTypingSent.current < 2500) return;
+    lastTypingSent.current = now;
+    sendChatTyping(token, otherUserId).catch(() => {
+      // Best effort, like the website.
+    });
+  }, [otherUserId, token]);
+
+  // The website refreshes an open thread every 3 s. Replies, typing and
+  // read receipts all depend on that, and the shared 15 s live tick is too
+  // slow (and pauses while the keyboard is up), so the open thread polls itself.
+  useEffect(() => {
+    pollTyping();
+    const timer = setInterval(() => {
+      // Foreground only; a phone in the pocket should not poll.
+      if (AppState.currentState === 'background') return;
+      load();
+      pollTyping();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [load, pollTyping]);
 
   const openPrivateBrief = useCallback(() => {
     Keyboard.dismiss();
@@ -541,30 +665,60 @@ function BrandChatThread({
       openPrivateBrief();
       return;
     }
+    setCounteringCard(null);
     setCardType(type);
     setCardForm(initialForm(type));
     setCardError('');
     Keyboard.dismiss();
   }, [openPrivateBrief]);
 
+  /** Counter a received offer: the form opens pre-filled with that offer's terms. */
+  const openCounter = useCallback((card: Item) => {
+    setCounteringCard(card);
+    setCardType('counter_offer');
+    setCardForm(counterPrefill(card));
+    setCardError('');
+    Keyboard.dismiss();
+  }, []);
+
   const closeCard = useCallback(() => {
     setCardType(null);
+    setCounteringCard(null);
     setCardError('');
   }, []);
 
   /** Validates locally, then POSTs the card and refreshes the thread. */
   const submitCard = useCallback(async () => {
-    if (!cardType || sendingCard) return;
+    if (!cardType || cardBusy.current) return;
     const problem = validateCard(cardType, cardForm);
     if (problem) {
       setCardError(problem);
       return;
     }
+    cardBusy.current = true;
     setSendingCard(true);
     setCardError('');
     try {
-      await sendActionCard(token, otherUserId, cardType, cardForm);
+      await sendActionCard(
+        token,
+        otherUserId,
+        cardType,
+        buildCardFields(cardType, cardForm),
+        // A counter names the offer's deal, as the website does.
+        counteringCard?.deal_id,
+      );
+      // The offer we answered leaves the "open" state. Best effort: it may
+      // already be closed or expired, and the counter we just sent still stands.
+      if (counteringCard) {
+        try {
+          await respondToActionCard(token, counteringCard.id, 'counter');
+        } catch {
+          // original offer no longer respondable
+        }
+      }
       setCardType(null);
+      setCounteringCard(null);
+      showToast(`${ACTION_CARD_LABELS[cardType]} sent`);
       await load();
     } catch (err) {
       // The backend returns a useful `detail` for the cases that actually
@@ -575,9 +729,10 @@ function BrandChatThread({
         err instanceof Error ? err.message : 'Could not send that card.',
       );
     } finally {
+      cardBusy.current = false;
       setSendingCard(false);
     }
-  }, [cardForm, cardType, load, otherUserId, sendingCard, token]);
+  }, [cardForm, cardType, counteringCard, load, otherUserId, showToast, token]);
 
   /**
    * Accept / counter / flag a received card. Declining an OFFER card is routed
@@ -614,68 +769,187 @@ function BrandChatThread({
 
   const send = useCallback(async () => {
     const message = draft.trim();
-    // An attachment on its own is a valid message; the backend accepts an
-    // empty body as long as attachment_urls carries something.
-    if ((!message && !attachments.length) || sending) return;
+    // An attachment on its own is a valid message.
+    if ((!message && !attachments.length) || sendingRef.current || cardsOnly) {
+      return;
+    }
+    // Phone numbers and emails are refused before the request, as on the
+    // website; the server checks again and counts a strike.
+    const contact = message ? findContactInfo(message) : null;
+    if (contact) {
+      setError(
+        contact === 'email'
+          ? "Email addresses aren't allowed - keep all communication on-platform."
+          : "Phone numbers aren't allowed - keep all communication on-platform.",
+      );
+      return;
+    }
 
+    sendingRef.current = true;
     setSending(true);
     setError('');
     try {
+      const urls = attachments.map(file => file.url);
       // sendMessage throws carrying the backend's own `detail`, which explains
       // contact-sharing blocks and low-balance refusals — more useful than a
       // generic failure.
-      await sendMessage(token, otherUserId, message, attachments);
+      const result = await sendMessage(
+        token,
+        otherUserId,
+        outgoingMessage(message, urls),
+        urls,
+      );
+      if (result?.filtered) {
+        showToast(
+          `Message filtered for policy violations. Warning ${result.warning_count ?? 1}/3`,
+        );
+      }
       setDraft('');
       setAttachments([]);
       await load();
     } catch (err: any) {
       setError(err?.message || 'Message could not be sent.');
+      // A blocked message is a strike: refresh the standing so the banner follows.
+      if (/contact information/i.test(String(err?.message))) loadWarnings();
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [attachments, draft, load, otherUserId, sending, token]);
+  }, [attachments, cardsOnly, draft, load, loadWarnings, otherUserId, showToast, token]);
 
-  /** Picks an image and uploads it, holding the URL until the message is sent. */
+  /** Picks files (up to 5) and uploads them, holding the URLs until the message is sent. */
   const attach = useCallback(async () => {
-    if (uploading || attachments.length >= 4) return;
+    if (uploading || attachments.length >= MAX_ATTACHMENTS || cardsOnly) return;
     const picked = await launchImageLibrary({
       mediaType: 'mixed',
-      selectionLimit: 1,
+      selectionLimit: MAX_ATTACHMENTS - attachments.length,
     }).catch(() => null);
-    const asset = picked?.assets?.[0];
-    if (!asset?.uri) return;
+    const assets = picked?.assets || [];
+    if (!assets.length) return;
+
+    // Check every file first so one bad pick attaches nothing, like the website.
+    for (let index = 0; index < assets.length; index += 1) {
+      const problem = attachmentProblem(
+        { fileName: assets[index].fileName, uri: assets[index].uri, type: assets[index].type, fileSize: assets[index].fileSize },
+        attachments.length + index,
+      );
+      if (problem) {
+        setError(problem);
+        return;
+      }
+    }
 
     setUploading(true);
     setError('');
+    const added: Attachment[] = [];
     try {
-      const url = await uploadMedia(token, {
-        uri: asset.uri,
-        fileName: asset.fileName,
-        type: asset.type,
-        fileSize: asset.fileSize,
-      });
-      setAttachments(current => [...current, url]);
+      for (const asset of assets) {
+        if (!asset.uri) continue;
+        const url = await uploadMedia(token, {
+          uri: asset.uri,
+          fileName: asset.fileName,
+          type: asset.type,
+          fileSize: asset.fileSize,
+        });
+        const name = asset.fileName || attachmentName(url, added.length);
+        added.push({ url, name, kind: attachmentKind(name, asset.type) });
+      }
     } catch (err: any) {
       setError(err?.message || 'That file could not be uploaded.');
     } finally {
+      // Files that did upload before a failure stay attached.
+      if (added.length) setAttachments(current => [...current, ...added]);
       setUploading(false);
     }
-  }, [attachments.length, token, uploading]);
+  }, [attachments.length, cardsOnly, token, uploading]);
 
-  /** Flags the other party to the moderation team. */
+  /** After accepting an invitation the creator can nudge the brand for the full brief. */
+  const [requestingBrief, setRequestingBrief] = useState(false);
+  const briefBusy = useRef(false);
+  const requestBrief = useCallback(async () => {
+    if (briefBusy.current) return;
+    briefBusy.current = true;
+    setRequestingBrief(true);
+    setError('');
+    try {
+      await sendMessage(token, otherUserId, NEED_BRIEF_MESSAGE, []);
+      showToast('Brief requested - the brand has been notified.');
+      await load();
+    } catch (err: any) {
+      setError(err?.message || 'Could not send the request');
+    } finally {
+      briefBusy.current = false;
+      setRequestingBrief(false);
+    }
+  }, [load, otherUserId, showToast, token]);
+
+  // Header menu: profile, review (after a completed deal), report.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [rateOpen, setRateOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const report = useCallback(() => setReportOpen(true), []);
-  const submitReport = useCallback(
-    async (reason: string) => {
-      try {
-        await reportUser(token, { reported_user_id: otherUserId, reason });
-        setError('Thanks - our team will review this report.');
-      } catch (err: any) {
-        setError(String(err?.message || err) || 'Could not report.');
-      }
-    },
-    [otherUserId, token],
-  );
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetails, setReportDetails] = useState('');
+  const [reportError, setReportError] = useState('');
+  const [reporting, setReporting] = useState(false);
+  const reportBusy = useRef(false);
+
+  const openReport = useCallback(() => {
+    setReportReason('');
+    setReportDetails('');
+    setReportError('');
+    setReportOpen(true);
+  }, []);
+
+  const submitReport = useCallback(async () => {
+    if (reportBusy.current) return;
+    if (!reportReason) {
+      setReportError('Please choose a reason');
+      return;
+    }
+    if (findContactInfo(reportDetails)) {
+      setReportError("Don't include phone numbers or emails in a report.");
+      return;
+    }
+    reportBusy.current = true;
+    setReporting(true);
+    setReportError('');
+    try {
+      const result: any = await reportUser(token, {
+        reported_user_id: otherUserId,
+        deal_id: conv?.associated_campaign_id ?? null,
+        reason: reportReason,
+        details: reportDetails.trim(),
+      });
+      setReportOpen(false);
+      showToast(result?.message || 'Report submitted');
+    } catch (err: any) {
+      setReportError(err?.message || 'Failed to submit report');
+    } finally {
+      reportBusy.current = false;
+      setReporting(false);
+    }
+  }, [conv, otherUserId, reportDetails, reportReason, showToast, token]);
+
+  const menuOptions = [
+    // Only a brand has a creator profile screen to open.
+    ...(session.role === 'business'
+      ? [
+          {
+            label: 'View profile',
+            onPress: () => onNavigate(`/creator/${encodeURIComponent(otherUserId)}`),
+          },
+        ]
+      : []),
+    ...(canReviewFromChat(session.role, conv)
+      ? [{ label: 'Review this brand', onPress: () => setRateOpen(true) }]
+      : []),
+    { label: 'Report user', tone: 'destructive' as const, onPress: openReport },
+  ];
+
+  const openUrl = (url: string) => {
+    const uri = photoUrl(url);
+    if (uri) Linking.openURL(uri).catch(() => setError('Could not open that file.'));
+  };
 
   return (
     <View style={styles.screen}>
@@ -692,13 +966,13 @@ function BrandChatThread({
 
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {text(title, 'C').charAt(0).toUpperCase()}
+            {text(peerName, 'C').charAt(0).toUpperCase()}
           </Text>
         </View>
 
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            {text(title, 'Conversation')}
+            {peerName}
           </Text>
         </View>
 
@@ -719,9 +993,9 @@ function BrandChatThread({
             harassment actually happens had no way to flag it. */}
         <TouchableOpacity
           style={styles.headerBtn}
-          onPress={report}
+          onPress={() => setMenuOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Report this user"
+          accessibilityLabel="More actions"
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Icon name="dots" color="#7C819C" size={20} />
@@ -765,7 +1039,22 @@ function BrandChatThread({
               scrollRef.current?.scrollToEnd({ animated: false })
             }
           >
-            {!items.length && (
+            {!items.length && !!loadError && (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>{loadError}</Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {!items.length && !loadError && (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>No messages yet</Text>
                 <Text style={styles.emptyText}>
@@ -777,10 +1066,16 @@ function BrandChatThread({
             {items.map(item => {
               const mine = String(item.sender_id) === String(session.user_id);
               const system = String(item.sender_id) === 'system';
-              const body = text(item.message || item.title || item.type, '');
-              const attachments: string[] = Array.isArray(item.attachment_urls)
-                ? item.attachment_urls
-                : [];
+              // A file-only message is stored as "__UGCAD_ATTACHMENT__:urls"; that
+              // packed text is never shown, only the files.
+              const body = text(
+                displayMessage({
+                  message: item.message || item.title || item.type,
+                }),
+                '',
+              );
+              const files = messageAttachments(item);
+              const receipt = readLabel(item, session.user_id, otherUserId);
 
               // Offer / dispute cards carry structured terms and, when we are
               // the recipient, the buttons to answer them.
@@ -788,6 +1083,11 @@ function BrandChatThread({
                 item.item_type === 'action_card' || (!!item.type && !item.message);
 
               if (isCard) {
+                const dealPath = cardDealPath(
+                  session.role,
+                  item,
+                  conv?.associated_campaign_id,
+                );
                 return (
                   <ActionCard
                     key={item.id}
@@ -815,22 +1115,16 @@ function BrandChatThread({
                         note: declineNote,
                       });
                     }}
-                    // Countering means sending a fresh counter_offer card with
-                    // the new terms; the original is marked countered when that
-                    // card is sent, exactly as the website does it.
-                    onCounter={() => openCard('counter_offer')}
+                    // Countering opens the form pre-filled from this offer; the
+                    // original is marked countered once the new card is sent,
+                    // exactly as the website does it.
+                    onCounter={() => openCounter(item)}
                     onRespond={action => respond(item.id, action)}
                     onPostBrief={session.role === 'business' ? openPrivateBrief : undefined}
-                    onOpenDeal={
-                      item.campaign_id || item.deal_id
-                        ? () =>
-                            onNavigate(
-                              `/campaigns/${String(
-                                item.campaign_id || item.deal_id,
-                              )}`,
-                            )
-                        : undefined
-                    }
+                    onNeedBrief={session.role === 'creator' ? requestBrief : undefined}
+                    needBriefBusy={requestingBrief}
+                    dealLabel={session.role === 'creator' ? 'Open the deal' : 'Open the campaign'}
+                    onOpenDeal={dealPath ? () => onNavigate(dealPath) : undefined}
                   />
                 );
               }
@@ -860,24 +1154,50 @@ function BrandChatThread({
                       </Text>
                     )}
 
-                    {attachments.map((url, index) => {
+                    {files.map((url, index) => {
                       const uri = photoUrl(url);
-                      return uri ? (
-                        <Image
+                      if (!uri) return null;
+                      // Images show inline; PDFs, videos and anything else are a
+                      // named file that opens outside the app.
+                      return isImageUrl(url) ? (
+                        <TouchableOpacity
                           key={`${item.id}-${index}`}
-                          source={{ uri }}
-                          style={styles.attachment}
-                        />
-                      ) : null;
+                          onPress={() => openUrl(url)}
+                          accessibilityRole="imagebutton"
+                          accessibilityLabel="Open image"
+                        >
+                          <Image source={{ uri }} style={styles.attachment} />
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          key={`${item.id}-${index}`}
+                          style={styles.fileChip}
+                          onPress={() => openUrl(url)}
+                          accessibilityRole="link"
+                          accessibilityLabel={`Open ${attachmentName(url, index)}`}
+                        >
+                          <Icon name="clip" color="#3D4FD8" size={14} />
+                          <Text style={styles.fileChipText} numberOfLines={1}>
+                            {attachmentName(url, index)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
                     })}
 
                     <Text style={[styles.stamp, mine && styles.stampMine]}>
                       {clock(item.timestamp || item.created_at)}
+                      {receipt ? `  ${receipt}` : ''}
                     </Text>
                   </View>
                 </View>
               );
             })}
+
+            {typing && (
+              <Text style={styles.typing} accessibilityLiveRegion="polite">
+                {peerName} is typing...
+              </Text>
+            )}
           </ScrollView>
 
           {!!error && (
@@ -934,6 +1254,16 @@ function BrandChatThread({
             </ScrollView>
           )}
 
+          {/* A policy strike limits the account to action cards for a while. */}
+          {cardsOnly && (
+            <View style={styles.policyBanner} accessibilityRole="alert">
+              <Icon name="alert" color="#B45309" size={16} />
+              <Text style={styles.policyText}>
+                Free-form chat is temporarily disabled. Action Cards are still available.
+              </Text>
+            </View>
+          )}
+
           {/* The bottom nav no longer covers this screen, so the composer is
               the last thing above the system gesture bar — pad by the inset so
               the send button is not sitting under it. The inset drops out while
@@ -943,17 +1273,31 @@ function BrandChatThread({
               removable before it goes. */}
           {attachments.length > 0 && (
             <View style={styles.pendingRow}>
-              {attachments.map(url => (
+              {attachments.map(file => (
                 <TouchableOpacity
-                  key={url}
+                  key={file.url}
                   style={styles.pendingItem}
                   onPress={() =>
-                    setAttachments(current => current.filter(u => u !== url))
+                    setAttachments(current =>
+                      current.filter(entry => entry.url !== file.url),
+                    )
                   }
                   accessibilityRole="button"
-                  accessibilityLabel="Remove this attachment"
+                  accessibilityLabel={`Remove ${file.name}`}
                 >
-                  <Image source={{ uri: url }} style={styles.pendingThumb} />
+                  {file.kind === 'image' ? (
+                    <Image
+                      source={{ uri: photoUrl(file.url) || file.url }}
+                      style={styles.pendingThumb}
+                    />
+                  ) : (
+                    <View style={[styles.pendingThumb, styles.pendingFile]}>
+                      <Icon name="clip" color="#3D4FD8" size={16} />
+                      <Text style={styles.pendingFileText} numberOfLines={1}>
+                        {file.name}
+                      </Text>
+                    </View>
+                  )}
                   <View style={styles.pendingRemove}>
                     <Icon name="close" color="#FFFFFF" size={11} />
                   </View>
@@ -971,16 +1315,20 @@ function BrandChatThread({
             <TouchableOpacity
               style={styles.composerBtn}
               onPress={attach}
-              disabled={uploading || attachments.length >= 4}
+              disabled={uploading || attachments.length >= MAX_ATTACHMENTS || cardsOnly}
               accessibilityRole="button"
-              accessibilityLabel="Attach a photo or video"
+              accessibilityLabel="Attach a file"
             >
               {uploading ? (
                 <ActivityIndicator size="small" color="#7C819C" />
               ) : (
                 <Icon
                   name="clip"
-                  color={attachments.length >= 4 ? '#D2D5E2' : '#7C819C'}
+                  color={
+                    attachments.length >= MAX_ATTACHMENTS || cardsOnly
+                      ? '#D2D5E2'
+                      : '#7C819C'
+                  }
                   size={20}
                 />
               )}
@@ -989,8 +1337,16 @@ function BrandChatThread({
             <TextInput
               style={styles.input}
               value={draft}
-              onChangeText={setDraft}
-              placeholder="Type a message..."
+              onChangeText={next => {
+                setDraft(next);
+                if (next.trim()) signalTyping();
+              }}
+              editable={!cardsOnly}
+              placeholder={
+                cardsOnly
+                  ? 'Use an Action Card to continue this thread'
+                  : 'Type a message...'
+              }
               placeholderTextColor="#A9ADC2"
               multiline
             />
@@ -998,10 +1354,15 @@ function BrandChatThread({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                !draft.trim() && !attachments.length && styles.sendBtnOff,
+                ((!draft.trim() && !attachments.length) || cardsOnly) && styles.sendBtnOff,
               ]}
               onPress={send}
-              disabled={(!draft.trim() && !attachments.length) || sending}
+              disabled={
+                (!draft.trim() && !attachments.length) ||
+                sending ||
+                uploading ||
+                cardsOnly
+              }
               accessibilityRole="button"
               accessibilityLabel="Send message"
             >
@@ -1117,6 +1478,46 @@ function BrandChatThread({
                             );
                           })}
                         </View>
+                      ) : field.type === 'date' ? (
+                        // A date is typed as DD-MM-YYYY (dashes appear on their
+                        // own) or set with a quick "in N days" chip.
+                        <View>
+                          <TextInput
+                            style={styles.formInput}
+                            value={value}
+                            onChangeText={next =>
+                              setCardForm(prev => ({
+                                ...prev,
+                                [field.key]: maskDate(next),
+                              }))
+                            }
+                            placeholder="DD-MM-YYYY"
+                            placeholderTextColor="#A9ADC2"
+                            keyboardType="number-pad"
+                            maxLength={10}
+                            accessibilityLabel={field.label}
+                          />
+                          <View style={[styles.formOptions, styles.dateChips]}>
+                            {[7, 14, 30].map(days => (
+                              <TouchableOpacity
+                                key={days}
+                                style={styles.formOption}
+                                onPress={() =>
+                                  setCardForm(prev => ({
+                                    ...prev,
+                                    [field.key]: dateInDays(days),
+                                  }))
+                                }
+                                accessibilityRole="button"
+                                accessibilityLabel={`${field.label} in ${days} days`}
+                              >
+                                <Text style={styles.formOptionText}>
+                                  In {days} days
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </View>
                       ) : (
                         <TextInput
                           style={[
@@ -1167,16 +1568,80 @@ function BrandChatThread({
       </Modal>
 
       <ChoiceSheet
-        visible={reportOpen}
-        title={`Report ${text(title, 'this user')}?`}
-        message="Our moderation team reviews every report. The conversation stays open."
-        options={[
-          { label: 'Abusive or harassing', tone: 'destructive', onPress: () => submitReport('Abusive or harassing') },
-          { label: 'Sharing contact details', onPress: () => submitReport('Sharing contact details') },
-          { label: 'Spam or scam', onPress: () => submitReport('Spam or scam') },
-        ]}
-        onClose={() => setReportOpen(false)}
+        visible={menuOpen}
+        title={peerName}
+        options={menuOptions}
+        onClose={() => setMenuOpen(false)}
       />
+
+      <BottomSheet
+        visible={reportOpen}
+        title={`Report ${peerName}`}
+        onClose={() => {
+          if (!reporting) setReportOpen(false);
+        }}
+        footer={
+          <TouchableOpacity
+            style={[styles.formSend, (reporting || !reportReason) && styles.formSendOff]}
+            onPress={submitReport}
+            disabled={reporting || !reportReason}
+            accessibilityRole="button"
+            accessibilityLabel="Submit report"
+          >
+            {reporting ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.formSendText}>Submit report</Text>
+            )}
+          </TouchableOpacity>
+        }
+      >
+        <Text style={styles.reportHint}>
+          Our team reviews every report within 5 business days. Don't include phone numbers or emails.
+        </Text>
+        <Text style={styles.formLabel}>Reason</Text>
+        <View style={[styles.formOptions, styles.reportReasons]}>
+          {REPORT_REASONS.map(reason => {
+            const on = reportReason === reason.value;
+            return (
+              <TouchableOpacity
+                key={reason.value}
+                style={[styles.formOption, on && styles.formOptionOn]}
+                onPress={() => setReportReason(reason.value)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on }}
+              >
+                <Text style={[styles.formOptionText, on && styles.formOptionTextOn]}>
+                  {reason.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={styles.formLabel}>Details (optional)</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextarea]}
+          value={reportDetails}
+          onChangeText={setReportDetails}
+          placeholder="Add any context that will help our team..."
+          placeholderTextColor="#A9ADC2"
+          multiline
+          editable={!reporting}
+        />
+        {!!reportError && <Text style={styles.formError}>{reportError}</Text>}
+      </BottomSheet>
+
+      <RateBrandSheet
+        visible={rateOpen}
+        token={token}
+        campaignId={String(conv?.associated_campaign_id || '')}
+        businessId={otherUserId}
+        brandName={peerName}
+        onClose={() => setRateOpen(false)}
+        onDone={() => showToast('Review submitted')}
+      />
+
+      <ToastBar message={toast} />
     </View>
   );
 }
@@ -1259,6 +1724,31 @@ const styles = StyleSheet.create({
     height: scale(180),
     borderRadius: scale(10),
     backgroundColor: '#E7E8F2',
+  },
+  fileChip: {
+    marginTop: scale(8),
+    minHeight: scale(36),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+    paddingHorizontal: scale(10),
+    borderRadius: scale(10),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DDE0F5',
+  },
+  fileChipText: {
+    flexShrink: 1,
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#3D4FD8',
+  },
+  typing: {
+    marginBottom: scale(8),
+    fontSize: fontScale(12),
+    fontStyle: 'italic',
+    color: '#858AA3',
   },
   stamp: { marginTop: scale(5), fontSize: fontScale(9), color: '#9498B0' },
   stampMine: { textAlign: 'right' },
@@ -1351,6 +1841,7 @@ const styles = StyleSheet.create({
   },
   cardBtn: {
     minWidth: scale(78),
+    minHeight: scale(44),
     paddingHorizontal: scale(14),
     paddingVertical: scale(9),
     borderRadius: scale(10),
@@ -1597,6 +2088,35 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     backgroundColor: '#F1F2F8',
   },
+  pendingFile: { alignItems: 'center', justifyContent: 'center', padding: scale(4) },
+  pendingFileText: { fontSize: fontScale(8), color: '#3D4FD8' },
+  policyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(9),
+    backgroundColor: '#FEF3C7',
+  },
+  policyText: { flex: 1, fontSize: fontScale(12), lineHeight: fontScale(17), color: '#92400E' },
+  dateChips: { marginTop: scale(8) },
+  reportHint: { fontSize: fontScale(12), lineHeight: fontScale(17), color: '#6B7092', marginBottom: scale(12) },
+  reportReasons: { marginTop: scale(6), marginBottom: scale(14) },
+  retryBtn: {
+    marginTop: scale(14),
+    minHeight: scale(44),
+    paddingHorizontal: scale(28),
+    borderRadius: scale(12),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   pendingRemove: {
     position: 'absolute',
     top: -scale(5),
@@ -1609,8 +2129,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   composerBtn: {
-    width: scale(38),
-    height: scale(42),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1627,9 +2147,9 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   sendBtn: {
-    width: scale(42),
-    height: scale(42),
-    borderRadius: scale(21),
+    width: scale(44),
+    height: scale(44),
+    borderRadius: scale(22),
     backgroundColor: '#4C5BF3',
     alignItems: 'center',
     justifyContent: 'center',

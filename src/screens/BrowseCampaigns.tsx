@@ -1,9 +1,10 @@
 import { useLiveEffect } from "../liveUpdates";
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -17,7 +18,9 @@ import { SkeletonList } from '../components/Skeleton';
 import {
   addSavedBrief,
   BACKEND_URL,
+  getBidReadiness,
   getCampaigns,
+  getMyBids,
   getSavedBriefs,
   getUnreadCount,
   placeBid,
@@ -26,10 +29,38 @@ import {
   type AuthUser,
 } from '../api';
 import AppHeader from '../components/AppHeader';
+import BottomSheet from '../components/BottomSheet';
+import { Alert } from '../components/AppAlert';
+import { ToastBar, useToast } from '../components/Toast';
+import {
+  BROWSE_PAGE,
+  BUDGET_OPTIONS,
+  DEFAULT_COMMISSION_PERCENT,
+  DEFAULT_FILTERS,
+  DELIVERY_OPTIONS,
+  SORT_OPTIONS,
+  activeFilterCount,
+  bidStatusLabel,
+  biddable,
+  briefSections,
+  dateLabel,
+  deliveryChip,
+  filterBriefs,
+  loadErrorText,
+  maxCampaignBid,
+  moodImagesOf,
+  ownBidOn,
+  parseDeliveryDays,
+  pctLabel,
+  referenceVideosOf,
+  stripBrandOnlyLines,
+  timeAgo,
+  validateBid,
+  type BrowseFilters,
+} from '../briefs';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Campaign = Record<string, any> & { id: string };
-type Screen = 'browse' | 'details' | 'bid';
 
 const textOf = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value : fallback;
@@ -83,19 +114,6 @@ const budgetLabel = (c: Campaign): string => {
 const matchOf = (c: Campaign): number | null => {
   const value = Number(c.match ?? c.match_percentage);
   return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
-};
-
-/** "12 Sep 2026" from an ISO date, or the raw text the backend sent. */
-const dateLabel = (value: unknown): string => {
-  const raw = textOf(value);
-  if (!raw) return '';
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return raw;
-  return date.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
 };
 
 function Icon({
@@ -173,6 +191,7 @@ function Icon({
       )}
       {name === 'send' && <Path d="m3 11 18-8-8 18-2-8-8-2Zm8 2 5-5" {...p} />}
       {name === 'close' && <Path d="m6 6 12 12M18 6 6 18" {...p} />}
+      {name === 'filter' && <Path d="M4 6h16M7 12h10M10 18h4" {...p} />}
     </Svg>
   );
 }
@@ -211,73 +230,8 @@ function BrandLogo({
   );
 }
 
-/**
- * Browse filters. Each option carries a predicate so the list can be filtered
- * locally — the campaigns endpoint has no query params for these.
- */
-type FilterKey = 'budget' | 'delivery' | 'sort';
-
-// Same field chain the card's budget label uses. Briefs store the per-video
-// budget as budget_max / per_video_budget — reading only `budget` made every
-// brief ₹0, so the budget filter and "Highest budget" sort did nothing.
-const budgetOf = (c: Campaign) =>
-  Number(
-    c.budget || c.max_budget || c.budget_max || c.per_video_budget || c.compensation || 0,
-  );
-
-// Days until the brief's delivery deadline. Briefs carry dates, not a
-// `delivery_days` count (that's on bids), so the old read was always 0 and
-// the delivery filters returned nothing.
-const deliveryDaysOf = (c: Campaign) => {
-  const r = c as Record<string, any>;
-  const raw = r.final_delivery_by || r.due_date || r.deadline || r.draft_delivery_by;
-  const ms = raw ? new Date(raw).getTime() - Date.now() : NaN;
-  return Number.isNaN(ms) ? 0 : Math.ceil(ms / 86400000);
-};
-
-const FILTERS: {
-  key: FilterKey;
-  label: string;
-  options: { value: string; test?: (c: Campaign) => boolean }[];
-}[] = [
-  {
-    key: 'budget',
-    label: 'BUDGET',
-    options: [
-      { value: 'Any budget' },
-      { value: 'Under ₹5k', test: c => budgetOf(c) < 5000 },
-      {
-        value: '₹5k - ₹20k',
-        test: c => budgetOf(c) >= 5000 && budgetOf(c) <= 20000,
-      },
-      { value: 'Over ₹20k', test: c => budgetOf(c) > 20000 },
-    ],
-  },
-  {
-    key: 'delivery',
-    label: 'DELIVERY',
-    options: [
-      { value: 'Any time' },
-      {
-        value: 'Within 3 days',
-        test: c => deliveryDaysOf(c) > 0 && deliveryDaysOf(c) <= 3,
-      },
-      {
-        value: 'Within a week',
-        test: c => deliveryDaysOf(c) > 0 && deliveryDaysOf(c) <= 7,
-      },
-    ],
-  },
-  {
-    key: 'sort',
-    label: 'SORT BY',
-    options: [
-      { value: 'Recommended' },
-      { value: 'Highest budget' },
-      { value: 'Newest' },
-    ],
-  },
-];
+/** Whatever the creator sent for this brief, from the campaign's own bids list. */
+type OwnBid = Record<string, any>;
 
 export default function BrowseCampaigns({
   token,
@@ -286,6 +240,8 @@ export default function BrowseCampaigns({
   onMessages,
   unread = 0,
   onNavigate,
+  openId,
+  initialQuery = '',
 }: {
   token: string;
   session: AuthUser;
@@ -296,49 +252,39 @@ export default function BrowseCampaigns({
   onMessages?: () => void;
   /** Unread count for the chat badge. */
   unread?: number;
+  /** `?open=<id>` deep link: opens that brief once the list has loaded. */
+  openId?: string;
+  /** `?q=` from the top search: pre-fills the search box. */
+  initialQuery?: string;
 }) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   // Campaign ids the user has saved. Held here (not per card) so the browse
   // list and the details screen stay in agreement.
   const [saved, setSaved] = useState<string[]>([]);
+  // The creator's own bids by campaign id, so a brief already bid on says so.
+  const [bids, setBids] = useState<Record<string, OwnBid>>({});
   const [selected, setSelected] = useState<Campaign | null>(null);
-  const [screen, setScreen] = useState<Screen>('browse');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Separates "nothing matches your filters" from "the list failed to load".
-  const [failed, setFailed] = useState(false);
+  // Why the list failed to load ('' = fine); keeps "nothing matches" apart from "could not load".
+  const [loadError, setLoadError] = useState('');
   // Real unread-notification count for the header bell (was hardcoded to 7).
   const [notifications, setNotifications] = useState(0);
-  // Selected option per filter, and which dropdown is currently open.
-  const [picked, setPicked] = useState<Record<FilterKey, string>>({
-    budget: 'Any budget',
-    delivery: 'Any time',
-    sort: 'Recommended',
-  });
-  const [openFilter, setOpenFilter] = useState<FilterKey | null>(null);
+  const [filters, setFilters] = useState<BrowseFilters>({ ...DEFAULT_FILTERS, search: initialQuery });
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [shown, setShown] = useState(BROWSE_PAGE);
+  const toast = useToast();
+  const opened = useRef('');
+
+  const me = String(session?.user_id || '');
 
   const loadCampaigns = useCallback(() => {
     getCampaigns(token, { status: 'active' })
       .then(list => {
-        // A multi-creator brief stays active while it has open slots — but a creator
-        // already hired on it shouldn't be offered it to bid on again.
-        const me = String(session?.user_id || '');
-        setCampaigns(
-          list
-            .filter(
-              c =>
-                !(Array.isArray(c.selected_creators) ? c.selected_creators : [])
-                  .map(String)
-                  .includes(me),
-            )
-            .map((c, i) => ({
-              ...c,
-              id: String(c.id || c.campaign_id || i),
-            })),
-        );
-        setFailed(false);
+        setCampaigns(list.map((c, i) => ({ ...c, id: String(c.id || c.campaign_id || i) })));
+        setLoadError('');
       })
-      .catch(() => setFailed(true))
+      .catch(error => setLoadError(loadErrorText(error, 'campaigns')))
       .finally(() => {
         setLoading(false);
         setRefreshing(false);
@@ -348,7 +294,23 @@ export default function BrowseCampaigns({
     getUnreadCount(token)
       .then(setNotifications)
       .catch(() => {});
-  }, [session?.user_id, token]);
+
+    // Which briefs already carry my bid. Best effort: the campaigns' own bids
+    // list covers the same ground when this call fails.
+    Promise.resolve()
+      .then(() => getMyBids(token))
+      .then(rows => {
+        const next: Record<string, OwnBid> = {};
+        for (const row of rows) {
+          const id = String(row?.campaign?.id || row?.id || '');
+          if (id && row.my_bid) {
+            next[id] = { ...row.my_bid, status: row.bid_status || row.my_bid.status };
+          }
+        }
+        setBids(next);
+      })
+      .catch(() => {});
+  }, [token]);
 
   useLiveEffect(() => loadCampaigns(), [loadCampaigns]);
 
@@ -379,66 +341,65 @@ export default function BrowseCampaigns({
       setSaved(current =>
         wasSaved ? current.filter(x => x !== id) : [...current, id],
       );
+      toast.show(wasSaved ? 'Removed from saved' : 'Saved to your list');
       const call = wasSaved ? removeSavedBrief : addSavedBrief;
       call(token, id).catch(() => {
         setSaved(current =>
           wasSaved ? [...current, id] : current.filter(x => x !== id),
         );
+        toast.show("Couldn't update saved briefs. Check your connection.");
       });
     },
-    [saved, token],
+    [saved, token, toast],
   );
 
-  const open = (campaign: Campaign) => {
-    setSelected(campaign);
-    setScreen('details');
-  };
+  // What the creator can still bid on: active, a slot left, not hired on it.
+  // (Also drops their own private brief, which carries only `selected_creator`.)
+  const open = useMemo(() => biddable(campaigns, me), [campaigns, me]);
+  const visible = useMemo(() => filterBriefs(open, filters), [open, filters]);
+  const page = visible.slice(0, shown);
 
-  // Apply the budget/delivery predicates, then the chosen sort.
-  const visible = useMemo(() => {
-    let rows = campaigns;
-    for (const group of FILTERS) {
-      if (group.key === 'sort') continue;
-      const option = group.options.find(o => o.value === picked[group.key]);
-      if (option?.test) rows = rows.filter(option.test);
-    }
-    if (picked.sort === 'Highest budget') {
-      rows = [...rows].sort((a, b) => budgetOf(b) - budgetOf(a));
-    } else if (picked.sort === 'Newest') {
-      rows = [...rows].sort(
-        (a, b) =>
-          new Date(String(b.created_at || 0)).getTime() -
-          new Date(String(a.created_at || 0)).getTime(),
-      );
-    }
-    return rows;
-  }, [campaigns, picked]);
+  // A changed search/filter starts again from the first page.
+  useEffect(() => setShown(BROWSE_PAGE), [filters]);
+  useEffect(() => {
+    if (initialQuery !== undefined) setFilters(f => ({ ...f, search: initialQuery }));
+  }, [initialQuery]);
 
-  if (screen === 'details' && selected)
+  // Deep link: ?open=<id> shows that brief's details once the list is in.
+  useEffect(() => {
+    if (!openId || opened.current === openId) return;
+    const found = open.find(c => c.id === openId);
+    if (found) {
+      opened.current = openId;
+      setSelected(found);
+    }
+  }, [openId, open]);
+
+  const ownBidFor = (c: Campaign): OwnBid | null => bids[c.id] || ownBidOn(c, me);
+  const clearFilters = () => setFilters(f => ({ ...f, budget: 'any', delivery: 'any' }));
+  const filterCount = activeFilterCount(filters);
+  const searching = filters.search.trim().length > 0;
+
+  if (selected)
     return (
-      <CampaignDetails
-        campaign={selected}
-        saved={saved.includes(selected.id)}
-        onToggleSave={() => toggleSave(selected.id)}
-        onBack={() => setScreen('browse')}
-        onBid={async () => {
-          const current = await getMe(token).catch(() => session);
-          const kyc = (current.kyc || {}) as Record<string, any>;
-          if (kyc.status !== 'verified' && !current.kyc_verified) { onNavigate?.('/kyc'); return; }
-          if (current.profile_completed === false) { onNavigate?.('/settings?tab=profile'); return; }
-          setScreen('bid');
-        }}
-      />
-    );
-  if (screen === 'bid' && selected)
-    return (
-      <SubmitBid
-        campaign={selected}
-        token={token}
-        session={session}
-        onBack={() => setScreen('details')}
-        onSubmitted={() => setScreen('browse')}
-      />
+      <>
+        <BriefFlow
+          campaign={selected}
+          token={token}
+          session={session}
+          saved={saved.includes(selected.id)}
+          onToggleSave={() => toggleSave(selected.id)}
+          onBack={() => setSelected(null)}
+          onNavigate={onNavigate}
+          myBid={ownBidFor(selected)}
+          onDone={message => {
+            setSelected(null);
+            toast.show(message);
+            loadCampaigns();
+          }}
+        />
+        <ToastBar message={toast.message} />
+      </>
     );
 
   return (
@@ -465,98 +426,238 @@ export default function BrowseCampaigns({
           />
         }
       >
-        <View style={styles.filters}>
-          {FILTERS.map(group => {
-            const isOpen = openFilter === group.key;
-            return (
-              <View key={group.key} style={styles.filterWrap}>
-                <Text style={styles.filterLabel}>{group.label}</Text>
-                <TouchableOpacity
-                  style={[styles.filter, isOpen && styles.filterActive]}
-                  onPress={() => setOpenFilter(isOpen ? null : group.key)}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.filterText} numberOfLines={1}>
-                    {picked[group.key]}
-                  </Text>
-                  <Text style={styles.down}>{isOpen ? '⌃' : '⌄'}</Text>
-                </TouchableOpacity>
-
-                {/* Absolutely positioned so opening a filter overlays the list
-                    instead of pushing it down, unlike the inline menu on
-                    Active Work. zIndex keeps it above the cards below. */}
-                {isOpen && (
-                  <View style={styles.dropdown}>
-                    {group.options.map(option => {
-                      const active = picked[group.key] === option.value;
-                      return (
-                        <TouchableOpacity
-                          key={option.value}
-                          style={[
-                            styles.dropdownItem,
-                            active && styles.dropdownItemActive,
-                          ]}
-                          onPress={() => {
-                            setPicked(current => ({
-                              ...current,
-                              [group.key]: option.value,
-                            }));
-                            setOpenFilter(null);
-                          }}
-                          accessibilityRole="button"
-                        >
-                          <Text
-                            style={[
-                              styles.dropdownText,
-                              active && styles.dropdownTextActive,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {option.value}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-            );
-          })}
+        <View style={styles.search}>
+          <Icon name="search" size={19} />
+          <TextInput
+            style={styles.searchInput}
+            value={filters.search}
+            onChangeText={search => setFilters(f => ({ ...f, search }))}
+            placeholder="Search campaigns, brands, categories"
+            placeholderTextColor="#9BA0B8"
+            returnKeyType="search"
+            autoCorrect={false}
+            accessibilityLabel="Search campaigns"
+          />
+          {searching && (
+            <TouchableOpacity
+              style={styles.searchClear}
+              onPress={() => setFilters(f => ({ ...f, search: '' }))}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+            >
+              <Icon name="close" size={16} />
+            </TouchableOpacity>
+          )}
         </View>
+
+        <View style={styles.filterBar}>
+          <TouchableOpacity
+            style={[styles.filterBtn, filterCount > 0 && styles.filterBtnOn]}
+            onPress={() => setSheetOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Filters"
+          >
+            <Icon name="filter" size={18} color={filterCount > 0 ? '#4943EB' : '#505675'} />
+            <Text style={[styles.filterBtnText, filterCount > 0 && styles.filterBtnTextOn]}>
+              Filters{filterCount > 0 ? ` (${filterCount})` : ''}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.sortNote} numberOfLines={1}>
+            {SORT_OPTIONS.find(o => o.value === filters.sort)?.label}
+          </Text>
+          {filterCount > 0 && (
+            <TouchableOpacity
+              style={styles.linkBtn}
+              onPress={clearFilters}
+              accessibilityRole="button"
+              accessibilityLabel="Clear filters"
+            >
+              <Text style={styles.linkText}>Clear filters</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {searching && (
+          <Text style={styles.searchNote}>
+            {visible.length} match{visible.length === 1 ? '' : 'es'} for “{filters.search.trim()}”
+          </Text>
+        )}
+
+        {!!loadError && !loading && !!campaigns.length && (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>{loadError}</Text>
+            <TouchableOpacity
+              style={styles.bannerBtn}
+              onPress={loadCampaigns}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+            >
+              <Text style={styles.bannerBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {loading && <SkeletonList count={4} lines={2} footer />}
-        {visible.map(c => (
+        {page.map(c => (
           <CampaignCard
             key={c.id}
             campaign={c}
-            onPress={() => open(c)}
+            onPress={() => setSelected(c)}
             saved={saved.includes(c.id)}
             onToggleSave={() => toggleSave(c.id)}
+            bid={ownBidFor(c)}
           />
         ))}
-        {!loading && !campaigns.length && (
-          <Text style={styles.empty}>
-            {failed
-              ? "Couldn't load campaigns. Check your connection and try again."
-              : 'No campaigns match your search.'}
-          </Text>
+
+        {visible.length > shown && (
+          <TouchableOpacity
+            style={styles.loadMore}
+            onPress={() => setShown(n => n + BROWSE_PAGE)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.loadMoreText}>Load more briefs</Text>
+          </TouchableOpacity>
+        )}
+
+        {!loading && !campaigns.length && !!loadError && (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>{loadError}</Text>
+            <TouchableOpacity
+              style={styles.emptyBtn}
+              onPress={loadCampaigns}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+            >
+              <Text style={styles.emptyBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {!loading && !loadError && !open.length && (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>No campaigns open right now</Text>
+            <Text style={styles.emptyText}>New briefs appear here as brands post them. Pull down to refresh.</Text>
+          </View>
+        )}
+        {!loading && !!open.length && !visible.length && (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>No campaigns found</Text>
+            <Text style={styles.emptyText}>No campaigns match your search or filters right now.</Text>
+            <TouchableOpacity
+              style={styles.emptyBtn}
+              onPress={() => setFilters({ ...DEFAULT_FILTERS })}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search and filters"
+            >
+              <Text style={styles.emptyBtnText}>Clear search and filters</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </ScrollView>
+
+      <BottomSheet
+        visible={sheetOpen}
+        title="Filters"
+        onClose={() => setSheetOpen(false)}
+        footer={
+          <>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnGhost]}
+              onPress={() => setFilters(f => ({ ...DEFAULT_FILTERS, search: f.search }))}
+              accessibilityRole="button"
+              accessibilityLabel="Reset filters"
+            >
+              <Text style={styles.sheetBtnGhostText}>Reset</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnPrimary]}
+              onPress={() => setSheetOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Show results"
+            >
+              <Text style={styles.sheetBtnPrimaryText}>
+                Show {visible.length} campaign{visible.length === 1 ? '' : 's'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        }
+      >
+        <ChipGroup
+          label="Budget"
+          options={BUDGET_OPTIONS}
+          value={filters.budget}
+          onPick={budget => setFilters(f => ({ ...f, budget }))}
+        />
+        <ChipGroup
+          label="Delivery"
+          options={DELIVERY_OPTIONS}
+          value={filters.delivery}
+          onPick={delivery => setFilters(f => ({ ...f, delivery }))}
+        />
+        <ChipGroup
+          label="Sort by"
+          options={SORT_OPTIONS}
+          value={filters.sort}
+          onPick={sort => setFilters(f => ({ ...f, sort }))}
+        />
+      </BottomSheet>
+      <ToastBar message={toast.message} />
     </View>
   );
 }
 
-function CampaignCard({
+function ChipGroup<T extends string>({
+  label,
+  options,
+  value,
+  onPick,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onPick: (value: T) => void;
+}) {
+  return (
+    <View style={styles.chipGroup}>
+      <Text style={styles.chipGroupLabel}>{label}</Text>
+      <View style={styles.chips}>
+        {options.map(option => {
+          const active = option.value === value;
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => onPick(option.value)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`${label}: ${option.label}`}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{option.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+export function CampaignCard({
   campaign,
   onPress,
   saved,
   onToggleSave,
+  bid,
+  closed = false,
 }: {
   campaign: Campaign;
   onPress: () => void;
   saved: boolean;
   onToggleSave: () => void;
+  bid: OwnBid | null;
+  /** No longer open for bids (shown on Saved, which keeps closed briefs). */
+  closed?: boolean;
 }) {
-  const tags = tagsOf(campaign);
+  const tags = [...tagsOf(campaign).slice(0, 2), deliveryChip(campaign)];
+  const age = timeAgo(campaign.created_at);
   const format = formatOf(campaign);
   const match = matchOf(campaign);
   const budget = budgetLabel(campaign);
@@ -575,15 +676,16 @@ function CampaignCard({
         <View style={styles.brandCopy}>
           <View style={styles.inline}>
             <Text style={styles.brandName}>{campaignName(campaign)}</Text>
-            {!!campaign.age && (
+            {!!age && (
               <>
                 <Text style={styles.dot}>•</Text>
-                <Text style={styles.age}>{campaign.age}</Text>
+                <Text style={styles.age}>{age}</Text>
               </>
             )}
           </View>
         </View>
         <TouchableOpacity
+          style={styles.bookmarkBtn}
           accessibilityRole="button"
           accessibilityState={{ selected: saved }}
           accessibilityLabel={saved ? 'Remove from saved' : 'Save campaign'}
@@ -602,20 +704,24 @@ function CampaignCard({
         </TouchableOpacity>
       </View>
       <Text style={styles.campaignTitle}>{titleOf(campaign)}</Text>
-      {tags.length > 0 && (
-        <View style={styles.tags}>
-          {tags.slice(0, 3).map((t: string) => (
-            <Text key={t} style={styles.tag}>
-              {t}
-            </Text>
-          ))}
-        </View>
-      )}
+      <View style={styles.tags}>
+        {tags.map((t: string) => (
+          <Text key={t} style={styles.tag}>
+            {t}
+          </Text>
+        ))}
+      </View>
       {!!format && (
         <View style={styles.format}>
           <Icon name="video" size={15} />
           <Text style={styles.formatText}>{format}</Text>
         </View>
+      )}
+      {closed && <Text style={styles.closedChip}>Closed: no longer open for bids</Text>}
+      {!!bid && (
+        <Text style={styles.bidChip}>
+          Bid submitted · {money(bid.amount)} · {bidStatusLabel(String(bid.status || 'pending'))}
+        </Text>
       )}
       <View style={styles.cardBottom}>
         <View>
@@ -623,7 +729,7 @@ function CampaignCard({
           {match !== null && <Text style={styles.match}>{match}% match</Text>}
         </View>
         <TouchableOpacity style={styles.primarySmall} onPress={onPress}>
-          <Text style={styles.primaryText}>View details</Text>
+          <Text style={styles.primaryText}>{bid ? 'View your bid' : 'View details'}</Text>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -648,7 +754,7 @@ function Header({
   // edge), which already clears the status bar.
   return (
     <View style={styles.subHeader}>
-      <TouchableOpacity style={styles.headerBtn} onPress={onBack}>
+      <TouchableOpacity style={styles.headerBtn} onPress={onBack} accessibilityRole="button" accessibilityLabel="Go back">
         <Icon name="back" color="#171943" />
       </TouchableOpacity>
       <Text style={styles.headerTitle}>{title}</Text>
@@ -671,18 +777,210 @@ function Header({
   );
 }
 
+/**
+ * One brief from details to a sent bid: details, then the gates the website
+ * runs before its bid form (profile complete, KYC verified, platform-fee
+ * notice), then the form. Shared by Browse and Saved.
+ */
+export function BriefFlow({
+  campaign,
+  token,
+  session,
+  saved,
+  onToggleSave,
+  onBack,
+  onDone,
+  onNavigate,
+  myBid,
+  closed = false,
+}: {
+  campaign: Campaign;
+  token: string;
+  session?: AuthUser;
+  saved: boolean;
+  onToggleSave: () => void;
+  onBack: () => void;
+  /** Called after a bid is sent, with the success message to show. */
+  onDone: (message: string) => void;
+  onNavigate?: (path: string) => void;
+  /** The creator's existing bid on this brief, if any. */
+  myBid?: OwnBid | null;
+  /** The brief no longer takes bids: details only, no Submit button. */
+  closed?: boolean;
+}) {
+  const [view, setView] = useState<'details' | 'bid'>('details');
+  const [percent, setPercent] = useState(DEFAULT_COMMISSION_PERCENT);
+  // Profile items still missing ([] = incomplete but the server named none); null = sheet closed.
+  const [missing, setMissing] = useState<string[] | null>(null);
+  const [feeOpen, setFeeOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const checkingRef = useRef(false);
+
+  const startBid = async () => {
+    if (checkingRef.current) return;
+    checkingRef.current = true;
+    setChecking(true);
+    try {
+      let me: Record<string, any> | null = null;
+      const getUser = async () => {
+        if (!me) me = ((await getMe(token).catch(error => {
+          if (error?.name === 'NetworkError') throw error;
+          return session || {};
+        })) || {}) as Record<string, any>;
+        return me;
+      };
+      let readiness: { can_bid: boolean; missing: string[]; commission_percent?: number };
+      try {
+        readiness = await getBidReadiness(token);
+      } catch (error: any) {
+        if (error?.name === 'NetworkError') throw error;
+        // Older backend or a hiccup: fall back to the profile flag the app already holds.
+        readiness = { can_bid: (await getUser()).profile_completed !== false, missing: [] };
+      }
+      if (readiness.commission_percent != null && Number.isFinite(readiness.commission_percent)) {
+        setPercent(readiness.commission_percent);
+      }
+      // An incomplete profile can't bid: list what is missing instead of opening the form.
+      if (!readiness.can_bid) {
+        setMissing(readiness.missing);
+        return;
+      }
+      const user = await getUser();
+      const kyc = (user.kyc || {}) as Record<string, any>;
+      if (kyc.status !== 'verified' && !user.kyc_verified) {
+        Alert.alert('Verify your KYC', 'Verify your KYC before submitting a bid.', [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Verify KYC', onPress: () => onNavigate?.('/kyc') },
+        ]);
+        return;
+      }
+      setFeeOpen(true);
+    } catch (error: any) {
+      Alert.alert(
+        error?.name === 'NetworkError' ? "You're offline" : 'Could not start your bid',
+        loadErrorText(error, 'your profile'),
+      );
+    } finally {
+      checkingRef.current = false;
+      setChecking(false);
+    }
+  };
+
+  return (
+    <>
+      {view === 'bid' ? (
+        <SubmitBid
+          campaign={campaign}
+          token={token}
+          percent={percent}
+          onBack={() => setView('details')}
+          onSubmitted={() => onDone('Bid submitted successfully!')}
+        />
+      ) : (
+        <CampaignDetails
+          campaign={campaign}
+          saved={saved}
+          onToggleSave={onToggleSave}
+          onBack={onBack}
+          onBid={startBid}
+          checking={checking}
+          myBid={myBid || null}
+          closed={closed}
+        />
+      )}
+
+      <BottomSheet
+        visible={missing !== null}
+        title="Complete your profile to bid"
+        onClose={() => setMissing(null)}
+        footer={
+          <>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnGhost]}
+              onPress={() => setMissing(null)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.sheetBtnGhostText}>Not now</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnPrimary]}
+              onPress={() => {
+                setMissing(null);
+                onNavigate?.('/settings?tab=profile');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Complete profile"
+            >
+              <Text style={styles.sheetBtnPrimaryText}>Complete profile</Text>
+            </TouchableOpacity>
+          </>
+        }
+      >
+        <Text style={styles.sheetBody}>
+          Brands choose creators from their profile, so you can bid once these are filled in:
+        </Text>
+        {(missing || []).map(item => (
+          <Text key={item} style={styles.sheetItem}>
+            • {item}
+          </Text>
+        ))}
+        {!missing?.length && <Text style={styles.sheetItem}>• Your profile details</Text>}
+      </BottomSheet>
+
+      <BottomSheet
+        visible={feeOpen}
+        title={`Platform fee: ${pctLabel(percent)}%`}
+        onClose={() => setFeeOpen(false)}
+        footer={
+          <>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnGhost]}
+              onPress={() => setFeeOpen(false)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.sheetBtnGhostText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sheetBtn, styles.sheetBtnPrimary]}
+              onPress={() => {
+                setFeeOpen(false);
+                setView('bid');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Continue to bid"
+            >
+              <Text style={styles.sheetBtnPrimaryText}>Continue to bid</Text>
+            </TouchableOpacity>
+          </>
+        }
+      >
+        <Text style={styles.sheetBody}>
+          UGC.ad keeps {pctLabel(percent)}% of your bid as its platform fee. It is deducted from your payout when the
+          brand approves your work.
+        </Text>
+      </BottomSheet>
+    </>
+  );
+}
+
 function CampaignDetails({
   campaign,
   onBack,
   onBid,
   saved,
   onToggleSave,
+  checking,
+  myBid,
+  closed,
 }: {
   campaign: Campaign;
   onBack: () => void;
   onBid: () => void;
   saved: boolean;
   onToggleSave: () => void;
+  checking: boolean;
+  myBid: OwnBid | null;
+  closed: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const tags = tagsOf(campaign);
@@ -692,69 +990,17 @@ function CampaignDetails({
   const delivery =
     textOf(campaign.delivery) ||
     dateLabel(campaign.final_delivery_by || campaign.due_date || campaign.deadline);
-  const brief = textOf(campaign.brief || campaign.brief_text);
+  // The brand-only "Budget visibility" line is not for creators.
+  const brief = stripBrandOnlyLines(textOf(campaign.brief || campaign.brief_text));
   const objective = textOf(
     campaign.objective ||
       (Array.isArray(campaign.objectives)
         ? campaign.objectives.join(', ')
         : campaign.objectives),
   );
-
-  // Only rows the brand actually filled in; an empty brief shows an honest
-  // gap rather than a fabricated product.
-  const productRows: Array<[string, string]> = (
-    [
-      ['Product', textOf(campaign.product || campaign.product_name)],
-      ['Category', textOf(campaign.category || campaign.product_category)],
-      ['Description', textOf(campaign.description || campaign.product_description)],
-      ['Hook', textOf(campaign.hook || campaign.campaign_hook)],
-      ['Key message', textOf(campaign.key_message)],
-      ['Target audience', textOf(campaign.audience || campaign.target_audience)],
-      ['Video language', textOf(campaign.language)],
-    ] as Array<[string, string]>
-  ).filter(([, value]) => !!value);
-
-  // "2 x Reel (9:16, 30s)" per structured deliverable, plus the free-text
-  // extras ("1 x Story") the brief may carry.
-  const deliverableRows: string[] = (
-    Array.isArray(campaign.deliverable_items) ? campaign.deliverable_items : []
-  )
-    .map((item: any) => {
-      const type = textOf(item?.type);
-      if (!type) return '';
-      const aspect = textOf((item?.aspect_ratios || [])[0]);
-      const duration = textOf(String(item?.duration ?? ''));
-      const details = [aspect, duration].filter(Boolean).join(', ');
-      const label = details ? `${type} (${details})` : type;
-      return `${Number(item?.quantity) || 1} x ${label}`;
-    })
-    .filter(Boolean)
-    .concat(listOf(campaign.additional_deliverables));
-
-  const includeRows: Array<[string, string]> = (
-    [
-      ['Required phrases', listOf(campaign.required_phrases).join(', ')],
-      ['Required shots', listOf(campaign.required_shots).join(', ')],
-      ['Call to action', textOf(campaign.call_to_action)],
-      ['Hashtags', listOf(campaign.hashtags).join(' ')],
-      ['Promo code', textOf(campaign.promo_code)],
-    ] as Array<[string, string]>
-  ).filter(([, value]) => !!value);
-
-  const avoidRows: Array<[string, string]> = (
-    [
-      [
-        'Competitors',
-        campaign.no_competitors
-          ? textOf(campaign.competitors_text, 'No competitor brands')
-          : '',
-      ],
-      ['Other products', campaign.no_other_products ? 'Not allowed' : ''],
-      ['Profanity', campaign.no_profanity ? 'Not allowed' : ''],
-      ['Political content', campaign.no_political ? 'Not allowed' : ''],
-      ['Also avoid', textOf(campaign.avoid_text || campaign.what_not_to_do)],
-    ] as Array<[string, string]>
-  ).filter(([, value]) => !!value);
+  const sections = briefSections(campaign);
+  const moods = moodImagesOf(campaign, BACKEND_URL);
+  const videos = referenceVideosOf(campaign, BACKEND_URL);
   return (
     <View style={styles.subScreen}>
       <Header
@@ -764,7 +1010,11 @@ function CampaignDetails({
         onToggleSave={onToggleSave}
       />
       <ScrollView
-        contentContainerStyle={styles.detailContent}
+        contentContainerStyle={[
+          styles.detailContent,
+          // With no pinned footer (bid already sent) the last row must clear the nav.
+          (!!myBid || closed) && { paddingBottom: scale(24) + NAV_CLEARANCE + insets.bottom },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.detailBrand}>
@@ -781,6 +1031,27 @@ function CampaignDetails({
             </Text>
           )}
         </View>
+        {!!myBid && (
+          <View style={styles.bidSummary} accessibilityLabel="Bid already submitted">
+            <Text style={styles.bidSummaryTitle}>Bid Already Submitted</Text>
+            <View style={styles.dataRow}>
+              <Text style={styles.dataKey}>Your bid</Text>
+              <Text style={styles.dataValue}>{money(myBid.amount)}</Text>
+            </View>
+            <View style={styles.dataRow}>
+              <Text style={styles.dataKey}>Delivery</Text>
+              <Text style={styles.dataValue}>
+                {myBid.estimated_delivery_days ? `${myBid.estimated_delivery_days} days` : '-'}
+              </Text>
+            </View>
+            <View style={styles.dataRow}>
+              <Text style={styles.dataKey}>Status</Text>
+              <Text style={styles.dataValue}>{bidStatusLabel(String(myBid.status || 'pending'))}</Text>
+            </View>
+            <Text style={styles.dataKey}>Your proposal</Text>
+            <Text style={styles.bidSummaryProposal}>{textOf(myBid.proposal, 'No proposal added.')}</Text>
+          </View>
+        )}
         <View style={styles.statBoxes}>
           <View style={styles.statBox}>
             <Icon name="wallet" color="#514CF2" />
@@ -797,6 +1068,10 @@ function CampaignDetails({
             </View>
           </View>
         </View>
+        {closed && !myBid && <Text style={styles.closedNote}>This campaign is no longer open for bids.</Text>}
+        {!!campaign.requires_shipment && (
+          <Text style={styles.notice}>Product shipment included: the brand ships the product to you.</Text>
+        )}
         {tags.length > 0 && (
           <View style={styles.tags}>
             {tags.slice(0, 3).map((t: string) => (
@@ -822,61 +1097,78 @@ function CampaignDetails({
             <Text style={styles.body}>{objective}</Text>
           </Section>
         )}
-        {productRows.length > 0 && (
-          <Section title="PRODUCT">
-            {productRows.map(([k, v]) => (
+        {moods.length > 0 && (
+          <Section title="MOOD BOARD">
+            <View style={styles.moodRow}>
+              {moods.map((uri, index) => (
+                <TouchableOpacity
+                  key={`${uri}-${index}`}
+                  onPress={() => Linking.openURL(uri).catch(() => {})}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open mood board image ${index + 1}`}
+                >
+                  <Image source={{ uri }} style={styles.moodImage} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </Section>
+        )}
+        {videos.length > 0 && (
+          <Section title="REFERENCE VIDEOS">
+            {videos.map((uri, index) => (
+              <TouchableOpacity
+                key={`${uri}-${index}`}
+                style={styles.linkRow}
+                onPress={() => Linking.openURL(uri).catch(() => {})}
+                accessibilityRole="link"
+                accessibilityLabel={`Open reference video ${index + 1}`}
+              >
+                <Text style={styles.linkRowText} numberOfLines={1}>
+                  {uri}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </Section>
+        )}
+        {sections.map(section => (
+          <Section key={section.title} title={section.title.toUpperCase()}>
+            {section.rows.map(([k, v]) => (
               <View style={styles.dataRow} key={k}>
                 <Text style={styles.dataKey}>{k}</Text>
                 <Text style={styles.dataValue}>{v}</Text>
               </View>
             ))}
           </Section>
-        )}
-        {deliverableRows.length > 0 && (
-          <Section title="DELIVERABLES">
-            {deliverableRows.map((label, index) => (
-              <View style={styles.dataRow} key={`${index}-${label}`}>
-                <Text style={styles.dataKey}>Deliverable {index + 1}</Text>
-                <Text style={styles.dataValue}>{label}</Text>
-              </View>
-            ))}
-          </Section>
-        )}
-        {includeRows.length > 0 && (
-          <Section title="MUST INCLUDE">
-            {includeRows.map(([k, v]) => (
-              <View style={styles.dataRow} key={k}>
-                <Text style={styles.dataKey}>{k}</Text>
-                <Text style={styles.dataValue}>{v}</Text>
-              </View>
-            ))}
-          </Section>
-        )}
-        {avoidRows.length > 0 && (
-          <Section title="MUST AVOID">
-            {avoidRows.map(([k, v]) => (
-              <View style={styles.dataRow} key={k}>
-                <Text style={styles.dataKey}>{k}</Text>
-                <Text style={styles.dataValue}>{v}</Text>
-              </View>
-            ))}
-          </Section>
-        )}
+        ))}
       </ScrollView>
 
       {/* Pinned below the scroll area so Submit Bid is always reachable — the
-          brief is long enough that it used to sit far off-screen. */}
-      <View
-        style={[
-          styles.detailFooter,
-          { paddingBottom: scale(12) + NAV_CLEARANCE + insets.bottom },
-        ]}
-      >
-        <TouchableOpacity style={styles.primary} onPress={onBid}>
-          <Icon name="send" color="#FFF" size={18} />
-          <Text style={styles.detailBtnText}>Submit Your Bid</Text>
-        </TouchableOpacity>
-      </View>
+          brief is long enough that it used to sit far off-screen. A brief
+          already bid on has no button: the summary above is the whole story. */}
+      {!myBid && !closed && (
+        <View
+          style={[
+            styles.detailFooter,
+            { paddingBottom: scale(12) + NAV_CLEARANCE + insets.bottom },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.primary, checking && styles.primaryBusy]}
+            onPress={onBid}
+            disabled={checking}
+            accessibilityRole="button"
+          >
+            {checking ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <>
+                <Icon name="send" color="#FFF" size={18} />
+                <Text style={styles.detailBtnText}>Submit Your Bid</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
@@ -899,20 +1191,22 @@ function Section({
 function SubmitBid({
   campaign,
   token,
+  percent,
   onBack,
   onSubmitted,
 }: {
   campaign: Campaign;
   token: string;
-  session: AuthUser;
+  percent: number;
   onBack: () => void;
-  /** Go straight back to the campaigns list after a successful bid. */
+  /** Called once the bid is on the server. */
   onSubmitted: () => void;
 }) {
   const [amount, setAmount] = useState('');
   const [days, setDays] = useState('');
   const [proposal, setProposal] = useState('');
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [message, setMessage] = useState('');
   // The creator (not UGC.ad's team) cuts the edited file, so they quote raw + edited separately.
   const split = (
@@ -921,12 +1215,15 @@ function SubmitBid({
     (d: any) => d?.edited_required && (d?.edited_by || 'creator') === 'creator',
   );
   const total = Number(amount) || 0;
+  const maximum = maxCampaignBid(campaign);
   const submit = async () => {
-    const pricesFilled = total > 0;
-    if (!pricesFilled || !days || !proposal.trim()) {
-      setMessage('Please complete all fields.');
+    if (sendingRef.current) return;
+    const problem = validateBid(campaign, { amount, days, proposal });
+    if (problem) {
+      setMessage(problem);
       return;
     }
+    sendingRef.current = true;
     setSending(true);
     setMessage('');
     try {
@@ -937,22 +1234,23 @@ function SubmitBid({
         amount: total,
         bid_amount: total,
 
-        delivery_days: Number(days),
+        delivery_days: parseDeliveryDays(days) as number,
         proposal,
         message: proposal,
       });
-      // Straight back to the campaigns list — instant, no delay, and past the
-      // campaign-detail screen the bid was opened from.
       onSubmitted();
-    } catch (error) {
-      // Show what the server actually said (e.g. "You already bid on this
-      // campaign") rather than a blanket retry prompt.
+    } catch (error: any) {
+      // Show what the server actually said (e.g. "You have already submitted a
+      // bid for this campaign") rather than a blanket retry prompt.
       setMessage(
-        error instanceof Error && error.message
-          ? error.message
-          : 'Could not submit the bid. Please try again.',
+        error?.name === 'NetworkError'
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message
+            ? error.message
+            : 'Could not submit the bid. Please try again.',
       );
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
@@ -970,15 +1268,24 @@ function SubmitBid({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        <Text style={styles.bidFor} numberOfLines={2}>
+          {titleOf(campaign)} · {campaignName(campaign)}
+        </Text>
         <BidField label={split ? 'Combined payout per video (₹)' : 'Bid Amount per video (₹)'} icon="wallet">
           <TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="Enter your bid amount" placeholderTextColor="#9BA0B8" style={styles.bidInput} />
         </BidField>
         {split && <Text style={styles.fieldLabel}>One bid includes both the raw video and the edited video.</Text>}
+        {maximum > 0 && <Text style={styles.hint}>Highest bid allowed: ₹{maximum.toLocaleString('en-IN')} per video.</Text>}
+        <View style={styles.feeBox} accessibilityLabel="Platform fee notice">
+          <Text style={styles.feeTitle}>UGC.ad platform fee: {pctLabel(percent)}%</Text>
+          <Text style={styles.feeText}>Deducted from your payout when the brand approves your work.</Text>
+        </View>
         <BidField label="Estimated Delivery (days)" icon="calendar">
           <TextInput
             value={days}
-            onChangeText={setDays}
-            keyboardType="numeric"
+            // Whole days only: the site's field is min=1, step 1.
+            onChangeText={text => setDays(text.replace(/\D/g, ''))}
+            keyboardType="number-pad"
             placeholder="How many days to complete?"
             placeholderTextColor="#9BA0B8"
             style={styles.bidInput}
@@ -993,20 +1300,13 @@ function SubmitBid({
             value={proposal}
             onChangeText={setProposal}
             multiline
-            maxLength={1000}
             placeholder="Describe your approach, experience, and why you're the right fit..."
             placeholderTextColor="#9BA0B8"
             style={[styles.bidInput, styles.proposalInput]}
           />
-          <Text style={styles.counter}>{proposal.length}/1000</Text>
         </View>
         {!!message && (
-          <Text
-            style={[
-              styles.feedback,
-              message.startsWith('Your') && styles.success,
-            ]}
-          >
+          <Text style={styles.feedback} accessibilityLiveRegion="polite">
             {message}
           </Text>
         )}
@@ -1014,6 +1314,7 @@ function SubmitBid({
           <TouchableOpacity
             style={[styles.secondary, styles.actionButton]}
             onPress={onBack}
+            disabled={sending}
           >
             <Text style={styles.bidCancelText}>Cancel</Text>
           </TouchableOpacity>
@@ -1075,56 +1376,10 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(24),
   },
   browseContent: { paddingTop: scale(6), paddingBottom: scale(18) + NAV_CLEARANCE },
-  topbar: {
-    height: scale(56),
-    paddingHorizontal: scale(16),
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'transparent',
-  },
-  appLogo: { width: scale(120), height: scale(21) },
-  topActions: { flexDirection: 'row', alignItems: 'center', gap: scale(10) },
-  bell: {
-    width: scale(31),
-    height: scale(31),
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badge: {
-    position: 'absolute',
-    right: scale(-1),
-    top: scale(-2),
-    width: scale(14),
-    height: scale(14),
-    borderRadius: scale(7),
-    backgroundColor: '#FF4057',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeText: {
-    fontSize: fontScale(8),
-    fontFamily: 'Inter-ExtraBold',
-    fontWeight: '800',
-    color: '#FFF',
-  },
-  avatar: {
-    width: scale(34),
-    height: scale(34),
-    borderRadius: scale(17),
-    backgroundColor: '#3D4FD8',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    color: '#FFF',
-    fontFamily: 'Inter-ExtraBold',
-    fontWeight: '800',
-  },
   search: {
-    height: scale(47),
+    minHeight: scale(48),
     marginHorizontal: scale(16),
-    marginTop: scale(10),
+    marginTop: scale(12),
     paddingHorizontal: scale(13),
     borderRadius: scale(14),
     borderWidth: 1,
@@ -1133,76 +1388,102 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  searchInput: { flex: 1, marginLeft: scale(8), color: '#15173F', fontSize: fontScale(13) },
-  // Leads the sheet now that the duplicate page title is gone; the header
-  // above already names the screen.
-  filters: {
+  searchInput: { flex: 1, marginLeft: scale(8), paddingVertical: scale(8), color: '#15173F', fontSize: fontScale(15) },
+  searchClear: { width: scale(44), height: scale(44), alignItems: 'center', justifyContent: 'center', marginRight: scale(-10) },
+  filterBar: {
     flexDirection: 'row',
-    paddingHorizontal: scale(16),
+    alignItems: 'center',
     gap: scale(10),
-    marginTop: scale(13),
-    marginBottom: scale(10),
-    // Keeps the open dropdown above the campaign cards below it.
-    zIndex: 20,
+    paddingHorizontal: scale(16),
+    marginTop: scale(10),
+    marginBottom: scale(8),
   },
-  filterWrap: { flex: 1, position: 'relative' },
-  filterLabel: {
-    fontSize: fontScale(9),
+  filterBtn: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E1E2ED',
+    backgroundColor: '#FFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(7),
+  },
+  filterBtnOn: { borderColor: '#4943EB', backgroundColor: '#F1F0FF' },
+  filterBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#24264E' },
+  filterBtnTextOn: { color: '#4943EB' },
+  sortNote: { flex: 1, fontSize: fontScale(12), color: '#777C98' },
+  linkBtn: { minHeight: scale(44), justifyContent: 'center' },
+  linkText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4943EB' },
+  searchNote: { marginHorizontal: scale(16), marginBottom: scale(8), fontSize: fontScale(12), color: '#5E6484' },
+  banner: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(10),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  bannerText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  bannerBtn: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
+  bannerBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
+  loadMore: {
+    marginHorizontal: scale(16),
+    marginTop: scale(4),
+    minHeight: scale(48),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#DADCF2',
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadMoreText: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4943EB' },
+  emptyBox: { margin: scale(24), alignItems: 'center' },
+  emptyTitle: { fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163F', textAlign: 'center' },
+  emptyText: { marginTop: scale(8), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#777C98', textAlign: 'center' },
+  emptyBtn: {
+    marginTop: scale(16),
+    minHeight: scale(46),
+    paddingHorizontal: scale(20),
+    borderRadius: scale(12),
+    backgroundColor: '#4842E8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyBtnText: { fontSize: fontScale(14), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#FFF' },
+  chipGroup: { marginTop: scale(12) },
+  chipGroupLabel: {
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#676C91',
-    marginBottom: scale(5),
+    marginBottom: scale(8),
+    textTransform: 'uppercase',
   },
-  filter: {
-    height: scale(36),
-    borderRadius: scale(10),
-    borderWidth: 1,
-    borderColor: '#E1E2ED',
-    backgroundColor: '#FFF',
-    paddingHorizontal: scale(10),
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  filterActive: { borderColor: '#4943EB' },
-  filterText: {
-    flex: 1,
-    fontSize: fontScale(10),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#24264E',
-  },
-  // The ⌄/⌃ glyphs sit low in their em box, so they read as dropped
-  // against the label baseline. The negative top margin lifts them back
-  // to optical centre with the filter text.
-  down: { color: '#686E91', fontSize: fontScale(16), marginLeft: scale(4), marginTop: scale(-4) },
-  // Overlays the content below instead of pushing it down: absolute + zIndex.
-  dropdown: {
-    position: 'absolute',
-    top: scale(58),
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    elevation: 8,
-    padding: scale(5),
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
+  chip: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(14),
     borderRadius: scale(12),
-    backgroundColor: '#FFF',
     borderWidth: 1,
     borderColor: '#E1E2ED',
-    shadowColor: '#24245A',
-    shadowOpacity: 0.16,
-    shadowRadius: scale(12),
-    shadowOffset: { width: 0, height: scale(6) },
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  dropdownItem: { paddingVertical: scale(9), paddingHorizontal: scale(9), borderRadius: scale(8) },
-  dropdownItemActive: { backgroundColor: '#EEEEFF' },
-  dropdownText: {
-    fontSize: fontScale(10),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#4A4F72',
-  },
-  dropdownTextActive: { color: '#4943EB' },
+  chipActive: { borderColor: '#4943EB', backgroundColor: '#EEEEFF' },
+  chipText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4A4F72' },
+  chipTextActive: { color: '#4943EB' },
+  sheetBtn: { flex: 1, minHeight: scale(48), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
+  sheetBtnGhost: { borderWidth: 1, borderColor: '#DFE1EC', backgroundColor: '#FFF' },
+  sheetBtnGhostText: { fontSize: fontScale(14), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#17193F' },
+  sheetBtnPrimary: { flex: 1.6, backgroundColor: '#4842E8' },
+  sheetBtnPrimaryText: { fontSize: fontScale(14), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#FFF' },
+  sheetBody: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#4A4F73', marginBottom: scale(8) },
+  sheetItem: { fontSize: fontScale(14), lineHeight: fontScale(24), color: '#15163A' },
   card: {
     marginHorizontal: scale(16),
     marginBottom: scale(10),
@@ -1218,6 +1499,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   cardHead: { flexDirection: 'row', alignItems: 'center' },
+  bookmarkBtn: { minWidth: scale(44), minHeight: scale(44), alignItems: 'center', justifyContent: 'center', marginRight: scale(-10) },
   brandLogo: {
     width: scale(38),
     height: scale(38),
@@ -1257,7 +1539,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#1A1B46',
   },
-  tags: { marginTop: scale(7), flexDirection: 'row', gap: scale(7) },
+  tags: { marginTop: scale(7), flexDirection: 'row', flexWrap: 'wrap', gap: scale(7) },
   tag: {
     paddingHorizontal: scale(9),
     paddingVertical: scale(4),
@@ -1269,6 +1551,32 @@ const styles = StyleSheet.create({
   },
   format: { marginTop: scale(8), flexDirection: 'row', alignItems: 'center', gap: scale(5) },
   formatText: { fontSize: fontScale(10), color: '#5E6484' },
+  bidChip: {
+    marginTop: scale(8),
+    alignSelf: 'flex-start',
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(4),
+    borderRadius: scale(6),
+    overflow: 'hidden',
+    backgroundColor: '#E2F7EE',
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#1B7F55',
+  },
+  closedChip: {
+    marginTop: scale(8),
+    alignSelf: 'flex-start',
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(4),
+    borderRadius: scale(6),
+    overflow: 'hidden',
+    backgroundColor: '#ECEDF5',
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6079',
+  },
   cardBottom: {
     marginTop: scale(8),
     paddingTop: scale(8),
@@ -1292,7 +1600,7 @@ const styles = StyleSheet.create({
     color: '#554EF1',
   },
   primarySmall: {
-    height: scale(36),
+    height: scale(44),
     minWidth: scale(92),
     paddingHorizontal: scale(13),
     borderRadius: scale(9),
@@ -1306,7 +1614,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFF',
   },
-  empty: { margin: scale(30), textAlign: 'center', color: '#777C98' },
   subHeader: {
     height: scale(57),
     backgroundColor: '#FFF',
@@ -1318,8 +1625,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(8),
   },
   headerBtn: {
-    width: scale(38),
-    height: scale(38),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1359,6 +1666,51 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: fontScale(16),
   },
+  bidSummary: {
+    marginTop: scale(14),
+    padding: scale(14),
+    borderRadius: scale(14),
+    borderWidth: 1,
+    borderColor: '#DADDFF',
+    backgroundColor: '#F1F1FF',
+  },
+  bidSummaryTitle: {
+    marginBottom: scale(10),
+    fontSize: fontScale(15),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#11145C',
+  },
+  bidSummaryProposal: { marginTop: scale(4), fontSize: fontScale(14), lineHeight: fontScale(21), color: '#333858' },
+  notice: {
+    marginTop: scale(12),
+    padding: scale(10),
+    borderRadius: scale(10),
+    overflow: 'hidden',
+    backgroundColor: '#FFF4DE',
+    fontSize: fontScale(12),
+    color: '#8A5A00',
+  },
+  closedNote: {
+    marginTop: scale(12),
+    padding: scale(10),
+    borderRadius: scale(10),
+    overflow: 'hidden',
+    backgroundColor: '#ECEDF5',
+    fontSize: fontScale(12),
+    color: '#5C6079',
+  },
+  moodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
+  moodImage: { width: scale(96), height: scale(96), borderRadius: scale(10), backgroundColor: '#ECEDF5' },
+  linkRow: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(12),
+    marginBottom: scale(8),
+    borderRadius: scale(10),
+    backgroundColor: '#F2F2FC',
+    justifyContent: 'center',
+  },
+  linkRowText: { fontSize: fontScale(13), color: '#4943EB' },
   statBoxes: { flexDirection: 'row', gap: scale(10), marginTop: scale(14) },
   statBox: {
     flex: 1,
@@ -1401,6 +1753,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: scale(6),
   },
+  primaryBusy: { opacity: 0.75 },
   // Separate from the compact `primaryText` on the browse cards, which stays
   // small so the card stays dense.
   detailFooter: {
@@ -1442,16 +1795,29 @@ const styles = StyleSheet.create({
     marginTop: scale(9),
   },
   bidContent: { padding: scale(12), paddingBottom: scale(24) + NAV_CLEARANCE },
+  bidFor: { fontSize: fontScale(13), color: '#8A8FB5', marginTop: scale(4) },
   fieldLabel: {
     marginTop: scale(14),
     marginBottom: scale(8),
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#27294E',
   },
+  hint: { marginTop: scale(6), fontSize: fontScale(12), color: '#777C98' },
+  feeBox: {
+    marginTop: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E6E9FF',
+    backgroundColor: '#F6F7FF',
+    gap: scale(3),
+  },
+  feeTitle: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163A' },
+  feeText: { fontSize: fontScale(12), color: '#4A4F73' },
   bidField: {
-    minHeight: scale(47),
+    minHeight: scale(50),
     borderRadius: scale(10),
     borderWidth: 1,
     borderColor: '#DADCF2',
@@ -1470,32 +1836,24 @@ const styles = StyleSheet.create({
   },
   bidInput: {
     flex: 1,
-    height: scale(45),
+    height: scale(48),
     paddingHorizontal: scale(10),
-    fontSize: fontScale(11),
+    fontSize: fontScale(15),
     color: '#1D1F43',
   },
-  proposalField: { height: scale(134), alignItems: 'flex-start', paddingTop: scale(10) },
+  proposalField: { height: scale(150), alignItems: 'flex-start', paddingTop: scale(10) },
   proposalInput: {
-    height: scale(104),
+    height: scale(128),
     textAlignVertical: 'top',
     paddingTop: scale(5),
-    lineHeight: fontScale(16),
-  },
-  counter: {
-    position: 'absolute',
-    right: scale(9),
-    bottom: scale(7),
-    fontSize: fontScale(9),
-    color: '#898EA7',
+    lineHeight: fontScale(20),
   },
   feedback: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     color: '#D14343',
     textAlign: 'center',
     marginTop: scale(13),
   },
-  success: { color: '#16854A' },
   bidActions: { flexDirection: 'row', gap: scale(8), marginTop: scale(18) },
   actionButton: { flex: 1, marginTop: 0 },
 });

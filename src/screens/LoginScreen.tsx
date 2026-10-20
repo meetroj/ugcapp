@@ -1,4 +1,3 @@
-import { Alert } from '../components/AppAlert';
 /** "Welcome back" screen: email + password, Google alternative. */
 import React, { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
@@ -24,6 +23,9 @@ type Props = {
   onForgotPassword?: () => void;
   /** Sign in with Apple. iOS only; the button hides when absent. */
   onApple?: () => void;
+  /** Email kept by the parent so it carries over to the other auth forms. */
+  email?: string;
+  onEmailChange?: (email: string) => void;
 };
 
 export function LoginForm({
@@ -32,20 +34,22 @@ export function LoginForm({
   onGoogle,
   onForgotPassword,
   onApple,
+  email: emailProp,
+  onEmailChange,
 }: Props) {
-  const [email, setEmail] = useState('');
+  const [localEmail, setLocalEmail] = useState('');
+  const email = emailProp ?? localEmail;
+  const setEmail = (value: string) => {
+    setLocalEmail(value);
+    onEmailChange?.(value);
+  };
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
     if (!email.trim() || !password || loading) return;
-    if (password.length < 6) {
-      Alert.alert(
-        'Password too short',
-        'Password must contain at least 6 characters.',
-      );
-      return;
-    }
+    // No length rule here: the website only checks length at sign-up, and an
+    // older account may have a shorter password that must still be able to log in.
     setLoading(true);
     try {
       await onSubmit?.({ email, password });

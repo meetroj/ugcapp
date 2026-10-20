@@ -7,11 +7,16 @@ import { verifyWalletPayment, type WalletPaymentOrder } from '../api';
 import { scale, fontScale } from '../theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-export function checkoutHtml(order: WalletPaymentOrder) {
+export type CheckoutPrefill = { name?: string; email?: string; contact?: string };
+
+// Same name, description, prefill and colour the website's payWithRazorpay sends.
+export function checkoutHtml(order: WalletPaymentOrder, prefill: CheckoutPrefill = {}) {
   const options = JSON.stringify({
     key: order.key_id, order_id: order.order_id,
-    amount: Math.round(order.amount * 100), currency: order.currency,
-    name: 'UGCad', description: 'Add funds to wallet',
+    amount: Math.round(order.amount * 100), currency: order.currency || 'INR',
+    name: 'UGCad.io', description: `Wallet recharge - Rs. ${Number(order.amount || 0).toLocaleString('en-IN')}`,
+    prefill: { name: prefill.name || '', email: prefill.email || '', contact: prefill.contact || '' },
+    theme: { color: '#07074e' },
   }).replace(/</g, '\\u003c');
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
 <body><script>
@@ -29,10 +34,10 @@ try {
 </script></body></html>`;
 }
 
-export default function WalletCheckout({ token, order, onClose, onSuccess }: {
-  token: string; order: WalletPaymentOrder; onClose: () => void; onSuccess: () => void;
+export default function WalletCheckout({ token, order, prefill, onClose, onSuccess }: {
+  token: string; order: WalletPaymentOrder; prefill?: CheckoutPrefill; onClose: () => void; onSuccess: () => void;
 }) {
-  const html = useMemo(() => checkoutHtml(order), [order]);
+  const html = useMemo(() => checkoutHtml(order, prefill), [order, prefill]);
   const verifying = useRef(false);
   const [busy, setBusy] = useState(false);
   const close = () => { if (!verifying.current) onClose(); };

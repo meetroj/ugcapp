@@ -10,7 +10,7 @@ import { Alert } from '../components/AppAlert';
  * shared secret, the user adds it to their authenticator, and POST /2fa/verify
  * with a working code is what actually switches it on.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Clipboard,
@@ -25,6 +25,7 @@ import ScreenHeader from '../components/ScreenHeader';
 import {
   changePassword,
   deactivateAccount,
+  deleteAccount,
   disableTwoFactor,
   getTwoFactorStatus,
   setupTwoFactor,
@@ -39,8 +40,11 @@ type Props = {
   onLogout?: () => void;
 };
 
-/** Mirrors the backend's own minimum. */
-const MIN_PASSWORD = 6;
+/** Mirrors the backend's own minimum (server.py change_password: 8 characters). */
+export const MIN_PASSWORD = 8;
+
+/** The word a user must type before the account is permanently deleted. */
+export const DELETE_CONFIRM_WORD = 'DELETE';
 
 function AccountSecurity({ token, onBack, onLogout }: Props) {
   const [current, setCurrent] = useState('');
@@ -176,10 +180,36 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
     }
   }, [busy2fa, disablePassword, token]);
 
+  /** Typed confirmation for the permanent delete (required by the app stores). */
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteText, setDeleteText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const deleteRef = useRef(false);
+
+  const submitDelete = useCallback(async () => {
+    if (deleteRef.current || deleteText.trim() !== DELETE_CONFIRM_WORD) return;
+    deleteRef.current = true;
+    setDeleting(true);
+    try {
+      await deleteAccount(token);
+      // The account row is gone server-side; dropping the session returns the
+      // user to the login screens.
+      onLogout?.();
+    } catch (error) {
+      fail(
+        error,
+        'Could not delete the account right now. Please email support@ugcad.io.',
+      );
+    } finally {
+      deleteRef.current = false;
+      setDeleting(false);
+    }
+  }, [deleteText, onLogout, token]);
+
   const confirmDeactivate = useCallback(() => {
     Alert.alert(
       'Deactivate account',
-      'Your profile stops appearing to brands and you are signed out. Contact support to reactivate.',
+      'Your profile is hidden until you log back in. You can reactivate at any time by logging in again.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -391,8 +421,8 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
 
         <Text style={styles.section}>Account</Text>
         <Text style={styles.body}>
-          Deactivating hides your profile from brands and signs you out. Open
-          deals and payouts are unaffected.
+          Deactivating hides your profile and signs you out. Log in again at any
+          time to reactivate it. Open deals and payouts are unaffected.
         </Text>
         <TouchableOpacity
           style={styles.danger}
@@ -401,6 +431,66 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
         >
           <Text style={styles.primaryText}>Deactivate my account</Text>
         </TouchableOpacity>
+
+        <Text style={[styles.body, styles.deleteIntro]}>
+          Deleting permanently removes your account and all your data. This
+          cannot be undone.
+        </Text>
+        {deleteOpen ? (
+          <>
+            <Text style={styles.body}>
+              Type {DELETE_CONFIRM_WORD} to confirm.
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={deleteText}
+              onChangeText={setDeleteText}
+              placeholder={DELETE_CONFIRM_WORD}
+              placeholderTextColor="#A9ADC2"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              accessibilityLabel={`Type ${DELETE_CONFIRM_WORD} to confirm account deletion`}
+            />
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.ghost, styles.flex]}
+                onPress={() => {
+                  setDeleteOpen(false);
+                  setDeleteText('');
+                }}
+                disabled={deleting}
+                accessibilityRole="button"
+              >
+                <Text style={styles.ghostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.danger,
+                  styles.flex,
+                  (deleting || deleteText.trim() !== DELETE_CONFIRM_WORD) &&
+                    styles.disabled,
+                ]}
+                onPress={submitDelete}
+                disabled={deleting || deleteText.trim() !== DELETE_CONFIRM_WORD}
+                accessibilityRole="button"
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.primaryText}>Delete permanently</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <TouchableOpacity
+            style={styles.danger}
+            onPress={() => setDeleteOpen(true)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryText}>Delete my account</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </View>
   );
@@ -444,6 +534,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
   flex: { flex: 1 },
   noTop: { marginTop: 0 },
+  disabled: { opacity: 0.5 },
+  deleteIntro: { marginTop: scale(22) },
 
   primary: {
     marginTop: scale(14),

@@ -18,8 +18,15 @@ import {
   type AuthUser,
   type Deal,
 } from '../api';
-import DealDetails from './DealDetails';
+import DealDetails, { type Tab as DealTab } from './DealDetails';
 import AppHeader from '../components/AppHeader';
+import {
+  bookingStage,
+  needsRevision,
+  workStageIndex,
+  workStages,
+  workStatusMeta,
+} from '../dealRoom';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Work = Record<string, any> & { id: string };
@@ -122,6 +129,8 @@ function ActiveWork({
   const [tab, setTab] = useState<Tab>('Active');
   // The deal opened from a card's arrow; null keeps the list showing.
   const [openDeal, setOpenDeal] = useState<Work | null>(null);
+  // Tab the detail opens on ("See what they asked for" lands on Deliverables).
+  const [openTab, setOpenTab] = useState<DealTab | undefined>();
   const [filterOpen, setFilterOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -241,6 +250,7 @@ function ActiveWork({
         deal={openDeal}
         token={token}
         unread={unread}
+        initialTab={openTab}
         onBack={() => setOpenDeal(null)}
         onChat={() => {
           // Chat with the brand on this deal. Falls back to the inbox when the
@@ -340,25 +350,37 @@ function ActiveWork({
         )}
         </View>
         {loading && <SkeletonList count={4} lines={2} footer />}
-        {!loading && !visible.length && (
+        {!loading && failed && (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>
-              {failed
-                ? 'Could not load your work'
-                : `No ${tab.toLowerCase()} work`}
-            </Text>
-            <Text style={styles.emptyText}>
-              {failed
-                ? 'Check your connection and try again.'
-                : 'Campaigns in this stage will appear here.'}
-            </Text>
+            <Text style={styles.emptyTitle}>Could not load your work</Text>
+            <Text style={styles.emptyText}>Check your connection and try again.</Text>
+            <TouchableOpacity
+              style={styles.retry}
+              onPress={() => {
+                setRefreshing(true);
+                loadDeals();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {!loading && !failed && !visible.length && (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>{`No ${tab.toLowerCase()} work`}</Text>
+            <Text style={styles.emptyText}>Campaigns in this stage will appear here.</Text>
           </View>
         )}
         {visible.map(work => (
           <WorkCard
             key={work.id}
             work={work}
-            onOpen={() => setOpenDeal(work)}
+            onOpen={(deepTab?: DealTab) => {
+              setOpenTab(deepTab);
+              setOpenDeal(work);
+            }}
           />
         ))}
       </ScrollView>
@@ -366,32 +388,44 @@ function ActiveWork({
   );
 }
 
-function WorkCard({ work, onOpen }: { work: Work; onOpen: () => void }) {
+function WorkCard({
+  work,
+  onOpen,
+}: {
+  work: Work;
+  onOpen: (tab?: DealTab) => void;
+}) {
   const brand = stringValue(
     work.brand_name || work.business_name || work.brand?.name,
     'Brand',
   );
+  // The deal payload sends the brand logo as brand.logo_url.
   const logo = stringValue(
-    work.brand_logo || work.logo || work.brand?.logo,
+    work.brand_logo || work.logo || work.brand?.logo_url || work.brand?.logo,
     '',
   );
-  const stages = ['Accepted', 'Video Submission', 'Review', 'Payout'];
-  // The real state drives both the chip and the progress default: a card in
-  // the Cancelled tab must not read "Active", and a brand-new deal with no
-  // stage from the backend has reached nothing yet.
+  const title = stringValue(work.campaign?.title, '');
+  // The stage list drops "Shipment" for online-only deals, and the position
+  // comes from the deal state: the payload has no stage number.
+  const stages = workStages(work);
+  // The real state drives both the chip and the progress: a card in the
+  // Cancelled tab must not read "Active", and a brand-new deal has reached
+  // nothing yet. Revision / In Review / Over Time / Upcoming come from the
+  // deal itself (the website's statusMeta).
   const status = String(work.status || '').toLowerCase();
+  const meta = workStatusMeta(work);
   const chip = ['completed', 'complete'].includes(status)
     ? { label: 'Completed', tint: '#514CF2' }
     : ['cancelled', 'canceled', 'rejected'].includes(status)
     ? { label: 'Cancelled', tint: '#E5484D' }
-    : ['request', 'requested', 'pending'].includes(status)
-    ? { label: 'Requested', tint: '#E5960B' }
-    : { label: 'Active', tint: '#19B85A' };
-  const fallbackStage = chip.label === 'Completed' ? 3 : 0;
-  const currentStage = Math.max(
-    0,
-    Math.min(3, Number(work.current_stage ?? work.stage_index ?? fallbackStage)),
-  );
+    : { label: meta.label, tint: meta.color };
+  const stage = bookingStage(work);
+  const isRequest = stage === 'respond' || stage === 'counter_sent';
+  const currentStage =
+    chip.label === 'Completed'
+      ? stages.length - 1
+      : Math.max(0, Math.min(stages.length - 1, workStageIndex(work)));
+  const payout = Number(work.campaign?.budget_max || work.campaign?.budget_min || 0);
   return (
     <View style={styles.workCard}>
       <View style={styles.greenRule} />
@@ -420,6 +454,7 @@ function WorkCard({ work, onOpen }: { work: Work; onOpen: () => void }) {
               {chip.label}
             </Text>
           </View>
+          {!!title && <Text style={styles.campaignTitle} numberOfLines={1}>{title}</Text>}
           <Text style={styles.brandName}>{brand}</Text>
           <Text style={styles.meta}>
             {stringValue(work.parent_brand, brand)}
@@ -430,37 +465,76 @@ function WorkCard({ work, onOpen }: { work: Work; onOpen: () => void }) {
         </View>
         <TouchableOpacity
           style={styles.arrowButton}
-          onPress={onOpen}
+          onPress={() => onOpen()}
           accessibilityRole="button"
           accessibilityLabel="View deal details"
+          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
         >
           <Icon name="chevron" color="#FFF" />
         </TouchableOpacity>
       </View>
-      <View style={styles.progressLabels}>
-        {stages.map((stage, index) => (
-          <Text
-            key={stage}
-            style={[
-              styles.progressLabel,
-              index <= currentStage && styles.progressLabelActive,
-            ]}
+      {/* The brand's notes are only readable inside the deal; without this a
+          "Revision Requested" card is a dead end. */}
+      {needsRevision(work) && (
+        <TouchableOpacity
+          style={styles.revisionBtn}
+          onPress={() => onOpen('Deliverables')}
+          accessibilityRole="button"
+          accessibilityLabel="See what they asked for"
+          testID={`see-revision-${work.id}`}
+        >
+          <Text style={styles.revisionBtnText}>See what they asked for</Text>
+        </TouchableOpacity>
+      )}
+      {isRequest ? (
+        // Work has not started, so the stage bar would mislead: show the payout
+        // and a direct way into the booking card.
+        <View style={styles.requestRow}>
+          <View>
+            <Text style={styles.requestPay}>{`₹ ${payout.toLocaleString('en-IN')}`}</Text>
+            <Text style={styles.requestPayHint}>you'll be paid</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.respondBtn}
+            onPress={() => onOpen()}
+            accessibilityRole="button"
+            accessibilityLabel={stage === 'respond' ? 'Respond to request' : 'View proposal'}
+            testID={`respond-booking-${work.id}`}
           >
-            {stage}
-          </Text>
-        ))}
-      </View>
-      <View style={styles.progressBars}>
-        {stages.map((stage, index) => (
-          <View
-            key={stage}
-            style={[
-              styles.progressBar,
-              index <= currentStage && styles.progressBarActive,
-            ]}
-          />
-        ))}
-      </View>
+            <Text style={styles.respondBtnText}>
+              {stage === 'respond' ? 'Respond to request' : 'View proposal'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <>
+          <View style={styles.progressLabels}>
+            {stages.map((label, index) => (
+              <Text
+                key={label}
+                style={[
+                  styles.progressLabel,
+                  { width: `${Math.floor(100 / stages.length) - 1}%` },
+                  index <= currentStage && styles.progressLabelActive,
+                ]}
+              >
+                {label}
+              </Text>
+            ))}
+          </View>
+          <View style={styles.progressBars}>
+            {stages.map((label, index) => (
+              <View
+                key={label}
+                style={[
+                  styles.progressBar,
+                  index <= currentStage && styles.progressBarActive,
+                ]}
+              />
+            ))}
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -596,6 +670,52 @@ const styles = StyleSheet.create({
     color: '#25274C',
   },
   emptyText: { marginTop: scale(5), fontSize: fontScale(11), color: '#858AA3' },
+  retry: {
+    marginTop: scale(14),
+    minWidth: scale(110),
+    minHeight: scale(44),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF3',
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#3D4FD8' },
+  campaignTitle: {
+    marginTop: scale(4),
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#16183F',
+  },
+  revisionBtn: {
+    marginTop: scale(12),
+    minHeight: scale(44),
+    borderRadius: scale(10),
+    backgroundColor: '#FFF4E6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  revisionBtnText: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B45309' },
+  requestRow: {
+    marginTop: scale(14),
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  requestPay: { fontSize: fontScale(15), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#16183F' },
+  requestPayHint: { fontSize: fontScale(10), color: '#8B90AA' },
+  respondBtn: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(11),
+    backgroundColor: '#4452F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  respondBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFF' },
   workCard: {
     position: 'relative',
     overflow: 'hidden',
@@ -672,7 +792,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   progressLabel: {
-    width: '24%',
     fontSize: fontScale(8),
     textAlign: 'center',
     color: '#8C90A8',

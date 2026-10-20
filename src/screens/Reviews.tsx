@@ -9,20 +9,24 @@ import { useLiveEffect } from "../liveUpdates";
 import React, { useMemo, useState } from 'react';
 import {
   Image,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
-} from 'react-native';import { Text } from '../components/Text';
+} from 'react-native';
+import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import {
   BACKEND_URL,
+  getCampaign,
   getMe,
   getPublicProfile,
   getReviews,
   type AuthUser,
 } from '../api';
+import { loadErrorText } from '../briefs';
 import { colors, scale, fontScale } from '../theme';
 
 type Review = Record<string, any> & { id: string };
@@ -37,6 +41,8 @@ type Props = {
   unread?: number;
   /** Opens notification settings from the header bell. */
   onNotifications?: () => void;
+  /** A brand opens the reviewing creator's profile (`/creator/<id>`). */
+  onNavigate?: (path: string) => void;
 };
 
 /** Rows of the star breakdown, highest first — matches the design. */
@@ -64,48 +70,90 @@ function formatDate(value: unknown): string {
 
 type ReviewerEntry = [string, Record<string, unknown>];
 
+/** "Arushi" from "Arushi Mehta": a creator's full name is not shown to brands. */
+const firstName = (value: unknown) =>
+  String(value || '').replace(/^@+/, '').trim().split(/\s+/)[0] || '';
+
 /**
- * Looks up the users who wrote the given reviews, one request per distinct
- * reviewer, and returns a map of reviewer_id -> the display fields the card
- * reads. A failed lookup is skipped so one bad id can't blank the whole list.
+ * Looks up who wrote the given reviews (one request per distinct reviewer) and
+ * the title of each reviewed campaign. Returns reviewer_id -> name + photo and
+ * campaign_id -> title. A failed lookup is skipped so one bad id can't blank
+ * the whole list. A brand's reviewers are creators (first name only); a
+ * creator's reviewers are brands (company name).
  */
-async function loadReviewers(
+async function loadReviewDetails(
   reviews: Review[],
   token: string,
-): Promise<Map<string, Record<string, unknown>>> {
-  const ids = Array.from(
-    new Set(
-      reviews
-        .map(review => String(review.reviewer_id ?? ''))
-        .filter(id => id.length > 0),
+  creatorsReview: boolean,
+): Promise<{
+  authors: Map<string, Record<string, unknown>>;
+  titles: Map<string, string>;
+}> {
+  const distinct = (key: string) =>
+    Array.from(
+      new Set(
+        reviews.map(review => String(review[key] ?? '')).filter(id => id.length > 0),
+      ),
+    );
+
+  const [entries, titles] = await Promise.all([
+    Promise.all(
+      distinct('reviewer_id').map(async id => {
+        try {
+          const user: Record<string, any> = await getPublicProfile(token, id);
+          const nested = user.profile || {};
+          const photo =
+            user.profile_photo ||
+            user.profile_picture ||
+            nested.profile_picture ||
+            nested.profile_photo;
+          const entry: ReviewerEntry = [
+            id,
+            creatorsReview
+              ? {
+                  reviewer_name: firstName(
+                    user.full_name || nested.full_name || user.nickname || user.name,
+                  ),
+                  reviewer_photo: photo,
+                }
+              : {
+                  reviewer_name: String(
+                    user.business_name ||
+                      user.company_name ||
+                      nested.business_name ||
+                      nested.company_name ||
+                      user.nickname ||
+                      user.full_name ||
+                      '',
+                  ).replace(/^@+/, '').trim(),
+                  reviewer_photo:
+                    user.brand_logo || user.business_logo || nested.logo || photo,
+                },
+          ];
+          return entry;
+        } catch {
+          return null;
+        }
+      }),
     ),
-  );
+    Promise.all(
+      distinct('campaign_id').map(async id => {
+        try {
+          const campaign: Record<string, any> = await getCampaign(token, id);
+          return [id, String(campaign.title || '')] as [string, string];
+        } catch {
+          return null;
+        }
+      }),
+    ),
+  ]);
 
-  const entries = await Promise.all(
-    ids.map(async id => {
-      try {
-        const user: Record<string, any> = await getPublicProfile(token, id);
-        const nested = user.profile || {};
-        const entry: ReviewerEntry = [
-          id,
-          {
-            reviewer_name:
-              user.nickname || user.full_name || user.name || nested.full_name,
-            reviewer_photo:
-              user.profile_photo ||
-              user.profile_picture ||
-              nested.profile_picture ||
-              nested.profile_photo,
-          },
-        ];
-        return entry;
-      } catch {
-        return null;
-      }
-    }),
-  );
-
-  return new Map(entries.filter((entry): entry is ReviewerEntry => !!entry));
+  return {
+    authors: new Map(entries.filter((entry): entry is ReviewerEntry => !!entry)),
+    titles: new Map(
+      titles.filter((entry): entry is [string, string] => !!entry && !!entry[1]),
+    ),
+  };
 }
 
 const STAR_PATH =
@@ -201,12 +249,17 @@ function Reviews({
   onBack,
   onMessages,
   onNotifications,
+  onNavigate,
   unread = 0,
 }: Props) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [profile, setProfile] = useState<AuthUser>(session);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  // Bumped by pull-to-refresh and Retry to re-run the load below.
+  const [reloadKey, setReloadKey] = useState(0);
 
   // A brand is rated by creators, a creator by brands, so each role reads its
   // own endpoint. Everything below this line is shared between the two.
@@ -230,30 +283,39 @@ function Reviews({
           id: String((review as Review).id ?? index),
         })) as Review[];
 
-        // The brand endpoint returns raw review documents with no reviewer
-        // details, so the card would read "Creator" with a blank avatar.
-        // Resolve each distinct reviewer once and attach name + photo.
-        if (isBrand && rows.length) {
-          const authors = await loadReviewers(rows, token);
+        // The review documents carry only ids, so resolve each distinct
+        // reviewer (name + photo) and each campaign title once.
+        if (rows.length) {
+          const { authors, titles } = await loadReviewDetails(rows, token, isBrand);
           rows = rows.map(review => {
             const author = authors.get(String(review.reviewer_id ?? ''));
-            return author ? { ...review, ...author } : review;
+            const title = titles.get(String(review.campaign_id ?? ''));
+            return {
+              ...review,
+              ...(author || {}),
+              ...(title ? { campaign_title: title } : {}),
+            };
           });
         }
 
         if (!active) return;
         setReviews(rows);
+        setError('');
+      } else {
+        // Keep whatever is already on screen; say why the refresh failed.
+        setError(loadErrorText(results[0].reason, 'your reviews'));
       }
       if (results[1].status === 'fulfilled') {
         setProfile(results[1].value as AuthUser);
       }
       setLoading(false);
+      setRefreshing(false);
     });
 
     return () => {
       active = false;
     };
-  }, [isBrand, session.user_id, token]);
+  }, [isBrand, session.user_id, token, reloadKey]);
 
   // Derive everything from the ACTUAL reviews list so the summary can never
   // disagree with it (the stored aggregate had gone stale — a card showing
@@ -266,6 +328,11 @@ function Reviews({
       ? rated.reduce((sum, review) => sum + Number(review.rating), 0) /
         rated.length
       : Number(profile.average_rating) || 0;
+
+    // Distinct people who reviewed: brands for a creator, creators for a brand.
+    const parties = new Set(
+      reviews.map(review => String(review.reviewer_id ?? '')).filter(Boolean),
+    ).size;
 
     const counts = STAR_BUCKETS.map(
       bucket =>
@@ -280,6 +347,8 @@ function Reviews({
     return {
       average,
       total,
+      parties,
+      counts,
       percents,
       fiveStar: counts[0],
       fiveStarPercent: percents[0],
@@ -332,6 +401,15 @@ function Reviews({
         style={styles.body}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              setReloadKey(key => key + 1);
+            }}
+          />
+        }
       >
         <View style={styles.card}>
           <View style={styles.summaryRow}>
@@ -342,12 +420,14 @@ function Reviews({
               <Text style={styles.summaryLabel}>Average Rating</Text>
               <View style={styles.averageRow}>
                 <Text style={styles.averageValue}>
-                  {stats.average.toFixed(1)}
+                  {stats.average ? stats.average.toFixed(1) : '-'}
                 </Text>
-                <Star fill={1} size={16} />
+                <Star fill={stats.average ? 1 : 0} size={16} />
               </View>
               <Text style={styles.summaryCaption}>
-                Based on {stats.total} reviews
+                {stats.total
+                  ? `Based on ${stats.total} review${stats.total === 1 ? '' : 's'}`
+                  : 'Not rated yet'}
               </Text>
             </View>
 
@@ -366,7 +446,7 @@ function Reviews({
                     />
                   </View>
                   <Text style={styles.breakdownPercent}>
-                    {stats.percents[index]}%
+                    {stats.counts[index]} ({stats.percents[index]}%)
                   </Text>
                 </View>
               ))}
@@ -397,6 +477,23 @@ function Reviews({
               <Text style={styles.tileValue}>{stats.total}</Text>
               <Text style={styles.tileCaption}>From completed campaigns</Text>
             </View>
+
+            <View style={styles.tile}>
+              <View style={styles.tileHead}>
+                <View style={[styles.tileIcon, styles.tileIconBlue]}>
+                  <Icon name="reviews" color="#5B5CF6" size={15} />
+                </View>
+                <Text style={styles.tileTitle}>
+                  {isBrand ? 'Creators' : 'Brands Reviewed'}
+                </Text>
+              </View>
+              <Text style={styles.tileValue}>{stats.parties}</Text>
+              <Text style={styles.tileCaption}>
+                {isBrand
+                  ? stats.parties === 1 ? 'Creator worked with' : 'Creators worked with'
+                  : stats.parties === 1 ? 'Brand worked with' : 'Brands worked with'}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -416,7 +513,21 @@ function Reviews({
 
         {loading && <SkeletonList count={4} avatar lines={2} />}
 
-        {!loading && !reviews.length && (
+        {!loading && !!error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity
+              style={styles.retry}
+              onPress={() => setReloadKey(key => key + 1)}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {!loading && !error && !reviews.length && (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No reviews yet</Text>
             <Text style={styles.emptyText}>
@@ -427,7 +538,12 @@ function Reviews({
         )}
 
         {visible.map(review => (
-          <ReviewCard key={review.id} review={review} isBrand={isBrand} />
+          <ReviewCard
+            key={review.id}
+            review={review}
+            isBrand={isBrand}
+            onOpenProfile={onNavigate}
+          />
         ))}
       </ScrollView>
     </View>
@@ -437,10 +553,13 @@ function Reviews({
 function ReviewCard({
   review,
   isBrand,
+  onOpenProfile,
 }: {
   review: Review;
   /** A brand's reviews are written by creators, so the row shows the creator. */
   isBrand: boolean;
+  /** Brand view: opens the reviewing creator's profile. */
+  onOpenProfile?: (path: string) => void;
 }) {
   const author = isBrand
     ? text(
@@ -457,11 +576,25 @@ function ReviewCard({
       : review.brand_logo || review.business_logo,
   );
   const body = text(review.review || review.comment, '');
-  const campaign = text(review.campaign_type || review.campaign_name, '');
+  const campaign = text(
+    review.campaign_title || review.campaign_type || review.campaign_name,
+    'Campaign',
+  );
+  // Only a brand can open the reviewer, and only when the review names them.
+  const profilePath =
+    isBrand && onOpenProfile && review.reviewer_id
+      ? `/creator/${review.reviewer_id}`
+      : '';
 
   return (
     <View style={styles.reviewCard}>
-      <View style={styles.reviewTop}>
+      <TouchableOpacity
+        style={styles.reviewTop}
+        disabled={!profilePath}
+        onPress={() => onOpenProfile?.(profilePath)}
+        accessibilityRole={profilePath ? 'button' : undefined}
+        accessibilityLabel={profilePath ? `View ${author}'s profile` : undefined}
+      >
         <View style={styles.reviewLogo}>
           {logo ? (
             <Image source={{ uri: logo }} style={styles.reviewLogoImage} />
@@ -475,11 +608,10 @@ function ReviewCard({
           <Text style={styles.reviewBrand}>{author}</Text>
           <Stars value={Number(review.rating) || 0} />
         </View>
-        {!!campaign && (
-          <View style={styles.campaignChip}>
-            <Text style={styles.campaignChipText}>Campaign: {campaign}</Text>
-          </View>
-        )}
+        {!!profilePath && <Text style={styles.viewProfile}>View profile ›</Text>}
+      </TouchableOpacity>
+      <View style={styles.campaignChip}>
+        <Text style={styles.campaignChipText}>Campaign: {campaign}</Text>
       </View>
       {!!body && <Text style={styles.reviewBody}>{body}</Text>}
       <Text style={styles.reviewDate}>{formatDate(review.created_at)}</Text>
@@ -596,18 +728,19 @@ const styles = StyleSheet.create({
   },
   trackFill: { height: scale(5), borderRadius: scale(3), backgroundColor: '#4C5BF3' },
   breakdownPercent: {
-    width: scale(28),
+    width: scale(56),
     textAlign: 'right',
-    fontSize: fontScale(9),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
   },
 
   // --- stat tiles ---
-  tileRow: { marginTop: scale(14), flexDirection: 'row', gap: scale(10) },
+  tileRow: { marginTop: scale(14), flexDirection: 'row', flexWrap: 'wrap', gap: scale(10) },
   tile: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '45%',
     padding: scale(11),
     borderRadius: scale(12),
     borderWidth: 1,
@@ -661,6 +794,18 @@ const styles = StyleSheet.create({
     color: '#4C5BF3',
   },
   loading: { marginTop: scale(20) },
+  errorBox: {
+    marginTop: scale(10),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  retry: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
+  retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
   empty: { marginTop: scale(24), alignItems: 'center' },
   emptyTitle: {
     fontSize: fontScale(14),
@@ -712,14 +857,22 @@ const styles = StyleSheet.create({
     color: '#14153C',
   },
   starRow: { marginTop: scale(3), flexDirection: 'row', gap: scale(2) },
+  viewProfile: {
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
   campaignChip: {
+    marginTop: scale(9),
+    alignSelf: 'flex-start',
     paddingHorizontal: scale(8),
     paddingVertical: scale(4),
     borderRadius: scale(8),
     backgroundColor: '#EEF0FE',
   },
   campaignChipText: {
-    fontSize: fontScale(8),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C4DD6',

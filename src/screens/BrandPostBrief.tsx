@@ -17,6 +17,7 @@ import { Alert } from '../components/AppAlert';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   ScrollView,
@@ -26,14 +27,24 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { launchImageLibrary } from 'react-native-image-picker';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
 import {
+  BACKEND_URL,
   createCampaign,
   getBusinessProfile,
   getCampaign,
   getPublicProfile,
+  getWallet,
+  rechargeWallet,
+  submitCampaign,
+  updateCampaign,
+  uploadMedia,
+  type WalletPaymentOrder,
 } from '../api';
+import UploadProgressBar from '../components/UploadProgressBar';
+import WalletCheckout from './WalletCheckout';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -43,6 +54,12 @@ type Props = {
   onDone: (campaignId: string | null) => void;
   /** Campaign id to duplicate: its fields prefill a fresh draft to edit. */
   duplicateFrom?: string;
+  /**
+   * Server draft to resume (`?draft=<id>`, opened from the Campaigns Drafts
+   * tab). Saving then updates THAT draft and publishing promotes it, so no
+   * second campaign is ever created.
+   */
+  resumeDraftId?: string;
   /**
    * Private brief for ONE creator. The budget is fixed to that creator's
    * expected payout (the backend enforces the same figure).
@@ -419,6 +436,19 @@ const addDays = (dateString: string, days: number) => {
  */
 const DRAFT_KEY = 'ugcad.postbrief.draft';
 
+/** Money fields take digits only (the website blocks every other key). */
+const digitsOnly = (value: string) => value.replace(/\D/g, '');
+
+/** Mirrors the backend's WALLET_MIN_RECHARGE, same constant BrandWallet uses. */
+const MIN_RECHARGE = 2500;
+/** Mood board limits, same as the website. */
+const MOOD_MAX = 5;
+const MOOD_MAX_BYTES = 5 * 1024 * 1024;
+const inr = (n: number) => `Rs. ${Math.round(n).toLocaleString('en-IN')}`;
+/** Uploaded files come back as a path on our server or a full URL. */
+const mediaSrc = (url: string) =>
+  /^https?:\/\//i.test(url) ? url : `${BACKEND_URL || ''}${url}`;
+
 /**
  * What the brand is promoting. Only a physical product ships, so choosing any
  * other option drops the shipping-date requirement — same rule as the web.
@@ -565,6 +595,8 @@ type FormState = {
   tones: string[];
   pacing: string;
   referenceVideos: string[];
+  /** Uploaded mood board image URLs (up to 5), sent as `mood_images`. */
+  moodImages: string[];
   musicPreference: string;
   /**
    * Who writes the script. 'brand' means scriptText below is what the creator
@@ -635,6 +667,7 @@ const initialForm: FormState = {
   tones: [],
   pacing: 'No preference',
   referenceVideos: [''],
+  moodImages: [],
   musicPreference: 'No preference',
   scriptProvider: 'brand',
   scriptText: '',
@@ -673,6 +706,118 @@ const STEP_HINTS = [
   'Shipping, draft and final dates, a budget above zero, creator level and quality tier are all required.',
   '',
 ];
+
+/**
+ * Inverse of buildPayload: every key it sends is read back here, so a duplicated
+ * or resumed brief carries all 8 sections. Missing values fall back to
+ * initialForm. `keepPastDates` is for resuming a draft (an elapsed date is then
+ * flagged on Next); a duplicate never copies one.
+ */
+export function campaignToForm(
+  c: Record<string, any>,
+  brandName: string,
+  keepPastDates = false,
+): FormState {
+  const str = (v: any, d = '') => (v == null || v === '' ? d : String(v));
+  const arr = (v: any) => (Array.isArray(v) ? v.map(String) : []);
+  const bool = (v: any, d: boolean) => (typeof v === 'boolean' ? v : d);
+  const list = (v: any) => (arr(v).length ? arr(v) : ['']);
+  const tomorrow = addDays(todayISO(), 1);
+  const date = (d: any) => (keepPastDates || str(d) >= tomorrow ? str(d) : '');
+  const dels = Array.isArray(c.deliverable_items) ? c.deliverable_items : [];
+  const storedCat = str(c.product_category || c.category).trim();
+  const knownCat = CATEGORIES.find(
+    x => x !== OTHER_CATEGORY && x.toLowerCase() === storedCat.toLowerCase(),
+  );
+  const type = PRODUCT_TYPES.some(p => p.value === c.product_type)
+    ? str(c.product_type)
+    : initialForm.productType;
+  const bMin = Number(c.budget_min || 0);
+  const bMax = Number(c.per_video_budget || c.budget_max || 0);
+  const ranged = bMax > 0 && bMin > 0 && bMin !== bMax;
+  return {
+    ...initialForm,
+    // Brand name always comes from the profile, never the source brief.
+    brandName,
+    // Section 1: Campaign Basics
+    campaignName: str(c.title).slice(0, 120),
+    category: storedCat ? knownCat || OTHER_CATEGORY : '',
+    customCategory: storedCat && !knownCat ? storedCat : '',
+    productType: type,
+    productTypeOther: str(c.product_type_detail),
+    productName: str(c.product_name),
+    productDescription: str(c.product_description),
+    campaignHook: str(c.campaign_hook),
+    keyMessage: str(c.key_message),
+    objectives: arr(c.objectives),
+    targetAudience: str(c.target_audience),
+    language: str(c.language, initialForm.language),
+    budgetVisible: bool(c.budget_visible, initialForm.budgetVisible),
+    scriptProvider: str(c.script_provider) === 'ugc' ? 'ugc' : 'brand',
+    scriptText: str(c.script_text),
+    // Section 3: Must-Include
+    productVisible: bool(c.product_visible, initialForm.productVisible),
+    visibilitySeconds: str(c.product_visible_seconds),
+    verbalMention: bool(c.verbal_mention, initialForm.verbalMention),
+    productNames: str(c.verbal_mention_text),
+    requiredPhrases: list(c.required_phrases),
+    requiredShots: list(c.required_shots),
+    callToAction: str(c.call_to_action, initialForm.callToAction),
+    ctaLink: str(c.cta_link),
+    promoCode: str(c.promo_code),
+    hashtags: str(c.hashtags),
+    brandHandleTag: bool(c.brand_handle_tag, initialForm.brandHandleTag),
+    // Section 4: Must-Avoid
+    noCompetitors: bool(c.no_competitors, initialForm.noCompetitors),
+    competitors: str(c.competitors_text),
+    noOtherProducts: bool(c.no_other_products, initialForm.noOtherProducts),
+    noProfanity: bool(c.no_profanity, initialForm.noProfanity),
+    noPolitical: bool(c.no_political, initialForm.noPolitical),
+    avoidFilters: bool(c.avoid_filters, initialForm.avoidFilters),
+    filterTypes: str(c.filter_types_text),
+    avoidText: str(c.avoid_text),
+    // Section 5: Style Guidance
+    tones: arr(c.tone_tags),
+    pacing: str(c.pacing || c.tone_reference, initialForm.pacing),
+    musicPreference: str(c.music_preference, initialForm.musicPreference),
+    referenceVideos: list(c.reference_videos),
+    moodImages: arr(c.mood_images).slice(0, MOOD_MAX),
+    // Section 6: Usage Rights
+    platforms: arr(c.usage_platforms),
+    rightsDuration: str(c.rights_duration),
+    exclusivity: str(c.exclusivity, initialForm.exclusivity),
+    whitelisting: bool(c.whitelisting, initialForm.whitelisting),
+    modificationRights: str(c.modification_rights),
+    // Section 7: Timeline, Budget & Creator Targeting
+    productShippingBy: date(c.product_shipping_by),
+    draftDeliveryBy: date(c.draft_delivery_by),
+    finalDeliveryBy: date(c.final_delivery_by),
+    revisions: Number(c.free_revisions ?? c.revision_limit ?? 2) || 0,
+    creatorsWanted: Math.max(1, Number(c.creators_wanted) || 1),
+    budgetMode: ranged ? 'range' : 'fixed',
+    editingFee: String(c.editing_fee_per_video || ''),
+    fixedBudget: !ranged && bMax > 0 ? String(bMax) : '',
+    budgetMin: ranged ? String(bMin) : '',
+    budgetMax: ranged ? String(bMax) : '',
+    creatorLevel: str(c.creator_level),
+    qualityTier: str(c.content_quality_tier),
+    genderPreference: str(c.gender_preference, initialForm.genderPreference),
+    cityFilter: str(c.city_filter, initialForm.cityFilter),
+    nicheTags: arr(c.creator_niche_tags),
+    // Section 2: Deliverables
+    deliverables: dels.length
+      ? dels.map((d: any) => ({
+          ...createDeliverable(),
+          type: str(d.type),
+          quantity: Number(d.quantity) || 1,
+          duration: str(d.duration),
+          aspectRatios: arr(d.aspect_ratios).length ? arr(d.aspect_ratios) : ['9:16'],
+          editedRequired: !!d.edited_required,
+          editedBy: d.edited_by === 'ugc' ? 'ugc' : 'creator',
+        }))
+      : initialForm.deliverables,
+  };
+}
 
 function Icon({
   name,
@@ -1256,36 +1401,62 @@ function BrandPostBrief({
   onBack,
   onDone,
   duplicateFrom,
-  creatorId,
+  resumeDraftId,
+  creatorId: creatorIdProp,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(initialForm);
   const [busy, setBusy] = useState<'draft' | 'publish' | null>(null);
+  const busyRef = useRef(false);
   const [error, setError] = useState('');
   // Nothing is written until the saved draft has been read back, otherwise the
   // empty initial form would overwrite it on the very first render.
   const [restored, setRestored] = useState(false);
   const [resumed, setResumed] = useState(false);
+  // The ONE server draft this brief belongs to. Save Draft updates it (PATCH)
+  // and Publish promotes it (PATCH + /submit), so the brand never ends up with a
+  // copy per tap or a duplicate campaign. The ref is what the async code reads.
+  const draftIdRef = useRef<string | null>(null);
+  const [draftId, setDraftIdState] = useState<string | null>(null);
+  const setDraftId = useCallback((id: string | null) => {
+    draftIdRef.current = id;
+    setDraftIdState(id);
+  }, []);
+  // A resumed draft may be a private brief: the creator travels on the draft.
+  const [draftCreator, setDraftCreator] = useState<string | undefined>();
+  const creatorId = creatorIdProp || draftCreator;
+  // Loading a duplicate / resumed draft: visible state, never a silent blank form.
+  const [source, setSource] = useState<{
+    status: 'idle' | 'loading' | 'failed';
+    message: string;
+  }>({ status: 'idle', message: '' });
+  const [sourceTick, setSourceTick] = useState(0);
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        // A duplicate or private brief starts clean, never from a leftover draft —
-        // otherwise the draft could land after (or fill gaps in) it.
-        if (duplicateFrom || creatorId) return;
+        // A duplicate, resumed or private brief starts clean, never from a
+        // leftover draft — otherwise the draft could land after (or fill gaps
+        // in) it.
+        if (duplicateFrom || resumeDraftId || creatorIdProp) return;
         const raw = await AsyncStorage.getItem(DRAFT_KEY);
         if (active && raw) {
           const saved = JSON.parse(raw) as {
             form?: Partial<FormState>;
             step?: number;
+            draftId?: string | null;
           };
           if (saved?.form) {
             // Spread over initialForm so a draft written by an older build,
             // missing fields added since, still loads instead of throwing.
             setForm(current => ({ ...current, ...saved.form }));
             setStep(Math.min(Math.max(1, saved.step || 1), STEPS.length));
+            if (typeof saved.draftId === 'string' && saved.draftId) {
+              setDraftId(saved.draftId);
+            }
             setResumed(true);
           }
         }
@@ -1298,127 +1469,53 @@ function BrandPostBrief({
     return () => {
       active = false;
     };
-  }, []);
+  }, [creatorIdProp, duplicateFrom, resumeDraftId, setDraftId]);
 
-  // Duplicate: fetch the source campaign and prefill a fresh draft. Best-effort
-  // per field — anything that doesn't map cleanly stays default, and the brand
-  // reviews before publishing. Keep the original campaign name.
+  // Duplicate (?from=) and resume (?draft=): fetch the source campaign and
+  // prefill the form. A duplicate is a fresh brief (no draft id, so publishing
+  // makes a new copy and the source is untouched); a resumed draft keeps its id
+  // so saving updates it. Both show a notice, and a failure is visible with a
+  // Retry rather than leaving a blank form the brand might publish by mistake.
   useEffect(() => {
-    if (!duplicateFrom) return;
+    const sourceId = resumeDraftId || duplicateFrom;
+    if (!sourceId) return;
     let active = true;
+    setSource({ status: 'loading', message: '' });
     (async () => {
       try {
-        const c: any = await getCampaign(token, duplicateFrom);
-        if (!active || !c) return;
-        // Inverse of buildPayload: every key it sends is read back here, so a
-        // copy carries all 8 sections. Missing values fall back to initialForm.
-        const str = (v: any, d = '') => (v == null || v === '' ? d : String(v));
-        const arr = (v: any) => (Array.isArray(v) ? v.map(String) : []);
-        const bool = (v: any, d: boolean) => (typeof v === 'boolean' ? v : d);
-        const list = (v: any) => (arr(v).length ? arr(v) : ['']);
-        // Never copy an elapsed date into a new brief.
-        const tomorrow = addDays(todayISO(), 1);
-        const future = (d: any) => (str(d) >= tomorrow ? str(d) : '');
-        const dels = Array.isArray(c.deliverable_items) ? c.deliverable_items : [];
-        const storedCat = str(c.product_category || c.category).trim();
-        const knownCat = CATEGORIES.find(
-          x => x !== OTHER_CATEGORY && x.toLowerCase() === storedCat.toLowerCase(),
-        );
-        const type = PRODUCT_TYPES.some(p => p.value === c.product_type)
-          ? str(c.product_type)
-          : initialForm.productType;
-        const bMin = Number(c.budget_min || 0);
-        const bMax = Number(c.per_video_budget || c.budget_max || 0);
-        const ranged = bMax > 0 && bMin > 0 && bMin !== bMax;
-        setForm(cur => ({
-          ...initialForm,
-          // Brand name always comes from the profile, never the source brief.
-          brandName: cur.brandName,
-          // Section 1: Campaign Basics
-          campaignName: str(c.title).slice(0, 120),
-          category: storedCat ? knownCat || OTHER_CATEGORY : '',
-          customCategory: storedCat && !knownCat ? storedCat : '',
-          productType: type,
-          productTypeOther: str(c.product_type_detail),
-          productName: str(c.product_name),
-          productDescription: str(c.product_description),
-          campaignHook: str(c.campaign_hook),
-          keyMessage: str(c.key_message),
-          objectives: arr(c.objectives),
-          targetAudience: str(c.target_audience),
-          language: str(c.language, initialForm.language),
-          budgetVisible: bool(c.budget_visible, initialForm.budgetVisible),
-          scriptProvider: str(c.script_provider) === 'ugc' ? 'ugc' : 'brand',
-          scriptText: str(c.script_text),
-          // Section 3: Must-Include
-          productVisible: bool(c.product_visible, initialForm.productVisible),
-          visibilitySeconds: str(c.product_visible_seconds),
-          verbalMention: bool(c.verbal_mention, initialForm.verbalMention),
-          productNames: str(c.verbal_mention_text),
-          requiredPhrases: list(c.required_phrases),
-          requiredShots: list(c.required_shots),
-          callToAction: str(c.call_to_action, initialForm.callToAction),
-          ctaLink: str(c.cta_link),
-          promoCode: str(c.promo_code),
-          hashtags: str(c.hashtags),
-          brandHandleTag: bool(c.brand_handle_tag, initialForm.brandHandleTag),
-          // Section 4: Must-Avoid
-          noCompetitors: bool(c.no_competitors, initialForm.noCompetitors),
-          competitors: str(c.competitors_text),
-          noOtherProducts: bool(c.no_other_products, initialForm.noOtherProducts),
-          noProfanity: bool(c.no_profanity, initialForm.noProfanity),
-          noPolitical: bool(c.no_political, initialForm.noPolitical),
-          avoidFilters: bool(c.avoid_filters, initialForm.avoidFilters),
-          filterTypes: str(c.filter_types_text),
-          avoidText: str(c.avoid_text),
-          // Section 5: Style Guidance
-          tones: arr(c.tone_tags),
-          pacing: str(c.pacing || c.tone_reference, initialForm.pacing),
-          musicPreference: str(c.music_preference, initialForm.musicPreference),
-          referenceVideos: list(c.reference_videos),
-          // Section 6: Usage Rights
-          platforms: arr(c.usage_platforms),
-          rightsDuration: str(c.rights_duration),
-          exclusivity: str(c.exclusivity, initialForm.exclusivity),
-          whitelisting: bool(c.whitelisting, initialForm.whitelisting),
-          modificationRights: str(c.modification_rights),
-          // Section 7: Timeline, Budget & Creator Targeting
-          productShippingBy: future(c.product_shipping_by),
-          draftDeliveryBy: future(c.draft_delivery_by),
-          finalDeliveryBy: future(c.final_delivery_by),
-          revisions: Number(c.free_revisions ?? c.revision_limit ?? 2) || 0,
-          creatorsWanted: Math.max(1, Number(c.creators_wanted) || 1),
-          budgetMode: ranged ? 'range' : 'fixed',
-          editingFee: String(c.editing_fee_per_video || ''),
-          fixedBudget: !ranged && bMax > 0 ? String(bMax) : '',
-          budgetMin: ranged ? String(bMin) : '',
-          budgetMax: ranged ? String(bMax) : '',
-          creatorLevel: str(c.creator_level),
-          qualityTier: str(c.content_quality_tier),
-          genderPreference: str(c.gender_preference, initialForm.genderPreference),
-          cityFilter: str(c.city_filter, initialForm.cityFilter),
-          nicheTags: arr(c.creator_niche_tags),
-          // Section 2: Deliverables
-          deliverables: dels.length
-            ? dels.map((d: any) => ({
-                ...createDeliverable(),
-                type: str(d.type),
-                quantity: Number(d.quantity) || 1,
-                duration: str(d.duration),
-                aspectRatios: arr(d.aspect_ratios).length ? arr(d.aspect_ratios) : ['9:16'],
-                editedRequired: !!d.edited_required,
-                editedBy: d.edited_by === 'ugc' ? 'ugc' : 'creator',
-              }))
-            : initialForm.deliverables,
-        }));
-      } catch {
-        // Couldn't load the source — leave the blank form; not fatal.
+        const c: any = await getCampaign(token, sourceId);
+        if (!active) return;
+        if (!c) throw new Error('empty');
+        setForm(cur => campaignToForm(c, cur.brandName, !!resumeDraftId));
+        if (resumeDraftId) {
+          // Set only now: a failed load must never leave an id behind that a
+          // later Save Draft would PATCH with a blank form.
+          setDraftId(sourceId);
+          if (c.visibility === 'private' && c.selected_creator) {
+            setDraftCreator(String(c.selected_creator));
+          }
+          setNotice('Draft loaded - continue where you left off.');
+        } else {
+          setNotice('Copied brief loaded. Review each section, then publish.');
+        }
+        setSource({ status: 'idle', message: '' });
+      } catch (err: any) {
+        if (!active) return;
+        setSource({
+          status: 'failed',
+          message:
+            err?.name === 'NetworkError'
+              ? "You're offline. Check your connection and try again."
+              : resumeDraftId
+              ? 'Could not load that draft.'
+              : 'Could not load that brief to duplicate.',
+        });
       }
     })();
     return () => {
       active = false;
     };
-  }, [duplicateFrom, token]);
+  }, [duplicateFrom, resumeDraftId, setDraftId, sourceTick, token]);
 
   // Private brief: fetch the creator's expected payout and lock the budget to
   // it. null = still loading, 0 = the creator never set a price.
@@ -1453,10 +1550,13 @@ function BrandPostBrief({
     // A private brief is tied to one creator; parking it as the shared draft
     // would leak its locked budget into the next normal campaign.
     if (!restored || creatorId) return;
-    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ form, step })).catch(
-      () => {},
-    );
-  }, [form, step, restored, creatorId]);
+    // The server draft id rides along so a reopened form keeps updating the
+    // same draft instead of forking a new one.
+    AsyncStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ form, step, draftId }),
+    ).catch(() => {});
+  }, [form, step, restored, creatorId, draftId]);
 
   const set = useCallback(
     <K extends keyof FormState>(field: K, value: FormState[K]) =>
@@ -1615,6 +1715,20 @@ function BrandPostBrief({
     [],
   );
 
+  // Date order, re-checked on Next like the website (the picker's `min` alone
+  // cannot catch a shipping date moved after the delivery date was set, or a
+  // resumed draft whose dates have since passed): shipping from tomorrow,
+  // delivery on/after shipping, edited video on/after the raw video.
+  const shipDateOk =
+    !needsShipping ||
+    (!!form.productShippingBy && form.productShippingBy >= tomorrowISO);
+  const draftMinDate =
+    needsShipping && form.productShippingBy ? form.productShippingBy : tomorrowISO;
+  const draftDateOk = !!form.draftDeliveryBy && form.draftDeliveryBy >= draftMinDate;
+  const finalDateOk =
+    !anyEdited ||
+    (!!form.finalDeliveryBy && form.finalDeliveryBy >= form.draftDeliveryBy);
+
   /** Section gates — identical conditions to the web's isStepValid(). */
   const isStepValid = useCallback(
     (target: number) => {
@@ -1622,13 +1736,15 @@ function BrandPostBrief({
         return (
           form.campaignName.trim().length >= 3 &&
           form.campaignName.trim().length <= 80 &&
-          form.productName.trim().length >= 2 &&
+          (form.productType !== 'other' || !!form.productTypeOther.trim()) &&
+          // Website rule: any non-empty name (the backend has no minimum).
+          form.productName.trim().length > 0 &&
           form.productDescription.trim().length >= 20 &&
           form.campaignHook.trim().length >= 10 &&
           form.keyMessage.trim().length >= 10 &&
           !!resolvedCategory(form) &&
           form.objectives.length > 0 &&
-          form.targetAudience.trim().length >= 20 &&
+          form.targetAudience.trim().length >= 50 &&
           form.targetAudience.trim().length <= 200
         );
       if (target === 2)
@@ -1663,16 +1779,16 @@ function BrandPostBrief({
         );
       if (target === 7)
         return (
-          (!typeNeedsShipping(form.productType) || !!form.productShippingBy) &&
-          !!form.draftDeliveryBy &&
-          (!anyEdited || !!form.finalDeliveryBy) &&
+          shipDateOk &&
+          draftDateOk &&
+          finalDateOk &&
           budget > 0 &&
           !!form.creatorLevel &&
           !!form.qualityTier
         );
       return true;
     },
-    [budget, form, anyEdited],
+    [budget, form, shipDateOk, draftDateOk, finalDateOk],
   );
 
   /**
@@ -1688,7 +1804,8 @@ function BrandPostBrief({
           m.push('Campaign name (min 3 characters)');
         if (form.productType === 'other' && !form.productTypeOther.trim())
           m.push('Describe your product type');
-        if (form.productName.trim().length < 2) m.push('Product name');
+        if (!form.productName.trim())
+          m.push(needsShipping ? 'Product name' : "What you're promoting (name)");
         if (form.productDescription.trim().length < 20)
           m.push('Product description (min 20 characters)');
         if (form.campaignHook.trim().length < 10)
@@ -1700,8 +1817,8 @@ function BrandPostBrief({
           m.push('Type your category');
         if (form.objectives.length === 0) m.push('Campaign objective');
         const audience = form.targetAudience.trim().length;
-        if (audience < 20 || audience > 200)
-          m.push('Target audience (20–200 characters)');
+        if (audience < 50 || audience > 200)
+          m.push('Target audience (50–200 characters)');
       } else if (target === 2) {
         if (!isStepValid(2))
           m.push(
@@ -1738,17 +1855,33 @@ function BrandPostBrief({
         if (!form.exclusivity) m.push('Exclusivity');
         if (!form.modificationRights) m.push('Modification rights');
       } else if (target === 7) {
-        if (typeNeedsShipping(form.productType) && !form.productShippingBy)
-          m.push('Product shipping date');
-        if (!form.draftDeliveryBy) m.push(anyEdited ? 'Raw video date' : 'Delivery date');
-        if (anyEdited && !form.finalDeliveryBy) m.push('Edited video date');
+        if (!shipDateOk) m.push('Product shipping date (tomorrow or later)');
+        if (!draftDateOk)
+          m.push(
+            needsShipping
+              ? 'Draft delivery date (on or after shipping)'
+              : anyEdited
+              ? 'Raw video date (tomorrow or later)'
+              : 'Delivery date (tomorrow or later)',
+          );
+        if (!finalDateOk)
+          m.push('Edited video date (on or after the raw video date)');
         if (!(budget > 0)) m.push('Budget');
         if (!form.creatorLevel) m.push('Creator level');
         if (!form.qualityTier) m.push('Quality tier');
       }
       return m;
     },
-    [budget, form, isStepValid],
+    [
+      anyEdited,
+      budget,
+      draftDateOk,
+      finalDateOk,
+      form,
+      isStepValid,
+      needsShipping,
+      shipDateOk,
+    ],
   );
 
   /** The Must-Avoid rules, flattened the same way the web flattens them. */
@@ -1919,7 +2052,9 @@ function BrandPostBrief({
         editing_fee_per_video: Math.max(0, Number(form.editingFee) || 0),
         total_budget: totalBudget,
         currency: 'INR',
-        brand_name: form.brandName,
+        // No brand_name: the backend always writes it from the business profile
+        // (the website does not send it either), and PATCHing a draft with a
+        // locally built name could overwrite that.
 
         // Structured sections (BriefSectionsMixin) — queryable, not just prose.
         target_audience: form.targetAudience,
@@ -1966,6 +2101,7 @@ function BrandPostBrief({
         pacing: form.pacing,
         music_preference: form.musicPreference,
         reference_videos: form.referenceVideos.filter(Boolean),
+        mood_images: form.moodImages,
         usage_platforms: form.platforms,
         rights_duration: form.rightsDuration,
         exclusivity: form.exclusivity,
@@ -1992,65 +2128,356 @@ function BrandPostBrief({
     [avoidRules, briefText, budget, creatorId, creatorsCount, form, needsShipping, totalBudget],
   );
 
-  const submit = useCallback(
-    async (mode: 'draft' | 'publish') => {
-      if (mode === 'publish' && creatorId && !privatePrice) {
-        Alert.alert(
-          'No price set',
-          "This creator hasn't set their expected payout yet. Message them to agree on one.",
-        );
-        return;
-      }
-      // A draft may be partial; publishing must clear every section gate first.
-      if (mode === 'publish') {
-        const firstBad = STEPS.findIndex((_, index) => !isStepValid(index + 1));
-        if (firstBad >= 0) {
-          const issues = stepIssues(firstBad + 1);
-          const message = issues.length
-            ? issues.map(issue => `•  ${issue}`).join('\n')
-            : STEP_HINTS[firstBad] || 'Please complete this section.';
-          setStep(firstBad + 1);
-          setError(issues.length ? issues.join(', ') : message);
-          // Publishing jumps the brand back several sections; without the alert
-          // it is not obvious why the page moved.
-          Alert.alert(`Finish ${STEPS[firstBad]}`, message, [{ text: 'OK' }]);
-          return;
+  // Everything publishing needs, or an alert naming what is missing. A draft
+  // may be partial; publishing must clear every section gate first.
+  const checkPublishable = useCallback((): boolean => {
+    if (creatorId && !privatePrice) {
+      Alert.alert(
+        'No price set',
+        "This creator hasn't set their expected payout yet. Message them to agree on one.",
+      );
+      return false;
+    }
+    const firstBad = STEPS.findIndex((_, index) => !isStepValid(index + 1));
+    if (firstBad >= 0) {
+      const issues = stepIssues(firstBad + 1);
+      const message = issues.length
+        ? issues.map(issue => `•  ${issue}`).join('\n')
+        : STEP_HINTS[firstBad] || 'Please complete this section.';
+      setStep(firstBad + 1);
+      setError(issues.length ? issues.join(', ') : message);
+      // Publishing jumps the brand back several sections; without the alert
+      // it is not obvious why the page moved.
+      Alert.alert(`Finish ${STEPS[firstBad]}`, message, [{ text: 'OK' }]);
+      return false;
+    }
+    return true;
+  }, [creatorId, isStepValid, privatePrice, stepIssues]);
+
+  /**
+   * Saves the brief to the account as a draft. With a draft id it updates that
+   * same draft (PATCH); a stale id (deleted draft, or one left by another
+   * account: 404 / 403) falls back to creating a fresh one, like the website.
+   * Returns the draft's id.
+   */
+  const pushDraft = useCallback(
+    async (payload: Record<string, unknown>): Promise<string | null> => {
+      const existing = draftIdRef.current;
+      if (existing) {
+        try {
+          // The status travels only on create; PATCH edits fields, never state.
+          const patch = { ...payload };
+          delete patch.status;
+          await updateCampaign(token, existing, patch);
+          return existing;
+        } catch (err) {
+          const code = (err as { status?: number })?.status;
+          if (code !== 403 && code !== 404) throw err;
+          setDraftId(null);
         }
       }
+      const created = await createCampaign(token, payload, true);
+      const id = created?.id ? String(created.id) : null;
+      if (id) setDraftId(id);
+      return id;
+    },
+    [setDraftId, token],
+  );
 
+  const submit = useCallback(
+    async (mode: 'draft' | 'publish') => {
+      // One request at a time, and never while a draft/duplicate is still
+      // loading or failed to load: saving then would overwrite it with a blank form.
+      if (busyRef.current || source.status !== 'idle') return;
+      if (mode === 'publish' && !checkPublishable()) return;
+
+      busyRef.current = true;
       setBusy(mode);
       setError('');
       try {
-        // createCampaign throws an ApiError carrying the backend's `detail`,
-        // which covers the refusals this form can hit — notably the 402 for
-        // booking a creator, which must go through checkout instead.
-        const data = await createCampaign(
-          token,
-          buildPayload(mode === 'draft' ? 'draft' : 'pending_approval'),
-          mode === 'draft',
-        );
+        if (mode === 'draft') {
+          const id = await pushDraft(buildPayload('draft'));
+          if (creatorId) {
+            Alert.alert(
+              'Draft saved',
+              'Your private brief is saved as a draft. The creator has not been notified.',
+              [{ text: 'Done', onPress: () => onDone(id) }],
+            );
+          } else {
+            // Stay on the form (the local copy and draft id are kept), as the
+            // website does, so the next Save Draft updates this same draft.
+            Alert.alert(
+              'Draft saved',
+              'Saved to your account. You can finish it any time from Campaigns > Drafts.',
+            );
+          }
+          return;
+        }
+
+        const payload = buildPayload('pending_approval');
+        // The website's Publish asks for ops-curated matches; a private brief
+        // goes to its one creator instead.
+        const body = creatorId ? payload : { ...payload, match_requested: true };
+        let id: string | null = null;
+        const existing = draftIdRef.current;
+        if (existing) {
+          // Promote the saved draft instead of creating a second campaign.
+          try {
+            const patch: Record<string, unknown> = { ...body };
+            delete patch.status;
+            await updateCampaign(token, existing, patch);
+            await submitCampaign(token, existing);
+            id = existing;
+          } catch (err) {
+            // Stale / missing draft (deleted, or left by another account):
+            // publish a fresh brief. Anything else (e.g. low wallet) is real.
+            const code = (err as { status?: number })?.status;
+            if (code !== 404 && code !== 403) throw err;
+            setDraftId(null);
+          }
+        }
+        if (!id) {
+          // createCampaign throws an ApiError carrying the backend's `detail`,
+          // which covers the refusals this form can hit (e.g. a short wallet).
+          const data = await createCampaign(token, body, false);
+          id = data?.id ? String(data.id) : null;
+        }
         // The brief now lives on the server; keeping the local copy would
         // resurrect it as an unfinished draft the next time the form opens.
         await AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
+        setDraftId(null);
         if (creatorId) {
           Alert.alert(
-            mode === 'draft' ? 'Draft saved' : 'Submitted for admin review',
-            mode === 'draft'
-              ? 'Your private brief is saved as a draft. The creator has not been notified.'
-              : 'The admin team will review your private brief first. The creator receives the invitation only after approval.',
-            [{ text: 'Done', onPress: () => onDone(data?.id ? String(data.id) : null) }],
+            'Submitted for admin review',
+            'The admin team will review your private brief first. The creator receives the invitation only after approval.',
+            [{ text: 'Done', onPress: () => onDone(id) }],
           );
         } else {
-          onDone(data?.id ? String(data.id) : null);
+          Alert.alert(
+            'Brief submitted',
+            'Your budget is on hold in your wallet. Our team reviews every brief before creators can see it.',
+          );
+          onDone(id);
         }
       } catch (err: any) {
-        setError(err?.message || 'Could not save the campaign.');
+        const message = err?.message || 'Could not save the campaign.';
+        setError(message);
+        if (mode === 'draft') {
+          Alert.alert(
+            creatorId ? 'Draft not saved' : 'Saved on this device only',
+            creatorId
+              ? message
+              : `${message} Your answers are kept on this device, but the draft is not in your account yet.`,
+          );
+        }
       } finally {
+        busyRef.current = false;
         setBusy(null);
       }
     },
-    [buildPayload, creatorId, isStepValid, onDone, privatePrice, stepIssues, token],
+    [
+      buildPayload,
+      checkPublishable,
+      creatorId,
+      onDone,
+      pushDraft,
+      setDraftId,
+      source.status,
+      token,
+    ],
   );
+
+  // ---- Confirm before publishing: the budget goes ON HOLD in the wallet. ----
+  const totalVideos = totalDeliverables * creatorsCount;
+  // What the backend actually takes at publish (budget hold + listing fee); the
+  // commission is settled later, so it is not part of the up-front check.
+  const upfront = totalBudget + listingFee;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmPhase, setConfirmPhase] = useState<'confirm' | 'topup'>('confirm');
+  const [checkingWallet, setCheckingWallet] = useState(false);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [topupAmount, setTopupAmount] = useState('');
+  const [topupError, setTopupError] = useState('');
+  const [startingPayment, setStartingPayment] = useState(false);
+  const [paymentOrder, setPaymentOrder] = useState<WalletPaymentOrder | null>(null);
+  const walletBusy = useRef(false);
+
+  const openConfirm = useCallback(() => {
+    if (busyRef.current || source.status !== 'idle') return;
+    if (!checkPublishable()) return;
+    setConfirmPhase('confirm');
+    setConfirmOpen(true);
+  }, [checkPublishable, source.status]);
+
+  const continuePublish = useCallback(async () => {
+    if (walletBusy.current || busyRef.current) return;
+    walletBusy.current = true;
+    setCheckingWallet(true);
+    let balance: number | null = null;
+    try {
+      balance = Number((await getWallet(token)).available_balance) || 0;
+      setWalletBalance(balance);
+    } catch {
+      // Could not read the balance: let the backend be the judge (it refuses a
+      // short wallet with its own message) rather than blocking a valid publish.
+    }
+    walletBusy.current = false;
+    setCheckingWallet(false);
+    if (balance !== null && balance < upfront) {
+      const gap = upfront - balance;
+      // Cover the gap in clean Rs. 500 steps, never below the minimum recharge.
+      setTopupAmount(String(Math.max(Math.ceil(gap / 500) * 500, MIN_RECHARGE)));
+      setTopupError('');
+      setConfirmPhase('topup');
+      return;
+    }
+    setConfirmOpen(false);
+    await submit('publish');
+  }, [submit, token, upfront]);
+
+  const addMoney = useCallback(async () => {
+    const amount = Number(topupAmount) || 0;
+    if (amount < MIN_RECHARGE) {
+      setTopupError(`Minimum recharge is ${inr(MIN_RECHARGE)}.`);
+      return;
+    }
+    if (walletBusy.current) return;
+    walletBusy.current = true;
+    setStartingPayment(true);
+    setTopupError('');
+    try {
+      const order = await rechargeWallet(token, amount);
+      if (order.gateway !== 'razorpay' || !order.key_id || !order.order_id) {
+        throw new Error('Payment checkout is unavailable. Please try again later.');
+      }
+      // The checkout is its own full-screen modal; step our sheet aside first.
+      setConfirmOpen(false);
+      setPaymentOrder(order);
+    } catch (err: any) {
+      setTopupError(err?.message || 'Could not start the payment.');
+    } finally {
+      walletBusy.current = false;
+      setStartingPayment(false);
+    }
+  }, [token, topupAmount]);
+
+  const onPaymentSuccess = useCallback(async () => {
+    setPaymentOrder(null);
+    let balance: number | null = null;
+    try {
+      balance = Number((await getWallet(token)).available_balance) || 0;
+      setWalletBalance(balance);
+    } catch {
+      // The next Continue re-reads it.
+    }
+    setConfirmPhase('confirm');
+    setConfirmOpen(true);
+    Alert.alert(
+      'Payment successful',
+      balance !== null && balance >= upfront
+        ? 'Your wallet is topped up. Tap Continue to publish your brief.'
+        : 'Your wallet has been updated.',
+    );
+  }, [token, upfront]);
+
+  const onPaymentClose = useCallback(() => {
+    setPaymentOrder(null);
+    setConfirmPhase('topup');
+    setConfirmOpen(true);
+  }, []);
+
+  // ---- Mood board (up to 5 images, 5 MB each) and reference video upload. ----
+  const [moodBusy, setMoodBusy] = useState(false);
+  const addMoodImages = useCallback(async () => {
+    if (moodBusy) return;
+    const room = MOOD_MAX - form.moodImages.length;
+    if (room <= 0) {
+      Alert.alert('Mood board is full', `You can add up to ${MOOD_MAX} mood board images.`);
+      return;
+    }
+    const picked = await launchImageLibrary({ mediaType: 'photo', selectionLimit: room });
+    if (picked.didCancel) return;
+    const all = picked.assets || [];
+    if (picked.errorMessage && !all.length) {
+      Alert.alert('Could not open your photos', picked.errorMessage);
+      return;
+    }
+    const files = all.slice(0, room);
+    if (!files.length) return;
+    setMoodBusy(true);
+    const problems: string[] = [];
+    if (all.length > room) {
+      problems.push(`Only ${room} more image${room > 1 ? 's' : ''} can be added.`);
+    }
+    try {
+      for (const file of files) {
+        const name = file.fileName || 'Image';
+        if (!file.uri) continue;
+        if ((file.fileSize || 0) > MOOD_MAX_BYTES) {
+          problems.push(`${name} is too large. Max 5MB.`);
+          continue;
+        }
+        try {
+          const url = await uploadMedia(token, { ...file, uri: file.uri }, 'file');
+          setForm(cur => ({
+            ...cur,
+            moodImages: [...cur.moodImages, url].slice(0, MOOD_MAX),
+          }));
+        } catch (err: any) {
+          problems.push(err?.message || `Could not upload ${name}.`);
+        }
+      }
+    } finally {
+      setMoodBusy(false);
+    }
+    if (problems.length) Alert.alert('Mood board', problems.join('\n'));
+  }, [form.moodImages.length, moodBusy, token]);
+
+  const removeMoodImage = useCallback((index: number) => {
+    setForm(cur => ({
+      ...cur,
+      moodImages: cur.moodImages.filter((_, i) => i !== index),
+    }));
+  }, []);
+
+  // Which reference-video row is uploading, and how far along it is.
+  const [refUpload, setRefUpload] = useState<{ index: number; percent: number } | null>(null);
+  const uploadRefVideo = useCallback(
+    async (index: number) => {
+      if (refUpload) return;
+      const picked = await launchImageLibrary({ mediaType: 'video', selectionLimit: 1 });
+      const file = picked.assets?.[0];
+      if (picked.didCancel || !file?.uri) {
+        if (picked.errorMessage) {
+          Alert.alert('Could not open your videos', picked.errorMessage);
+        }
+        return;
+      }
+      setRefUpload({ index, percent: 0 });
+      try {
+        const url = await uploadMedia(token, { ...file, uri: file.uri }, 'file', percent =>
+          setRefUpload({ index, percent }),
+        );
+        setForm(cur => ({
+          ...cur,
+          referenceVideos: cur.referenceVideos.map((item, i) => (i === index ? url : item)),
+        }));
+      } catch (err: any) {
+        Alert.alert('Could not upload that video', err?.message || 'Please try again.');
+      } finally {
+        setRefUpload(null);
+      }
+    },
+    [refUpload, token],
+  );
+
+  const removeRefVideo = useCallback((index: number) => {
+    setForm(cur => {
+      const next = cur.referenceVideos.filter((_, i) => i !== index);
+      // Keep one (empty) row so the section always has an input.
+      return { ...cur, referenceVideos: next.length ? next : [''] };
+    });
+  }, []);
 
   // Reset scroll to the top whenever the step changes — otherwise the next
   // section opens scrolled to wherever the previous one ended (usually the
@@ -2117,6 +2544,129 @@ function BrandPostBrief({
 
   const last = step === STEPS.length;
 
+  // Review step: the website's full section list (BrandPostBrief shows the cost
+  // box below it).
+  const list = (items: string[], empty = 'None') => items.filter(Boolean).join(', ') || empty;
+  const reviewSections: { title: string; rows: [string, string][] }[] = [
+    {
+      title: 'Campaign Basics',
+      rows: [
+        ['Campaign', form.campaignName],
+        ['Brand', form.brandName],
+        ['Category', resolvedCategory(form)],
+        [
+          'Type',
+          form.productType === 'other'
+            ? form.productTypeOther || 'Other'
+            : PRODUCT_TYPES.find(p => p.value === form.productType)?.label || form.productType,
+        ],
+        ['Product', form.productName],
+        ['Product description', form.productDescription],
+        ['Hook', form.campaignHook],
+        ['Key message', form.keyMessage],
+        ['Objectives', form.objectives.join(', ')],
+        ['Video language', form.language],
+        ['Audience', form.targetAudience],
+        [
+          'Budget visibility',
+          form.budgetVisible ? 'Visible to creators' : 'Hidden from creators; flagged to admin',
+        ],
+      ],
+    },
+    {
+      title: 'Deliverables',
+      rows: form.deliverables.map((item, index): [string, string] => [
+        `Deliverable ${index + 1}`,
+        `${item.quantity} x ${item.type || 'not set'}; ${item.duration || 'no duration'}; ${item.aspectRatios.join(', ')}; deliver ${
+          item.editedRequired
+            ? `raw footage + an edited cut (edited by ${item.editedBy === 'ugc' ? 'UGC.ad' : 'creator'})`
+            : 'raw footage only'
+        }`,
+      ]),
+    },
+    {
+      title: 'Script',
+      rows: [
+        ['Written by', form.scriptProvider === 'ugc' ? 'UGC.ad (added during brief review)' : 'Brand'],
+        ...(form.scriptProvider === 'ugc'
+          ? []
+          : ([['Script', form.scriptText.trim() || 'None entered']] as [string, string][])),
+      ],
+    },
+    {
+      title: 'Must-Include Checklist',
+      rows: [
+        ['Product visible', form.productVisible ? `${form.visibilitySeconds}s minimum` : 'No'],
+        ['Verbal mention', form.verbalMention ? form.productNames : 'No'],
+        ['Required phrases', list(form.requiredPhrases)],
+        ['Required shots', list(form.requiredShots)],
+        ['CTA', form.callToAction],
+        ...(CTA_INPUT[form.callToAction]
+          ? ([[CTA_INPUT[form.callToAction].label, form.ctaLink || 'None']] as [string, string][])
+          : []),
+        ['Promo code', form.promoCode || 'None'],
+        ['Required hashtags', form.hashtags || 'None'],
+        ['Brand tag', form.brandHandleTag ? 'Yes' : 'No'],
+      ],
+    },
+    { title: 'Must-Avoid Checklist', rows: [['Restrictions', avoidRules]] },
+    {
+      title: 'Style Guidance',
+      rows: [
+        ['Tone', form.tones.join(', ')],
+        ['Pacing', form.pacing],
+        [
+          'Mood board images',
+          form.moodImages.length ? `${form.moodImages.length} added` : 'None',
+        ],
+        ['Reference videos', list(form.referenceVideos)],
+        ['Music preference', form.musicPreference],
+        ['Note', 'Guidance only; not grounds for dispute.'],
+      ],
+    },
+    {
+      title: 'Usage Rights',
+      rows: [
+        ['Platforms', form.platforms.join(', ')],
+        ['Rights duration', form.rightsDuration],
+        ['Exclusivity', form.exclusivity],
+        ['Whitelisting', form.whitelisting ? 'Yes' : 'No'],
+        ['Modification', form.modificationRights],
+      ],
+    },
+    {
+      title: 'Creator Targeting',
+      rows: [
+        ['Minimum level', form.creatorLevel],
+        ['Quality tier', form.qualityTier],
+        ['Gender preference', form.genderPreference],
+        ['City filter', form.cityFilter],
+        ['Niche tags', list(form.nicheTags)],
+      ],
+    },
+    {
+      title: 'Timeline & Budget',
+      rows: [
+        ...(needsShipping
+          ? ([['Ship by', form.productShippingBy]] as [string, string][])
+          : []),
+        [anyEdited ? 'Raw video by' : 'Delivery by', form.draftDeliveryBy],
+        ...(anyEdited
+          ? ([['Edited video by', form.finalDeliveryBy]] as [string, string][])
+          : []),
+        ['Revisions included', String(form.revisions)],
+        [
+          'Budget per video',
+          form.budgetMode === 'fixed'
+            ? inr(budget)
+            : `${inr(Number(form.budgetMin || 0))} - ${inr(budget)}`,
+        ],
+        ['Creators wanted', String(creatorsCount)],
+        ['Total videos', String(totalVideos)],
+      ],
+    },
+  ];
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -2138,7 +2688,9 @@ function BrandPostBrief({
         {/* Drafts preserve the private creator link and never notify creators. */}
           <TouchableOpacity
             onPress={() => submit('draft')}
-            disabled={busy !== null}
+            disabled={busy !== null || source.status !== 'idle'}
+            style={styles.saveDraftBtn}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
             accessibilityRole="button"
           >
             <Text style={styles.saveDraft}>
@@ -2168,6 +2720,40 @@ function BrandPostBrief({
           // Keeps the focused input above the keyboard instead of behind it.
           automaticallyAdjustKeyboardInsets
         >
+          {source.status === 'loading' && (
+            <View style={styles.resumed}>
+              <ActivityIndicator color="#0F7B43" />
+              <Text style={styles.resumedText}>
+                {resumeDraftId ? 'Loading your draft…' : 'Loading the brief to copy…'}
+              </Text>
+            </View>
+          )}
+          {source.status === 'failed' && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{source.message}</Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => setSourceTick(n => n + 1)}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading"
+              >
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {!!notice && source.status === 'idle' && (
+            <View style={styles.resumed}>
+              <Text style={styles.resumedText}>{notice}</Text>
+              <TouchableOpacity
+                onPress={() => setNotice('')}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss message"
+              >
+                <Text style={styles.resumedAction}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {resumed && (
             <View style={styles.resumed}>
               <Text style={styles.resumedText}>
@@ -2179,6 +2765,8 @@ function BrandPostBrief({
                   setForm(initialForm);
                   setStep(1);
                   setResumed(false);
+                  // A fresh brief must not keep updating the old server draft.
+                  setDraftId(null);
                   AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
                 }}
                 accessibilityRole="button"
@@ -2278,7 +2866,6 @@ function BrandPostBrief({
                   value={form.productName}
                   onChange={v => set('productName', v)}
                   placeholder="Glow Serum 30ml"
-                  min={2}
                 />
                 <Field
                   label="Campaign hook"
@@ -2323,7 +2910,7 @@ function BrandPostBrief({
                   value={form.targetAudience}
                   onChange={v => set('targetAudience', v.slice(0, 200))}
                   placeholder="Urban women 25-35 interested in clean skincare."
-                  min={20}
+                  min={50}
                   max={200}
                 />
                 <ChipGroup
@@ -2700,14 +3287,109 @@ function BrandPostBrief({
                   onToggle={v => set('musicPreference', v)}
                 />
                 <View style={styles.field}>
+                  <Text style={styles.fieldLabel}>Mood board images (up to {MOOD_MAX})</Text>
+                  {form.moodImages.length > 0 && (
+                    <View style={styles.moodGrid}>
+                      {form.moodImages.map((url, index) => (
+                        <View style={styles.moodThumb} key={`${url}-${index}`}>
+                          <Image
+                            source={{ uri: mediaSrc(url) }}
+                            style={styles.moodImg}
+                            accessibilityLabel={`Mood board image ${index + 1}`}
+                          />
+                          <TouchableOpacity
+                            style={styles.moodRemove}
+                            onPress={() => removeMoodImage(index)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove mood board image ${index + 1}`}
+                          >
+                            <Icon name="trash" color="#FFFFFF" size={14} />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={[
+                      styles.uploadBtn,
+                      (moodBusy || form.moodImages.length >= MOOD_MAX) && styles.nextBtnOff,
+                    ]}
+                    onPress={addMoodImages}
+                    disabled={moodBusy || form.moodImages.length >= MOOD_MAX}
+                    accessibilityRole="button"
+                    accessibilityLabel="Upload mood board images"
+                  >
+                    {moodBusy ? (
+                      <ActivityIndicator color="#4C5BF3" />
+                    ) : (
+                      <Text style={styles.uploadBtnText}>Upload references</Text>
+                    )}
+                  </TouchableOpacity>
+                  <Text style={styles.hint}>
+                    {form.moodImages.length}/{MOOD_MAX} added · images up to 5 MB each
+                  </Text>
+                </View>
+                <View style={styles.field}>
                   <Text style={styles.fieldLabel}>
                     Reference videos (up to 3)
                   </Text>
-                  {renderTextList(
-                    'referenceVideos',
-                    3,
-                    'Paste reference video link',
+                  {form.referenceVideos.map((item, index) => {
+                    const uploading = refUpload?.index === index;
+                    return (
+                      <View key={`ref-${index}`} style={index > 0 && styles.inputStacked}>
+                        <View style={styles.refRow}>
+                          <TextInput
+                            style={[styles.input, styles.refInput]}
+                            value={item}
+                            onChangeText={value =>
+                              updateTextItem('referenceVideos', index, value)
+                            }
+                            placeholder="Paste reference video link"
+                            placeholderTextColor="#A9ADC2"
+                            autoCapitalize="none"
+                          />
+                          <TouchableOpacity
+                            style={[styles.refBtn, !!refUpload && styles.nextBtnOff]}
+                            onPress={() => uploadRefVideo(index)}
+                            disabled={!!refUpload}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Upload reference video ${index + 1}`}
+                          >
+                            <Text style={styles.uploadBtnText}>
+                              {uploading ? '...' : 'Upload'}
+                            </Text>
+                          </TouchableOpacity>
+                          {(form.referenceVideos.length > 1 || !!item) && (
+                            <TouchableOpacity
+                              style={styles.refBtn}
+                              onPress={() => removeRefVideo(index)}
+                              disabled={uploading}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove reference video ${index + 1}`}
+                            >
+                              <Icon name="trash" color="#C4373B" size={18} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        {uploading && <UploadProgressBar percent={refUpload!.percent} />}
+                      </View>
+                    );
+                  })}
+                  {form.referenceVideos.length < 3 && (
+                    <TouchableOpacity
+                      style={styles.addRow}
+                      onPress={() => addTextItem('referenceVideos', 3)}
+                      accessibilityRole="button"
+                    >
+                      <Icon name="plus" color="#4C5BF3" size={15} />
+                      <Text style={styles.addRowText}>Add item</Text>
+                    </TouchableOpacity>
                   )}
+                  <Text style={styles.hint}>
+                    Paste a link, or upload a video file (max 400 MB). Creators see
+                    uploaded clips inline.
+                  </Text>
                 </View>
               </>
             )}
@@ -2753,6 +3435,18 @@ function BrandPostBrief({
                   }
                   onToggle={v => set('modificationRights', v)}
                 />
+                {/* Shown here as on the website, so the brand sees what the
+                    rights choices add to the price before reaching Review. */}
+                {pricingLifts.length > 0 && (
+                  <View style={styles.lifts}>
+                    <Text style={styles.liftsTitle}>Suggested pricing lifts</Text>
+                    {pricingLifts.map(lift => (
+                      <Text key={lift} style={styles.liftText}>
+                        • {lift}
+                      </Text>
+                    ))}
+                  </View>
+                )}
               </>
             )}
 
@@ -2915,7 +3609,7 @@ function BrandPostBrief({
                     required
                     keyboard="numeric"
                     value={form.fixedBudget}
-                    onChange={v => set('fixedBudget', v)}
+                    onChange={v => set('fixedBudget', digitsOnly(v))}
                     placeholder="1900"
                   />
                 ) : (
@@ -2924,7 +3618,7 @@ function BrandPostBrief({
                       label="Min budget per video (Rs.)"
                       keyboard="numeric"
                       value={form.budgetMin}
-                      onChange={v => set('budgetMin', v)}
+                      onChange={v => set('budgetMin', digitsOnly(v))}
                       placeholder="1500"
                     />
                     <Field
@@ -2932,7 +3626,7 @@ function BrandPostBrief({
                       required
                       keyboard="numeric"
                       value={form.budgetMax}
-                      onChange={v => set('budgetMax', v)}
+                      onChange={v => set('budgetMax', digitsOnly(v))}
                       placeholder="2500"
                     />
                   </>
@@ -2947,43 +3641,21 @@ function BrandPostBrief({
               </>
             )}
 
-            {step === 7 && editedQuantity > 0 && <Field label="Additional editing payout per video (₹)" editable={!creatorId} keyboard="numeric" value={form.editingFee} onChange={v => set('editingFee', v)} placeholder="1000" />}
+            {step === 7 && editedQuantity > 0 && <Field label="Additional editing payout per video (₹)" editable={!creatorId} keyboard="numeric" value={form.editingFee} onChange={v => set('editingFee', digitsOnly(v))} placeholder="1000" />}
 
             {step === 8 && (
               <>
                 <Text style={styles.sectionTitle}>Review your brief</Text>
-                <ReviewRow label="Campaign" value={form.campaignName} />
-                <ReviewRow label="Brand" value={form.brandName} />
-                <ReviewRow label="Category" value={resolvedCategory(form)} />
-                <ReviewRow label="Product" value={form.productName} />
-                <ReviewRow
-                  label="Objectives"
-                  value={form.objectives.join(', ')}
-                />
-                <ReviewRow
-                  label="Deliverables"
-                  value={form.deliverables
-                    .map(item => `${item.quantity} x ${item.type || 'not set'}`)
-                    .join(', ')}
-                />
-                <ReviewRow label="Video language" value={form.language} />
-                <ReviewRow label="Tone" value={form.tones.join(', ')} />
-                <ReviewRow
-                  label="Usage rights"
-                  value={`${form.platforms.length} platform(s) · ${
-                    form.rightsDuration || 'not set'
-                  }`}
-                />
-                <ReviewRow label="Exclusivity" value={form.exclusivity} />
-                <ReviewRow
-                  label="Creator"
-                  value={`${form.creatorLevel || 'any level'} · ${
-                    form.qualityTier || 'any tier'
-                  } · ${form.cityFilter}`}
-                />
-                <ReviewRow label="Ship by" value={form.productShippingBy} />
-                <ReviewRow label={anyEdited ? 'Raw video by' : 'Delivery by'} value={form.draftDeliveryBy} />
-                {anyEdited && <ReviewRow label="Edited video by" value={form.finalDeliveryBy} />}
+                {/* Every section, as on the website's Review step, so nothing
+                    the brand typed is hidden before they publish. */}
+                {reviewSections.map(section => (
+                  <View key={section.title} style={styles.reviewBlock}>
+                    <Text style={styles.reviewBlockTitle}>{section.title}</Text>
+                    {section.rows.map(([label, value]) => (
+                      <ReviewRow key={`${section.title}-${label}`} label={label} value={value} />
+                    ))}
+                  </View>
+                ))}
 
                 <View style={styles.summary}>
                   <ReviewRow label="Raw videos" value={`₹${budget} × ${totalDeliverables} videos × ${creatorsCount} creator(s)`} />
@@ -3066,9 +3738,13 @@ function BrandPostBrief({
             </TouchableOpacity>
           )}
           <TouchableOpacity
-            style={[styles.nextBtn, busy !== null && styles.nextBtnOff]}
-            onPress={last ? () => submit('publish') : goNext}
-            disabled={busy !== null}
+            style={[
+              styles.nextBtn,
+              (busy !== null || source.status !== 'idle') && styles.nextBtnOff,
+            ]}
+            // Publishing asks for confirmation first: the budget goes on hold.
+            onPress={last ? openConfirm : goNext}
+            disabled={busy !== null || source.status !== 'idle'}
             accessibilityRole="button"
           >
             {busy === 'publish' ? (
@@ -3081,6 +3757,114 @@ function BrandPostBrief({
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {paymentOrder && (
+        <WalletCheckout
+          token={token}
+          order={paymentOrder}
+          onClose={onPaymentClose}
+          onSuccess={onPaymentSuccess}
+        />
+      )}
+
+      {/* An in-screen sheet rather than a Modal: the payment checkout and the
+          app's alerts are Modals, and stacking Modals fails on iOS. */}
+      {confirmOpen && (
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <View style={styles.confirmCard}>
+            {confirmPhase === 'confirm' ? (
+              <>
+                <Text style={styles.confirmTitle}>Confirm publishing</Text>
+                <Text style={styles.holdCallout}>
+                  Rs. {totalDebit.toLocaleString('en-IN')} will be placed ON HOLD in your
+                  wallet, locked in secure escrow - this money is held, not spent.
+                </Text>
+                <Text style={styles.holdBreakdown}>
+                  Rs. {budget.toLocaleString('en-IN')} per raw video × {totalVideos} videos = Rs.{' '}
+                  {(budget * totalVideos).toLocaleString('en-IN')}
+                  {editedQuantity > 0
+                    ? ` + Rs. ${editingTotal.toLocaleString('en-IN')} creator editing`
+                    : ''}{' '}
+                  + Rs. {commission.toLocaleString('en-IN')} platform commission (
+                  {COMMISSION_RATE * 100}%) + Rs. {listingFee.toLocaleString('en-IN')} listing fee.
+                </Text>
+                {walletBalance !== null && (
+                  <Text style={styles.holdBreakdown}>
+                    Wallet balance: {inr(walletBalance)}
+                  </Text>
+                )}
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={styles.confirmCancel}
+                    onPress={() => setConfirmOpen(false)}
+                    disabled={checkingWallet}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.backText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmOk, checkingWallet && styles.nextBtnOff]}
+                    onPress={continuePublish}
+                    disabled={checkingWallet}
+                    accessibilityRole="button"
+                  >
+                    {checkingWallet ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.nextText}>Continue</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.confirmTitle}>Add money to your wallet</Text>
+                <Text style={styles.holdCallout}>
+                  Your wallet has {inr(walletBalance || 0)}. This brief needs{' '}
+                  {inr(upfront)} up front (budget hold plus listing fee), so you are{' '}
+                  {inr(Math.max(0, upfront - (walletBalance || 0)))} short.
+                </Text>
+                <Text style={styles.fieldLabel}>Amount to add (Rs.)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={topupAmount}
+                  onChangeText={v => {
+                    setTopupAmount(digitsOnly(v));
+                    setTopupError('');
+                  }}
+                  keyboardType="numeric"
+                  placeholder={String(MIN_RECHARGE)}
+                  placeholderTextColor="#A9ADC2"
+                />
+                <Text style={styles.hint}>Minimum recharge is {inr(MIN_RECHARGE)}.</Text>
+                {!!topupError && <Text style={[styles.hint, styles.hintBad]}>{topupError}</Text>}
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={styles.confirmCancel}
+                    onPress={() => setConfirmOpen(false)}
+                    disabled={startingPayment}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.backText}>Not now</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmOk, startingPayment && styles.nextBtnOff]}
+                    onPress={addMoney}
+                    disabled={startingPayment}
+                    accessibilityRole="button"
+                  >
+                    {startingPayment ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.nextText}>Add money</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -3110,6 +3894,139 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   headerStep: { marginTop: scale(2), fontSize: fontScale(11), color: '#777B96' },
+  saveDraftBtn: {
+    minHeight: scale(44),
+    minWidth: scale(44),
+    justifyContent: 'center',
+  },
+  moodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8), marginBottom: scale(10) },
+  moodThumb: {
+    width: scale(72),
+    height: scale(72),
+    borderRadius: scale(12),
+    overflow: 'hidden',
+    backgroundColor: '#F1F2F7',
+  },
+  moodImg: { width: '100%', height: '100%' },
+  moodRemove: {
+    position: 'absolute',
+    top: scale(4),
+    right: scale(4),
+    width: scale(24),
+    height: scale(24),
+    borderRadius: scale(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11,12,38,0.65)',
+  },
+  uploadBtn: {
+    minHeight: scale(44),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF7',
+    borderStyle: 'dashed',
+    backgroundColor: '#F3F4FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+  refRow: { flexDirection: 'row', alignItems: 'center', gap: scale(6) },
+  refInput: { flex: 1 },
+  refBtn: {
+    minWidth: scale(44),
+    minHeight: scale(44),
+    paddingHorizontal: scale(8),
+    borderRadius: scale(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4FE',
+  },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    minHeight: scale(44),
+    justifyContent: 'center',
+  },
+  retryBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#C4373B',
+  },
+  reviewBlock: {
+    marginTop: scale(14),
+    padding: scale(12),
+    paddingTop: scale(10),
+    borderRadius: scale(12),
+    backgroundColor: '#FBFBFE',
+    borderWidth: 1,
+    borderColor: '#EDEEF6',
+  },
+  reviewBlockTitle: {
+    fontSize: fontScale(13),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#4C5BF3',
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(11,12,38,0.5)',
+    paddingHorizontal: scale(22),
+    paddingTop: scale(90),
+    zIndex: 20,
+    elevation: 20,
+  },
+  confirmCard: {
+    borderRadius: scale(18),
+    backgroundColor: '#FFFFFF',
+    padding: scale(18),
+  },
+  confirmTitle: {
+    fontSize: fontScale(17),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  holdCallout: {
+    marginTop: scale(10),
+    fontSize: fontScale(13.5),
+    lineHeight: fontScale(20),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#15163F',
+  },
+  holdBreakdown: {
+    marginTop: scale(8),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(18),
+    color: '#5C6180',
+  },
+  confirmActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(18) },
+  confirmCancel: {
+    flex: 1,
+    minHeight: scale(48),
+    borderRadius: scale(13),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmOk: {
+    flex: 1,
+    minHeight: scale(48),
+    borderRadius: scale(13),
+    backgroundColor: '#1B2A6B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   saveDraft: {
     paddingHorizontal: scale(8),
     fontSize: fontScale(12),

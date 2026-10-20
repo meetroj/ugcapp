@@ -4,29 +4,39 @@
  * inside the WebView; this screen edits the same two records through the
  * business settings API so the flow never leaves the app.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';import { Text, TextInput } from '../components/Text';
+import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { Alert } from '../components/AppAlert';
+import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonForm } from '../components/Skeleton';
+import { ToastBar, useToast } from '../components/Toast';
 import {
+  BACKEND_URL,
   getBusinessCompany,
   getBusinessProfile,
+  removeBusinessLogo,
   saveBusinessCompany,
   saveBusinessProfile,
+  uploadBusinessLogo,
 } from '../api';
 import { scale, fontScale } from '../theme';
+import { BillingPanel, TeamPanel } from './BrandTeam';
 
 type Props = {
   token: string;
   onBack: () => void;
-  /** Clears the stored session and returns to the auth screens. */
+  /** Opens an app path (the wallet, for billing history). Billing hides that button without it. */
+  onNavigate?: (path: string) => void;
 };
 
 type Form = Record<string, string>;
@@ -36,8 +46,51 @@ type FieldSpec = {
   label: string;
   required?: boolean;
   multiline?: boolean;
-  keyboard?: 'default' | 'email-address' | 'phone-pad' | 'url';
+  keyboard?: 'default' | 'email-address' | 'phone-pad' | 'url' | 'number-pad';
+  /** Pick-from-list field (the website renders these as dropdowns). */
+  options?: string[];
+  /** Digits only, cut to this length (pincode). */
+  digits?: number;
 };
+
+// Same option lists as the website's Company Details form (ProfileSettings.js).
+export const BUSINESS_TYPES = [
+  'Sole Proprietorship',
+  'Partnership',
+  'LLP (Limited Liability Partnership)',
+  'Private Limited (Pvt Ltd)',
+  'One Person Company (OPC)',
+  'Public Limited',
+  'Individual / Freelancer',
+  'NGO / Non-profit',
+  'Other',
+];
+export const BUSINESS_CATEGORIES = [
+  'Fashion & Apparel',
+  'Beauty & Cosmetics',
+  'Health & Wellness',
+  'Food & Beverage',
+  'Electronics & Tech',
+  'Home & Living',
+  'Fitness & Sports',
+  'Jewellery & Accessories',
+  'Travel & Hospitality',
+  'Baby & Kids',
+  'Automotive',
+  'Finance & Fintech',
+  'Education',
+  'Gaming',
+  'Pets',
+  'Other',
+];
+export const INDIAN_STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
+  'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh',
+  'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan',
+  'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi',
+  'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+];
 
 /** The two records the page edits, each mapped to its own endpoint. */
 const PROFILE_FIELDS: FieldSpec[] = [
@@ -54,8 +107,18 @@ const PROFILE_FIELDS: FieldSpec[] = [
 ];
 
 const COMPANY_FIELDS: FieldSpec[] = [
-  { key: 'business_type', label: 'Business type', required: true },
-  { key: 'business_category', label: 'Category', required: true },
+  {
+    key: 'business_type',
+    label: 'Business type',
+    required: true,
+    options: BUSINESS_TYPES,
+  },
+  {
+    key: 'business_category',
+    label: 'Category',
+    required: true,
+    options: BUSINESS_CATEGORIES,
+  },
   { key: 'gst_number', label: 'GST number' },
   {
     key: 'billing_address',
@@ -64,7 +127,8 @@ const COMPANY_FIELDS: FieldSpec[] = [
     multiline: true,
   },
   { key: 'city', label: 'City', required: true },
-  { key: 'state', label: 'State', required: true },
+  { key: 'state', label: 'State', required: true, options: INDIAN_STATES },
+  { key: 'pincode', label: 'Pincode', keyboard: 'number-pad', digits: 6 },
   { key: 'country', label: 'Country', required: true },
 ];
 
@@ -85,6 +149,10 @@ const COMPANY_KEYS = [
   'billing_address',
   'city',
   'state',
+  // The server rebuilds the company record from this body and overwrites a
+  // missing pincode with "" (server.py update_business_settings_company), so it
+  // must be sent back on every save to be kept.
+  'pincode',
 ];
 
 const pick = (source: Record<string, any>, keys: string[]): Form => {
@@ -139,15 +207,39 @@ function Field({
   spec,
   value,
   onChange,
+  onPick,
   error,
 }: {
   spec: FieldSpec;
   value: string;
   onChange: (next: string) => void;
+  /** Opens the option sheet for a pick-from-list field. */
+  onPick?: () => void;
   error?: boolean;
 }) {
   const lowercase =
     spec.keyboard === 'email-address' || spec.keyboard === 'url';
+  if (spec.options && onPick) {
+    return (
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>
+          {spec.label}
+          {spec.required ? <Text style={styles.required}> *</Text> : null}
+        </Text>
+        <TouchableOpacity
+          style={[styles.input, styles.pickInput, error && styles.inputError]}
+          onPress={onPick}
+          accessibilityRole="button"
+          accessibilityLabel={`${spec.label}: ${value || 'not selected'}`}
+        >
+          <Text style={value ? styles.pickValue : styles.pickPlaceholder} numberOfLines={1}>
+            {value || `Select ${spec.label.toLowerCase()}`}
+          </Text>
+          <Text style={styles.pickCaret}>▾</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>
@@ -173,42 +265,122 @@ function Field({
   );
 }
 
-function BrandSettings({ token, onBack }: Props) {
-  const [tab, setTab] = useState<'profile' | 'company'>('profile');
+type Tab = 'profile' | 'company' | 'team' | 'billing';
+const TABS: Array<{ key: Tab; label: string }> = [
+  { key: 'profile', label: 'Brand' },
+  { key: 'company', label: 'Company' },
+  { key: 'team', label: 'Team' },
+  { key: 'billing', label: 'Billing' },
+];
+
+/** Relative upload paths need the backend origin before they will load. */
+const logoSrc = (url: string) =>
+  !url ? '' : /^https?:\/\//i.test(url) ? url : `${BACKEND_URL}${url}`;
+
+function BrandSettings({ token, onBack, onNavigate }: Props) {
+  const [tab, setTab] = useState<Tab>('profile');
   const [profile, setProfile] = useState<Form>({});
   const [company, setCompany] = useState<Form>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
   const [missing, setMissing] = useState<string[]>([]);
   const [kyb, setKyb] = useState('');
+  // A failed load must not leave an empty form to be saved over the real
+  // record, so each record keeps its own error with a Retry.
+  const [loadErrors, setLoadErrors] = useState<{ profile?: string; company?: string }>({});
+  const [reloadKey, setReloadKey] = useState(0);
+  const [picker, setPicker] = useState<FieldSpec | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const logoRef = useRef(false);
+  const { message: toast, show: showToast } = useToast();
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
 
     Promise.allSettled([
       getBusinessProfile(token),
       getBusinessCompany(token),
     ]).then(results => {
       if (!active) return;
+      const errors: { profile?: string; company?: string } = {};
       if (results[0].status === 'fulfilled') {
         setProfile(pick(results[0].value, PROFILE_KEYS));
+      } else {
+        errors.profile =
+          (results[0].reason as Error)?.message || 'Could not load your brand details.';
       }
       if (results[1].status === 'fulfilled') {
         setCompany(pick(results[1].value, COMPANY_KEYS));
         setKyb(String(results[1].value?.kyb_status || ''));
+      } else {
+        errors.company =
+          (results[1].reason as Error)?.message || 'Could not load your company details.';
       }
+      setLoadErrors(errors);
       setLoading(false);
     });
 
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [token, reloadKey]);
+
+  /** Pick, upload and store a new logo (POST /business/settings/logo). */
+  const changeLogo = useCallback(async () => {
+    if (logoRef.current) return;
+    const picked = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+      quality: 0.8,
+    });
+    const file = picked.assets?.[0];
+    if (!file?.uri) return;
+    logoRef.current = true;
+    setLogoBusy(true);
+    try {
+      const url = await uploadBusinessLogo(token, { ...file, uri: file.uri });
+      setProfile(prev => ({ ...prev, logo_url: url }));
+      showToast('Logo updated');
+    } catch (error: any) {
+      Alert.alert('Logo not updated', error?.message || 'Failed to upload logo');
+    } finally {
+      logoRef.current = false;
+      setLogoBusy(false);
+    }
+  }, [showToast, token]);
+
+  const removeLogo = useCallback(() => {
+    Alert.alert('Remove logo', 'Your brand logo will be removed.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          if (logoRef.current) return;
+          logoRef.current = true;
+          setLogoBusy(true);
+          try {
+            await removeBusinessLogo(token);
+            setProfile(prev => ({ ...prev, logo_url: '' }));
+            showToast('Logo removed');
+          } catch (error: any) {
+            Alert.alert('Logo not removed', error?.message || 'Failed to remove logo');
+          } finally {
+            logoRef.current = false;
+            setLogoBusy(false);
+          }
+        },
+      },
+    ]);
+  }, [showToast, token]);
 
   const save = useCallback(async () => {
+    if (savingRef.current || (tab !== 'profile' && tab !== 'company')) return;
     const onProfileTab = tab === 'profile';
     const fields = onProfileTab ? PROFILE_FIELDS : COMPANY_FIELDS;
     const values = onProfileTab ? profile : company;
@@ -224,6 +396,7 @@ function BrandSettings({ token, onBack }: Props) {
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
     setStatus(null);
     try {
@@ -243,14 +416,18 @@ function BrandSettings({ token, onBack }: Props) {
         text: error?.message || 'Could not save changes.',
       });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [company, profile, tab, token]);
 
   const onProfileTab = tab === 'profile';
+  const isForm = tab === 'profile' || tab === 'company';
   const values = onProfileTab ? profile : company;
   const setValues = onProfileTab ? setProfile : setCompany;
   const fields = onProfileTab ? PROFILE_FIELDS : COMPANY_FIELDS;
+  const tabError = tab === 'profile' ? loadErrors.profile : tab === 'company' ? loadErrors.company : '';
+  const brandInitial = String(profile.brand_name || '?').charAt(0).toUpperCase();
 
   return (
     <View style={styles.screen}>
@@ -269,7 +446,7 @@ function BrandSettings({ token, onBack }: Props) {
 
       <View style={styles.sheet}>
         <View style={styles.tabs}>
-          {(['profile', 'company'] as const).map(key => {
+          {TABS.map(({ key, label }) => {
             const active = tab === key;
             return (
               <TouchableOpacity
@@ -281,14 +458,10 @@ function BrandSettings({ token, onBack }: Props) {
                   setMissing([]);
                 }}
                 accessibilityRole="button"
+                accessibilityState={{ selected: active }}
               >
-                <Icon
-                  name={key === 'profile' ? 'person' : 'building'}
-                  color={active ? '#FFFFFF' : '#6E7391'}
-                  size={16}
-                />
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                  {key === 'profile' ? 'Brand' : 'Company'}
+                  {label}
                 </Text>
               </TouchableOpacity>
             );
@@ -309,7 +482,81 @@ function BrandSettings({ token, onBack }: Props) {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
+              {tab === 'team' && (
+                <TeamPanel token={token} onToast={showToast} />
+              )}
+              {tab === 'billing' && (
+                <BillingPanel
+                  token={token}
+                  onOpenWallet={
+                    onNavigate
+                      ? () => onNavigate('/dashboard/business/wallet')
+                      : undefined
+                  }
+                />
+              )}
+
+              {isForm && !!tabError && (
+                <View style={[styles.card, styles.loadError]}>
+                  <Text style={styles.loadErrorText}>{tabError}</Text>
+                  <TouchableOpacity
+                    style={styles.save}
+                    onPress={() => setReloadKey(key => key + 1)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.saveText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {isForm && !tabError && (
               <View style={styles.card}>
+                {onProfileTab && (
+                  <View style={styles.logoRow}>
+                    <View style={styles.logoBox}>
+                      {profile.logo_url ? (
+                        <Image
+                          source={{ uri: logoSrc(profile.logo_url) }}
+                          style={styles.logoImage}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <Text style={styles.logoInitial}>{brandInitial}</Text>
+                      )}
+                    </View>
+                    <View style={styles.logoActions}>
+                      <TouchableOpacity
+                        style={styles.logoBtn}
+                        onPress={changeLogo}
+                        disabled={logoBusy}
+                        accessibilityRole="button"
+                        accessibilityLabel={profile.logo_url ? 'Change logo' : 'Upload logo'}
+                      >
+                        {logoBusy ? (
+                          <ActivityIndicator size="small" color="#3D4FD8" />
+                        ) : (
+                          <Text style={styles.logoBtnText}>
+                            {profile.logo_url ? 'Change logo' : 'Upload logo'}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                      {!!profile.logo_url && (
+                        <TouchableOpacity
+                          style={styles.logoBtn}
+                          onPress={removeLogo}
+                          disabled={logoBusy}
+                          accessibilityRole="button"
+                          accessibilityLabel="Remove logo"
+                        >
+                          <Text style={[styles.logoBtnText, styles.logoRemoveText]}>
+                            Remove logo
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                )}
+
                 {!onProfileTab && !!kyb && (
                   <View style={styles.kybRow}>
                     <Text style={styles.kybLabel}>Verification</Text>
@@ -339,14 +586,21 @@ function BrandSettings({ token, onBack }: Props) {
                     spec={spec}
                     value={values[spec.key] || ''}
                     error={missing.includes(spec.key)}
+                    onPick={spec.options ? () => setPicker(spec) : undefined}
                     onChange={next =>
-                      setValues(prev => ({ ...prev, [spec.key]: next }))
+                      setValues(prev => ({
+                        ...prev,
+                        [spec.key]: spec.digits
+                          ? next.replace(/\D/g, '').slice(0, spec.digits)
+                          : next,
+                      }))
                     }
                   />
                 ))}
               </View>
+              )}
 
-              {!!status && (
+              {isForm && !tabError && !!status && (
                 <View
                   style={[
                     styles.status,
@@ -365,22 +619,37 @@ function BrandSettings({ token, onBack }: Props) {
                 </View>
               )}
 
-              <TouchableOpacity
-                style={[styles.save, saving && styles.saveDisabled]}
-                onPress={save}
-                disabled={saving}
-                accessibilityRole="button"
-              >
-                {saving ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.saveText}>Save changes</Text>
-                )}
-              </TouchableOpacity>
+              {isForm && !tabError && (
+                <TouchableOpacity
+                  style={[styles.save, saving && styles.saveDisabled]}
+                  onPress={save}
+                  disabled={saving}
+                  accessibilityRole="button"
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.saveText}>Save changes</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </ScrollView>
           </KeyboardAvoidingView>
         )}
       </View>
+
+      <ChoiceSheet
+        visible={!!picker}
+        title={picker ? `Select ${picker.label.toLowerCase()}` : ''}
+        options={(picker?.options || []).map(option => ({
+          label: option,
+          onPress: () => {
+            if (picker) setCompany(prev => ({ ...prev, [picker.key]: option }));
+          },
+        }))}
+        onClose={() => setPicker(null)}
+      />
+      <ToastBar message={toast} />
     </View>
   );
 }
@@ -514,6 +783,61 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   inputError: { borderColor: '#E5484D', backgroundColor: '#FFF6F6' },
+  pickInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pickValue: { flex: 1, fontSize: fontScale(15), color: '#15163F' },
+  pickPlaceholder: { flex: 1, fontSize: fontScale(15), color: '#A9ADC2' },
+  pickCaret: { fontSize: fontScale(14), color: '#7E829D', marginLeft: scale(8) },
+
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(14),
+    marginBottom: scale(4),
+  },
+  logoBox: {
+    width: scale(72),
+    height: scale(72),
+    borderRadius: scale(16),
+    backgroundColor: '#EEF0FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  logoImage: { width: '100%', height: '100%' },
+  logoInitial: {
+    fontSize: fontScale(26),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#3D4FD8',
+  },
+  logoActions: { flex: 1, gap: scale(8) },
+  logoBtn: {
+    minHeight: scale(44),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF3',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: scale(12),
+  },
+  logoBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#3D4FD8',
+  },
+  logoRemoveText: { color: '#C4373B' },
+  loadError: { marginBottom: scale(12) },
+  loadErrorText: {
+    fontSize: fontScale(13),
+    color: '#C4373B',
+    marginBottom: scale(8),
+  },
 
   status: {
     marginTop: scale(14),

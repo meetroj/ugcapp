@@ -52,8 +52,16 @@ test('creator refresh keeps the previous upload and revised upload adds a new ve
   expect(getMyDeals).toHaveBeenCalledWith('t');
   expect(button('Upload revised video')).toBeTruthy();
   (getMyDeals as jest.Mock).mockResolvedValue([next]);
+  // The button opens the submit sheet: pick files, describe the work, submit.
   await act(async () => { await button('Upload revised video').props.onPress(); });
-  expect(submitWork).toHaveBeenCalledWith('t', 'c1', expect.objectContaining({ work_files: ['https://cdn.example.com/new.mp4'] }));
+  expect(content(tree.toJSON())).toContain('The brand asked for changes');
+  await act(async () => { await button('Add files to Upload files').props.onPress(); });
+  expect(uploadMedia).toHaveBeenCalled();
+  await act(async () => { tree.root.findByProps({ testID: 'work-description' }).props.onChangeText('Fixed the opening'); });
+  await act(async () => { await button('Submit work for review').props.onPress(); });
+  expect(submitWork).toHaveBeenCalledWith('t', 'c1', expect.objectContaining({
+    work_files: ['https://cdn.example.com/new.mp4'], description: 'Fixed the opening',
+  }));
   expect(tree.root.findAllByType(TouchableOpacity).filter((node: any) => content(node) === 'Preview')).toHaveLength(2);
   expect(content(tree.toJSON())).not.toContain('Upload revised video');
 });

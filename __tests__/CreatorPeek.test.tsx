@@ -96,7 +96,7 @@ test('the peek leads with a clip that opens a playable video', async () => {
 });
 
 
-test('Recent work exposes three playable clip buttons', async () => {
+test('Recent work exposes up to six playable clip buttons, like the website', async () => {
   const tree = await open();
   const players = tree.root.findAll(
     n =>
@@ -107,8 +107,8 @@ test('Recent work exposes three playable clip buttons', async () => {
   // Counted by distinct clip, not by node: the test mock forwards Video's
   // props to a View, so every player matches twice.
   const clips = new Set(players.map(n => n.props.accessibilityLabel));
-  // The fixture supplies four; the section is capped at three.
-  expect(clips.size).toBe(3);
+  // The fixture supplies four; the website's preview shows up to six.
+  expect(clips.size).toBe(4);
 });
 
 test('the stat rows carry no line between them', async () => {

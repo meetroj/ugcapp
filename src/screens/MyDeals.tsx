@@ -4,9 +4,14 @@ import { useLiveEffect } from "../liveUpdates";
  * Lists the signed-in creator's deals from GET /api/deals/my, which the backend
  * (server.py) already serializes for the viewer's side, so `primary_next_action`
  * and the countdown are ready to display as-is.
+ *
+ * Like the website hub (MyDealsHubPage.js) it has three tabs: Active Deals,
+ * Requested Deals (direct bookings waiting for the creator's answer) and
+ * My Bids. Declined and cancelled deals are not listed under Active.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -16,8 +21,19 @@ import {
 import { Text } from '../components/Text';
 import ScreenHeader from '../components/ScreenHeader';
 import DealDetails from './DealDetails';
+import MyBids from './MyBids';
 import { SkeletonList } from '../components/Skeleton';
-import { getMyDeals, type Deal } from '../api';
+import { BACKEND_URL, getMyDeals, type Deal } from '../api';
+import {
+  activeMeta,
+  bookingStage,
+  dealAmount,
+  findDeal,
+  HUB_TABS,
+  parseHubTab,
+  splitHub,
+  type HubTab,
+} from '../dealRoom';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -35,32 +51,22 @@ type Props = {
    * Open straight into this deal's detail once the list loads. Set when the
    * user arrived from a notification or a website link that named a deal
    * ('/my-deals?campaign=<id>'), which used to drop them on the bare list.
+   * Accepts the campaign id (campaign.id) or the DEAL-xxxx id.
    */
   focusDealId?: string;
+  /**
+   * Tab to start on, for '/my-deals?tab=requested' (booking-request
+   * notifications): 'active' | 'requested' | 'bids'.
+   */
+  initialTab?: HubTab | string;
+  /** Empty-state "Browse Campaigns" button; hidden when not provided. */
+  onBrowse?: () => void;
 };
 
 const money = (value: unknown) =>
   `₹ ${Number(value || 0).toLocaleString('en-IN', {
     maximumFractionDigits: 0,
   })}`;
-
-/**
- * Colour for a deal state. The backend's state machine uses long labels like
- * "Paid - Complete", so match loosely rather than enumerating every state.
- */
-function stateTint(state: string): { bg: string; fg: string } {
-  const s = state.toLowerCase();
-  if (s.includes('paid') || s.includes('complete')) {
-    return { bg: '#E2F7EE', fg: '#1FA971' };
-  }
-  if (s.includes('dispute') || s.includes('cancel')) {
-    return { bg: '#FDE8E8', fg: '#C0392B' };
-  }
-  if (s.includes('revision') || s.includes('await')) {
-    return { bg: '#FFF4DE', fg: '#B4790B' };
-  }
-  return { bg: '#EEEFFF', fg: '#5B5CF6' };
-}
 
 /** "in 12h" / "in 3d" — how long until the current step is due. */
 function countdown(hours: unknown): string {
@@ -70,6 +76,34 @@ function countdown(hours: unknown): string {
   return `in ${Math.round(n / 24)}d`;
 }
 
+// A raw Mongo ObjectId is never a real name; never show one as the brand.
+const isObjectId = (value: string) => /^[0-9a-f]{24}$/i.test(value);
+
+function brandName(deal: Deal): string {
+  const raw = String(
+    (deal.brand as Record<string, any>)?.name ||
+      (deal.campaign as Record<string, any>)?.brand_name ||
+      '',
+  )
+    .replace(/^@+/, '')
+    .trim();
+  return raw && !isObjectId(raw) ? raw : 'Brand';
+}
+
+function BrandAvatar({ deal }: { deal: Deal }) {
+  const logo = String((deal.brand as Record<string, any>)?.logo_url || '');
+  const uri = logo ? (/^https?:\/\//i.test(logo) ? logo : `${BACKEND_URL}${logo}`) : '';
+  return (
+    <View style={styles.avatar}>
+      {uri ? (
+        <Image source={{ uri }} style={styles.avatarImg} />
+      ) : (
+        <Text style={styles.avatarText}>{brandName(deal).charAt(0).toUpperCase()}</Text>
+      )}
+    </View>
+  );
+}
+
 function MyDeals({
   token,
   onBack,
@@ -77,8 +111,11 @@ function MyDeals({
   onOpenThread,
   unread,
   focusDealId,
+  initialTab,
+  onBrowse,
 }: Props) {
   const [openDeal, setOpenDeal] = useState<Deal | null>(null);
+  const [tab, setTab] = useState<HubTab>(parseHubTab(initialTab));
   // A deep link names the deal before the list exists, so the open is deferred
   // until the fetch lands. Cleared once used so closing the detail returns to
   // the list rather than immediately reopening it.
@@ -87,6 +124,11 @@ function MyDeals({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+
+  // The route can change tab while this screen stays mounted.
+  useEffect(() => {
+    if (initialTab) setTab(parseHubTab(initialTab));
+  }, [initialTab]);
 
   // Returns the list it fetched so a caller can pick a deal straight out of
   // it; reading `items` after calling this would see the pre-fetch state.
@@ -113,14 +155,11 @@ function MyDeals({
     };
   }, [load]);
 
-  // The link can name either id the backend exposes for a deal, so match both.
+  // The link names the campaign uuid (campaign.id) or "DEAL-xxxx". The payload
+  // has no top-level campaign_id, so findDeal matches every id a deal exposes.
   useEffect(() => {
     if (!pendingFocus || !items.length) return;
-    const hit = items.find(
-      deal =>
-        String(deal.deal_id) === pendingFocus ||
-        String((deal as Record<string, any>).campaign_id) === pendingFocus,
-    );
+    const hit = findDeal(items, pendingFocus);
     setPendingFocus(undefined);
     if (hit) setOpenDeal(hit);
   }, [items, pendingFocus]);
@@ -129,6 +168,12 @@ function MyDeals({
     setRefreshing(true);
     await load();
     setRefreshing(false);
+  }, [load]);
+
+  const retry = useCallback(async () => {
+    setLoading(true);
+    await load();
+    setLoading(false);
   }, [load]);
 
   // Detail view replaces the list in place, matching ActiveWork — no navigator
@@ -150,9 +195,9 @@ function MyDeals({
             onMessages?.();
           }
         }}
-        // A deal action (receipt, dispute, revision reply) changes the deal on
-        // the server. Refetch and hand the detail view the fresh copy, or it
-        // keeps rendering the state the action just moved past.
+        // A deal action (receipt, revision reply, booking answer) changes the
+        // deal on the server. Refetch and hand the detail view the fresh copy,
+        // or it keeps rendering the state the action just moved past.
         onChanged={async () => {
           const fresh = await load();
           setOpenDeal(current => {
@@ -166,6 +211,21 @@ function MyDeals({
     );
   }
 
+  // My Bids is its own screen; it replaces the hub in place, like a deal does.
+  if (tab === 'bids') {
+    return (
+      <MyBids
+        token={token}
+        unread={unread}
+        onBack={() => setTab('active')}
+        onMessages={onMessages}
+      />
+    );
+  }
+
+  const { active, requested } = splitHub(items);
+  const rows = tab === 'requested' ? requested : active;
+
   return (
     <View style={styles.screen}>
       <ScreenHeader
@@ -175,6 +235,28 @@ function MyDeals({
         unread={unread}
       />
       <View style={styles.sheet}>
+        <View style={styles.tabs}>
+          {HUB_TABS.map(item => {
+            const on = tab === item.key;
+            const count =
+              item.key === 'active' ? active.length : item.key === 'requested' ? requested.length : null;
+            return (
+              <TouchableOpacity
+                key={item.key}
+                style={[styles.tab, on && styles.tabOn]}
+                onPress={() => setTab(item.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={item.label}
+              >
+                <Text style={[styles.tabText, on && styles.tabTextOn]} numberOfLines={1}>
+                  {item.label}
+                  {count !== null && !loading ? ` (${count})` : ''}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
         {loading ? (
           <View style={styles.content}>
             <SkeletonList count={4} lines={2} footer />
@@ -187,58 +269,100 @@ function MyDeals({
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
             }
           >
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-
-            {!error && !items.length ? (
-              <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>No deals yet</Text>
-                <Text style={styles.emptyBody}>
-                  Apply to a campaign from Browse Campaigns - accepted
-                  applications turn into deals and show up here.
-                </Text>
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.error}>{error}</Text>
+                <TouchableOpacity style={styles.retry} onPress={retry} accessibilityRole="button" accessibilityLabel="Retry">
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
 
-            {items.map((deal, index) => {
-              const state = String(deal.current_state || '');
-              const tint = stateTint(state);
+            {!error && !rows.length ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>
+                  {tab === 'requested' ? 'No requests right now' : 'No active deals yet'}
+                </Text>
+                <Text style={styles.emptyBody}>
+                  {tab === 'requested'
+                    ? 'When a brand books you directly or proposes a custom deal, the invite lands here to accept, decline, or counter.'
+                    : 'Once you accept a booking or a brand picks your bid, your live deals show up here.'}
+                </Text>
+                {tab === 'active' && !!onBrowse && (
+                  <TouchableOpacity style={styles.cta} onPress={onBrowse} accessibilityRole="button">
+                    <Text style={styles.ctaText}>Browse Campaigns</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : null}
+
+            {rows.map((deal, index) => {
               const title =
                 (deal.campaign?.title as string) || 'Untitled campaign';
-              const brand =
-                ((deal.brand as Record<string, unknown>)?.name as string) || '';
-              const amount = (deal.my_bid as Record<string, unknown>)?.amount;
+              const brand = brandName(deal);
+              const meta = activeMeta(deal);
+              const stage = bookingStage(deal);
+              const countered = stage === 'counter_sent';
               const due = countdown(deal.deadline_countdown_hours);
+              const priv = !!(deal.campaign as Record<string, any>)?.direct_booking;
+              const requestCard = tab === 'requested';
+              const videos = Number((deal.campaign as Record<string, any>)?.video_count) || 1;
               return (
                 <TouchableOpacity
                   key={deal.deal_id || `deal-${index}`}
-                  style={styles.card}
+                  style={[styles.card, { borderLeftColor: requestCard ? '#4452f0' : meta.color }]}
                   activeOpacity={0.85}
                   onPress={() => setOpenDeal(deal)}
                   accessibilityRole="button"
                 >
                   <View style={styles.cardTop}>
-                    <Text style={styles.title} numberOfLines={2}>
-                      {title}
-                    </Text>
-                    <View style={[styles.chip, { backgroundColor: tint.bg }]}>
-                      <Text style={[styles.chipText, { color: tint.fg }]}>
-                        {state}
+                    <BrandAvatar deal={deal} />
+                    <View style={styles.cardLead}>
+                      <View style={styles.badges}>
+                        {requestCard ? (
+                          <View style={[styles.chip, countered ? styles.chipWarn : styles.chipInfo]}>
+                            <Text style={[styles.chipText, countered ? styles.chipWarnText : styles.chipInfoText]} numberOfLines={1}>
+                              {countered ? 'Counter sent - awaiting brand' : 'Awaiting your response'}
+                            </Text>
+                          </View>
+                        ) : (
+                          <View style={[styles.chip, { backgroundColor: `${meta.color}22` }]}>
+                            <Text style={[styles.chipText, { color: meta.color }]} numberOfLines={1}>
+                              {meta.label}
+                            </Text>
+                          </View>
+                        )}
+                        {(priv || requestCard) && (
+                          <View style={styles.privChip}>
+                            <Text style={styles.privText}>
+                              {requestCard ? (countered ? 'Custom price' : 'Private invite') : 'Private'}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.title} numberOfLines={2}>
+                        {title}
+                      </Text>
+                      <Text style={styles.brand} numberOfLines={1}>
+                        {requestCard ? `${brand} · ${videos} video(s)` : brand}
                       </Text>
                     </View>
                   </View>
 
-                  {brand ? (
-                    <Text style={styles.brand} numberOfLines={1}>
-                      {brand}
-                    </Text>
-                  ) : null}
-
                   <View style={styles.meta}>
                     <View>
-                      <Text style={styles.metaLabel}>Your bid</Text>
-                      <Text style={styles.metaValue}>{money(amount)}</Text>
+                      <Text style={styles.metaLabel}>
+                        {requestCard ? (countered ? 'You countered' : "You'll get") : 'Escrow'}
+                      </Text>
+                      <Text style={styles.metaValue}>
+                        {money(
+                          countered
+                            ? (deal.campaign as Record<string, any>)?.proposed_amount
+                            : dealAmount(deal),
+                        )}
+                      </Text>
                     </View>
-                    {deal.primary_next_action ? (
+                    {!requestCard && deal.primary_next_action ? (
                       <View style={styles.metaRight}>
                         <Text style={styles.metaLabel}>Next step</Text>
                         <Text style={styles.metaValue} numberOfLines={1}>
@@ -248,6 +372,14 @@ function MyDeals({
                       </View>
                     ) : null}
                   </View>
+
+                  {requestCard && (
+                    <View style={styles.review}>
+                      <Text style={styles.reviewText}>
+                        {countered ? 'View counter' : 'Accept · decline · counter'}
+                      </Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               );
             })}
@@ -268,16 +400,54 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
+  tabs: {
+    flexDirection: 'row',
+    gap: scale(6),
+    paddingHorizontal: scale(14),
+    paddingTop: scale(12),
+  },
+  tab: {
+    flex: 1,
+    minHeight: scale(44),
+    paddingHorizontal: scale(6),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E5E6F0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabOn: { backgroundColor: '#171A5C', borderColor: '#171A5C' },
+  tabText: {
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#626784',
+  },
+  tabTextOn: { color: '#FFFFFF' },
   content: { padding: scale(14), paddingBottom: scale(28) },
   loading: { marginTop: scale(40) },
+  errorBox: { margin: scale(12), alignItems: 'center' },
   error: {
-    margin: scale(12),
     fontSize: fontScale(12),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',
     textAlign: 'center',
   },
+  retry: {
+    marginTop: scale(10),
+    minWidth: scale(110),
+    minHeight: scale(44),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#D9DCF3',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#3D4FD8' },
   empty: { marginTop: scale(60), paddingHorizontal: scale(28), alignItems: 'center' },
   emptyTitle: {
     fontSize: fontScale(15),
@@ -292,6 +462,16 @@ const styles = StyleSheet.create({
     color: '#7E829D',
     textAlign: 'center',
   },
+  cta: {
+    marginTop: scale(16),
+    minHeight: scale(46),
+    paddingHorizontal: scale(22),
+    borderRadius: scale(12),
+    backgroundColor: '#171A5C',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaText: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFFFFF' },
   card: {
     padding: scale(14),
     marginBottom: scale(11),
@@ -299,23 +479,47 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#ECECF6',
+    borderLeftWidth: scale(4),
   },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardLead: { flex: 1, marginLeft: scale(11) },
+  avatar: {
+    width: scale(44),
+    height: scale(44),
+    borderRadius: scale(12),
+    backgroundColor: '#EEF0FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImg: { width: '100%', height: '100%' },
+  avatarText: { fontSize: fontScale(18), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#4452F0' },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(6), marginBottom: scale(6) },
   title: {
-    flex: 1,
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#181943',
   },
   chip: {
-    marginLeft: scale(9),
     paddingHorizontal: scale(9),
     paddingVertical: scale(4),
     borderRadius: scale(9),
+    maxWidth: '100%',
   },
-  chipText: { fontSize: fontScale(9), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
-  brand: { marginTop: scale(5), fontSize: fontScale(11), color: '#7E829D' },
+  chipText: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
+  chipInfo: { backgroundColor: '#EEF0FF' },
+  chipInfoText: { color: '#3730A3' },
+  chipWarn: { backgroundColor: '#FFF7ED' },
+  chipWarnText: { color: '#B45309' },
+  privChip: {
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(4),
+    borderRadius: scale(9),
+    backgroundColor: '#F1F3FA',
+  },
+  privText: { fontSize: fontScale(10), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#64748B' },
+  brand: { marginTop: scale(3), fontSize: fontScale(11), color: '#7E829D' },
   meta: {
     marginTop: scale(13),
     paddingTop: scale(11),
@@ -333,6 +537,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#5B5CF6',
   },
+  review: {
+    marginTop: scale(12),
+    minHeight: scale(44),
+    borderRadius: scale(10),
+    backgroundColor: '#07074E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFFFFF' },
 });
 
 export default MyDeals;

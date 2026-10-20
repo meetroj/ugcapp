@@ -11,6 +11,9 @@ export function submissionHistory(deals: Array<Record<string, any>>, campaignId?
       historical: true,
       creator_name: deal.creator?.name || deal.creator?.nickname || 'Creator',
       creator: deal.creator?.name || deal.creator?.nickname || 'Creator',
+      // So a previous-upload row can open its campaign and message the creator.
+      campaignId: String(campaign.id || deal.campaign_id || ''),
+      creatorId: deal.creator?.id ?? deal.creator_id,
       title: campaign.title || 'Submission',
       status: version.status || 'submitted',
       submittedAt: version.submitted_at,

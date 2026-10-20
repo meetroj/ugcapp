@@ -4,8 +4,9 @@ import { useLiveEffect } from "../liveUpdates";
  * /dashboard/business/shipments page. There is no brand-wide shipments
  * endpoint, so this derives the list from the brand's campaigns that have a
  * selected creator and reads each one's shipment from
- * GET /api/shipment/{campaign_id}. Read-only: creating a shipment request
- * needs pickup addresses and product dimensions, so that stays on the web.
+ * GET /api/shipment/{campaign_id}. Like the website, it lists the campaigns
+ * that need a shipment (requires_shipment); starting one happens on the
+ * detail screen.
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -19,7 +20,8 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonList } from '../components/Skeleton';
-import { getCampaigns, getShipment } from '../api';
+import { ApiError, NetworkError, getCampaigns, getShipment } from '../api';
+import { isMockShipment, needsShipment, shipmentStatus } from '../shipmentStatus';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -38,6 +40,8 @@ type Row = {
   title: string;
   budget: number;
   creators: number;
+  /** False until a creator is selected: nothing to ship yet. */
+  hasCreator: boolean;
   /** null while loading or when the campaign has no shipment yet. */
   shipment: Record<string, any> | null;
 };
@@ -52,52 +56,33 @@ const TABS = [
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
 
+/** "29 Aug 2026" or ''. */
+const shipDate = (value: unknown): string => {
+  if (!value) return '';
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
 const rupees = (value: unknown) =>
   `Rs. ${(Number(value) || 0).toLocaleString('en-IN', {
     maximumFractionDigits: 0,
   })}`;
 
-/** Maps a shipment doc onto the chip shown on the row. */
-function statusOf(shipment: Record<string, any> | null): {
-  key: string;
-  label: string;
-  bg: string;
-  fg: string;
-} {
-  const raw = String(shipment?.status || '').toLowerCase();
-  if (!shipment) {
-    return {
-      key: 'none',
-      label: 'Not requested',
-      bg: '#F1F2F8',
-      fg: '#6E7391',
-    };
-  }
-  if (raw === 'delivered' || shipment.received_at) {
-    return {
-      key: 'delivered',
-      label: 'Delivered',
-      bg: '#E2F7EE',
-      fg: '#0F7B43',
-    };
-  }
-  if (raw === 'shipped' || shipment.tracking_number) {
-    return {
-      key: 'transit',
-      label: 'In transit',
-      bg: '#E4F0FF',
-      fg: '#1F62B8',
-    };
-  }
-  return {
-    key: 'awaiting',
-    label: shipment.awaiting_creator_address
-      ? 'Awaiting address'
-      : 'Awaiting label',
-    bg: '#FFF3DF',
-    fg: '#B4741B',
-  };
-}
+/** Chip + action word per row, from the shared status mapping (see shipmentStatus.ts). */
+const statusOf = (row: Row) => shipmentStatus(row.shipment, row.hasCreator);
+const actionOf = (row: Row) => {
+  const key = statusOf(row).key;
+  return key === 'nocreator'
+    ? 'Select'
+    : key === 'delivered'
+    ? 'View'
+    : key === 'transit' || key === 'pickup'
+    ? 'Track'
+    : 'Ship';
+};
+
 function Icon({
   name,
   color = '#7C819C',
@@ -152,18 +137,16 @@ function BrandShipments({
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // A failed load must not read as "No shipments".
+  const [loadError, setLoadError] = useState('');
 
   const load = useCallback(async () => {
     try {
       const list = await getCampaigns(token);
 
-      // Only campaigns with a creator on board can have a physical shipment.
-      const shippable = list.filter(
-        campaign =>
-          campaign.selected_creator ||
-          (Array.isArray(campaign.selected_creators) &&
-            campaign.selected_creators.length > 0),
-      );
+      // Same set as the website: briefs that need a physical shipment. Ones
+      // with no creator yet stay listed as "Awaiting creator".
+      const shippable = list.filter(needsShipment);
 
       // One shipment per hired creator, each on its own endpoint call. A 404
       // simply means nothing has been requested yet. Single-creator briefs keep
@@ -172,18 +155,23 @@ function BrandShipments({
         const hired = Array.isArray(campaign.selected_creators)
           ? campaign.selected_creators.map(String)
           : [];
+        const hasCreator = hired.length > 0 || !!campaign.selected_creator;
         return hired.length > 1
-          ? hired.map((id: string) => ({ campaign, creatorId: id }))
-          : [{ campaign, creatorId: undefined as string | undefined }];
+          ? hired.map((id: string) => ({ campaign, creatorId: id, hasCreator }))
+          : [{ campaign, creatorId: undefined as string | undefined, hasCreator }];
       });
       const built = await Promise.all(
-        pairs.map(async ({ campaign, creatorId }) => {
+        pairs.map(async ({ campaign, creatorId, hasCreator }) => {
           const campaignId = String(campaign.id ?? '');
           let shipment: Record<string, any> | null = null;
-          try {
-            shipment = await getShipment(token, campaignId, creatorId);
-          } catch {
-            shipment = null;
+          if (hasCreator) {
+            try {
+              shipment = await getShipment(token, campaignId, creatorId);
+            } catch (error) {
+              // 404 = nothing requested yet. Anything else is a real failure
+              // (offline, server error): surface it instead of "Ready to ship".
+              if (!(error instanceof ApiError && error.status === 404)) throw error;
+            }
           }
           const bids: Record<string, any>[] = Array.isArray(campaign.bids)
             ? (campaign.bids as Record<string, any>[])
@@ -197,6 +185,7 @@ function BrandShipments({
             creatorName: bid
               ? text(bid.creator_name || bid.creator_nickname, 'Creator')
               : undefined,
+            hasCreator,
             title: text(campaign.title, 'Untitled campaign'),
             budget: Number(campaign.budget || campaign.budget_max) || 0,
             creators: Array.isArray(campaign.selected_creators)
@@ -209,9 +198,16 @@ function BrandShipments({
         }),
       );
       setRows(built);
-    } catch {
-      // Backend unreachable — keep whatever is on screen; pull-to-refresh
-      // retries the real request.
+      setLoadError('');
+    } catch (error) {
+      // Keep whatever is on screen and say the refresh failed.
+      setLoadError(
+        error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message
+          ? error.message
+          : 'Could not load shipments. Please try again.',
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -225,9 +221,12 @@ function BrandShipments({
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return rows.filter(row => {
-      if (tab !== 'all' && statusOf(row.shipment).key !== tab) return false;
+      if (tab !== 'all' && statusOf(row).key !== tab) return false;
       if (!needle) return true;
-      return row.title.toLowerCase().includes(needle);
+      return (
+        row.title.toLowerCase().includes(needle) ||
+        (row.creatorName || '').toLowerCase().includes(needle)
+      );
     });
   }, [query, rows, tab]);
 
@@ -235,7 +234,7 @@ function BrandShipments({
     (key: string) =>
       key === 'all'
         ? rows.length
-        : rows.filter(row => statusOf(row.shipment).key === key).length,
+        : rows.filter(row => statusOf(row).key === key).length,
     [rows],
   );
 
@@ -265,6 +264,7 @@ function BrandShipments({
                 style={[styles.tab, active && styles.tabActive]}
                 onPress={() => setTab(item.key)}
                 accessibilityRole="button"
+                hitSlop={{ top: 5, bottom: 5, left: 2, right: 2 }}
               >
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>
                   {item.label} ({countFor(item.key)})
@@ -306,33 +306,57 @@ function BrandShipments({
               />
             }
           >
-            {!visible.length ? (
+            {!!loadError && (
+              <View style={styles.errorBox} testID="shipments-error">
+                <Text style={styles.errorText}>
+                  {loadError}
+                  {rows.length ? ' Showing the last list we loaded.' : ''}
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                  testID="shipments-retry"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {!visible.length && !loadError ? (
               <View style={styles.empty}>
                 <Icon name="box" color="#C3C6D6" size={34} />
                 <Text style={styles.emptyTitle}>No shipments</Text>
                 <Text style={styles.emptyText}>
                   {tab === 'all'
-                    ? 'Campaigns with a selected creator and a physical product appear here.'
+                    ? 'Campaigns that need a physical product shipped appear here.'
                     : 'Nothing in this state right now.'}
                 </Text>
               </View>
             ) : (
               visible.map(row => {
-                const chip = statusOf(row.shipment);
+                const chip = statusOf(row);
                 const tracking = text(row.shipment?.tracking_number);
                 const courier = text(row.shipment?.courier_name);
+                const eta = shipDate(row.shipment?.expected_delivery);
+                const mock = isMockShipment(row.shipment);
                 return (
                   <TouchableOpacity
                     key={`${row.campaignId}~${row.creatorId ?? ''}`}
                     style={styles.card}
                     onPress={() =>
                       onNavigate(
-                        row.creatorId
+                        !row.hasCreator
+                          ? `/campaigns/${row.campaignId}`
+                          : row.creatorId
                           ? `/shipment/${row.campaignId}?creator=${encodeURIComponent(row.creatorId)}`
                           : `/shipment/${row.campaignId}`,
                       )
                     }
                     accessibilityRole="button"
+                    accessibilityLabel={`${row.title}, ${chip.label}, ${actionOf(row)}`}
                   >
                     <View style={styles.cardTop}>
                       <View style={styles.badge}>
@@ -363,9 +387,29 @@ function BrandShipments({
                         <Text style={styles.trackText} numberOfLines={1}>
                           {courier ? `${courier} · ` : ''}
                           {tracking}
+                          {eta ? ` · Est. ${eta}` : ''}
                         </Text>
+                        <Text style={styles.actionText}>{actionOf(row)}</Text>
                         <Icon name="chevron" color="#B9BCCC" size={14} />
                       </View>
+                    )}
+                    {!tracking && (
+                      <View style={styles.trackRow}>
+                        <Text style={styles.trackText} numberOfLines={1}>
+                          {eta
+                            ? `Est. delivery ${eta}`
+                            : row.hasCreator
+                            ? 'No tracking yet'
+                            : 'Select a creator to start shipping'}
+                        </Text>
+                        <Text style={styles.actionText}>{actionOf(row)}</Text>
+                        <Icon name="chevron" color="#B9BCCC" size={14} />
+                      </View>
+                    )}
+                    {mock && (
+                      <Text style={styles.mockText} testID="mock-shipment">
+                        Test label: this tracking number is not from a real courier.
+                      </Text>
                     )}
                   </TouchableOpacity>
                 );
@@ -488,6 +532,37 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#5C6180',
+  },
+
+  actionText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4C5BF3',
+  },
+  mockText: { marginTop: scale(8), fontSize: fontScale(11), color: '#B4741B' },
+  errorBox: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FEF3C7',
+    gap: scale(8),
+  },
+  errorText: { fontSize: fontScale(12), color: '#92400E' },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    minHeight: scale(44),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(10),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 
   empty: { marginTop: scale(40), padding: scale(22), alignItems: 'center', gap: scale(4) },

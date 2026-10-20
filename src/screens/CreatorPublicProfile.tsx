@@ -22,6 +22,7 @@ import {
   ActivityIndicator,
   Image,
   Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -34,6 +35,8 @@ import Video from 'react-native-video';
 import Svg, { Circle, Path } from 'react-native-svg';
 import {
   BACKEND_URL,
+  NetworkError,
+  getCampaign,
   getCreatorReviews,
   getPublicProfile,
   type CreatorReview,
@@ -126,6 +129,114 @@ const asList = (value: unknown): string[] => {
   }
   return [];
 };
+
+/**
+ * First name, the way the website shows it (utils/displayName.js firstName):
+ * the explicit first_name, else the first word of the real name, else the
+ * handle without its "@". The directory seed only fills in while loading.
+ */
+export function firstNameOf(
+  data: Record<string, any> | null,
+  seed?: Record<string, any> | null,
+): string {
+  const clean = (value: unknown) =>
+    typeof value === 'string' && value.trim() ? value.trim().replace(/^@+/, '') : '';
+  const profile = (data?.profile as Record<string, any>) || {};
+  const explicit = clean(data?.first_name) || clean(profile.first_name) || clean(profile.firstName);
+  if (explicit) return explicit;
+  const full =
+    clean(data?.full_name) ||
+    clean(profile.fullName) ||
+    clean(profile.full_name) ||
+    clean(data?.name) ||
+    clean(data?.nickname) ||
+    clean(seed?.name) ||
+    clean(seed?.nickname);
+  return full.split(/\s+/)[0] || 'Creator';
+}
+
+/** Every category the creator picked (website: content_categories), else the directory's list, else one. */
+export function categoriesFor(
+  p: Record<string, any>,
+  seed: Record<string, any> | null | undefined,
+  single: string,
+): string[] {
+  const titled = (value: unknown) =>
+    String(value || '').replace(/_/g, ' ').trim();
+  const lists = [
+    ...(Array.isArray(p.content_categories) ? p.content_categories : []),
+    ...(Array.isArray(p.contentCategories) ? p.contentCategories : []),
+  ];
+  const fallback = Array.isArray(seed?.categories) ? seed!.categories : [];
+  const picked = (lists.length ? lists : fallback).map(titled).filter(Boolean);
+  const unique = new Map<string, string>();
+  picked.forEach(value =>
+    unique.set(value.toLowerCase(), value.replace(/\b\w/g, ch => ch.toUpperCase())),
+  );
+  return unique.size ? [...unique.values()] : [single];
+}
+
+/**
+ * Portfolio clips from the four places the website merges (portfolio_items,
+ * portfolio on the user, portfolio on the profile, then intro_video), de-duplicated
+ * by URL and capped at 5 like the website's Videos tab.
+ */
+export function mergePortfolio(
+  data: Record<string, any> | null,
+  p: Record<string, any>,
+  seed?: Record<string, any> | null,
+) {
+  const saved: any[] = [
+    ...(Array.isArray(p.portfolio_items) ? p.portfolio_items : []),
+    ...(Array.isArray(data?.portfolio) ? data!.portfolio : []),
+    ...(Array.isArray(p.portfolio) ? p.portfolio : []),
+  ];
+  if (!saved.length && p.intro_video) saved.push(p.intro_video);
+  // Before the profile lands, show what the directory already knew.
+  if (!saved.length && !data) {
+    if (Array.isArray(seed?.portfolio)) saved.push(...seed!.portfolio);
+    if (seed?.portfolio_video) saved.push(seed.portfolio_video);
+  }
+  const seen = new Set<string>();
+  return saved
+    .map(item => {
+      const url = itemUrl(item);
+      const meta = typeof item === 'string' || !item ? ({} as any) : item;
+      return {
+        url: photoUrl(url) || '',
+        category: text(meta.category),
+        price: text(meta.price),
+        delivery: text(meta.delivery),
+      };
+    })
+    .filter(clip => {
+      if (!clip.url || clip.url.startsWith('blob:') || seen.has(clip.url)) return false;
+      seen.add(clip.url);
+      return true;
+    })
+    .slice(0, 5);
+}
+
+/** How many reviews gave each of 5..1 stars (the website's star bars). */
+export function ratingBars(reviews: { rating?: number }[]) {
+  return [5, 4, 3, 2, 1].map(star => ({
+    star,
+    count: reviews.filter(review => Math.round(Number(review.rating) || 0) === star).length,
+  }));
+}
+
+/** "3 days ago" style label for a review date. */
+export function relTime(value: unknown, now = Date.now()): string {
+  const time = new Date(String(value || '')).getTime();
+  if (!time) return '';
+  const days = Math.floor((now - time) / 86400000);
+  if (days < 1) return 'today';
+  if (days < 30) return `${days} day${days > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
+}
 
 function Icon({ name, color = '#7C819C', size = 18 }: {
   name: string;
@@ -257,16 +368,16 @@ function VideoCard({
   fallbackCategory,
   fallbackPrice,
   fallbackDelivery,
+  onWatch,
 }: {
   item: { url: string; category: string; price: string; delivery: string };
   fallbackCategory: string;
   fallbackPrice: string;
   fallbackDelivery: string;
+  /** Opens the full-screen player, with sound and controls. */
+  onWatch: (url: string) => void;
 }) {
   const [failed, setFailed] = useState(false);
-  // Tap-to-play: default to a still poster; only mount the real player after a
-  // tap, so several clips don't all decode at once.
-  const [playing, setPlaying] = useState(false);
   const price = String(item.price || '').replace(/[^0-9]/g, '');
   const days = String(item.delivery || '').replace(/[^0-9]/g, '');
   const poster = videoPoster(item.url);
@@ -276,9 +387,9 @@ function VideoCard({
     <View style={styles.videoCard}>
       <Pressable
         style={styles.videoFrame}
-        onPress={() => isVideo(item.url) && setPlaying(p => !p)}
+        onPress={() => isVideo(item.url) && onWatch(item.url)}
         accessibilityRole="button"
-        accessibilityLabel={playing ? "Pause portfolio video" : "Play portfolio video"}
+        accessibilityLabel="Play portfolio video"
       >
         {failed || !item.url ? (
           // Matches the web's "Media unavailable" placeholder rather than a
@@ -287,21 +398,8 @@ function VideoCard({
             <Icon name="camera" color="#B9BDD4" size={22} />
             <Text style={styles.videoMissingText}>Media unavailable</Text>
           </View>
-        ) : isVideo(item.url) && playing ? (
-          <Video
-            source={{ uri: playableVideoUrl(item.url) }}
-            style={styles.videoMedia}
-            resizeMode="cover"
-            repeat
-            muted
-            playInBackground={false}
-            playWhenInactive={false}
-            disableFocus
-            ignoreSilentSwitch="ignore"
-            onError={() => setFailed(true)}
-          />
         ) : isVideo(item.url) ? (
-          // Still poster + play badge; tapping mounts the player above.
+          // Still poster + play badge; tapping opens the full-screen player.
           <>
             {poster && !posterFailed ? (
               <Image source={{ uri: poster }} style={styles.videoMedia} onError={() => setPosterFailed(true)} />
@@ -364,6 +462,16 @@ function CreatorPublicProfile({
   const [reviews, setReviews] = useState<CreatorReview[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('videos');
+  // A failed profile load must not read as "No videos / No details".
+  const [loadError, setLoadError] = useState('');
+  const [reviewsError, setReviewsError] = useState(false);
+  const [reload, setReload] = useState(0);
+  // Brand name + logo behind each review, and the campaign the review is for.
+  const [reviewers, setReviewers] = useState<Record<string, { name: string; photo: string | null }>>({});
+  const [campaigns, setCampaigns] = useState<Record<string, Record<string, any>>>({});
+  // The clip being watched full-screen (sound on).
+  const [watching, setWatching] = useState<string | null>(null);
+  const [watchFailed, setWatchFailed] = useState(false);
 
   const scrollRef = useRef<ScrollViewInstance>(null);
   // Section offsets, measured on layout so a tab tap can scroll to one.
@@ -376,11 +484,22 @@ function CreatorPublicProfile({
     setLoading(true);
     // The profile drives the page; reviews only fill their own section, so a
     // failure there must not blank the rest.
+    setLoadError('');
+    setReviewsError(false);
     getPublicProfile(token, creatorId)
       .then(result => {
         if (alive) setData(result as Record<string, any>);
       })
-      .catch(() => {})
+      .catch(error => {
+        if (!alive) return;
+        setLoadError(
+          error instanceof NetworkError
+            ? "You're offline. Check your connection and try again."
+            : error instanceof Error && error.message
+            ? error.message
+            : 'Could not load this profile. Please try again.',
+        );
+      })
       .finally(() => {
         if (alive) setLoading(false);
       });
@@ -388,11 +507,65 @@ function CreatorPublicProfile({
       .then(list => {
         if (alive) setReviews(list);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setReviewsError(true);
+      });
     return () => {
       alive = false;
     };
-  }, [creatorId, token]);
+  }, [creatorId, token, reload]);
+
+  // Who wrote each review and which campaign it was for (the website's review
+  // cards show the brand, price, duration and delivered clip). Best effort: a
+  // failed lookup just leaves that card plainer. Capped so a long list stays cheap.
+  React.useEffect(() => {
+    const reviewerIds = [...new Set(reviews.map(r => String(r.reviewer_id || '')).filter(Boolean))].slice(0, 20);
+    const campaignIds = [...new Set(reviews.map(r => String((r as any).campaign_id || '')).filter(Boolean))].slice(0, 20);
+    if (!reviewerIds.length && !campaignIds.length) return undefined;
+    let alive = true;
+    Promise.all(
+      reviewerIds.map(id =>
+        getPublicProfile(token, id)
+          .then(d => {
+            const doc = d as Record<string, any>;
+            const prof = (doc.profile as Record<string, any>) || {};
+            const name =
+              text(prof.business_name) ||
+              text(doc.business_name) ||
+              text(doc.full_name) ||
+              text(prof.fullName) ||
+              text(doc.name) ||
+              text(doc.nickname);
+            return [id, { name, photo: photoUrl(doc.profile_photo || doc.logo || prof.logo) }] as const;
+          })
+          .catch(() => null),
+      ),
+    ).then(pairs => {
+      if (!alive) return;
+      const map: Record<string, { name: string; photo: string | null }> = {};
+      pairs.forEach(pair => {
+        if (pair) map[pair[0]] = pair[1];
+      });
+      setReviewers(map);
+    });
+    Promise.all(
+      campaignIds.map(id =>
+        getCampaign(token, id)
+          .then(c => [id, c as Record<string, any>] as const)
+          .catch(() => null),
+      ),
+    ).then(pairs => {
+      if (!alive) return;
+      const map: Record<string, Record<string, any>> = {};
+      pairs.forEach(pair => {
+        if (pair) map[pair[0]] = pair[1];
+      });
+      setCampaigns(map);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [reviews, token]);
 
   // The nested `profile` blob wins, but same-named keys stored at the user root
   // are used as a fallback so older records still render.
@@ -401,12 +574,8 @@ function CreatorPublicProfile({
     [data],
   );
 
-  const name = text(
-    p.nickname || data?.nickname || seed?.name || seed?.nickname,
-    'Creator',
-  )
-    .replace(/^@+/, '')
-    .split(/\s+/)[0];
+  // First name, like the website (not the auto-generated nickname).
+  const name = firstNameOf(data, seed as Record<string, any> | null | undefined);
   const publicId = text(
     data?.public_creator_id || seed?.public_creator_id,
     creatorId.slice(0, 12),
@@ -432,33 +601,16 @@ function CreatorPublicProfile({
     'General',
   ).replace(/_/g, ' ');
 
-  const clips = useMemo(() => {
-    const source = Array.isArray(data?.portfolio)
-      ? data!.portfolio
-      : Array.isArray(seed?.portfolio)
-      ? seed!.portfolio
-      : [];
-    const portfolio = seed?.portfolio_video
-      ? [...(source as any[]), seed!.portfolio_video]
-      : (source as any[]);
-    return portfolio
-      .map(item => {
-        const url = itemUrl(item);
-        const meta = typeof item === 'string' ? ({} as any) : item;
-        return {
-          url: photoUrl(url) || '',
-          category: text(meta.category),
-          price: text(meta.price),
-          delivery: text(meta.delivery),
-        };
-      })
-      .filter(clip => clip.url && !clip.url.startsWith('blob:'));
-  }, [data, seed]);
+  const clips = useMemo(
+    () => mergePortfolio(data, p, seed as Record<string, any> | null | undefined),
+    [data, p, seed],
+  );
+  const categories = categoriesFor(p, seed as Record<string, any> | null | undefined, category);
 
   // Price is the creator's OWN configured rate — never inferred from a clip's
   // price, which would quote a number the brief wouldn't actually charge.
   const priceDigits = String(
-    rateCard.expected_payout || p.expectedPayout || seed?.price_per_video || '',
+    rateCard.expected_payout || p.expectedPayout || '',
   ).replace(/[^0-9]/g, '');
   const price = priceDigits
     ? inr(Number(priceDigits))
@@ -525,7 +677,8 @@ function CreatorPublicProfile({
   ].filter(([, values]) => (values as string[]).length) as [string, string[]][];
   const setupRows = [
     ['Can Bring', text(p.bring)],
-    ['Weekly Availability', text(p.weekly)],
+    ['Weekly Availability', text(p.weekly || p.availability_calendar?.weekly)],
+    ['Flexible Hours', p.flexible ? 'Yes' : ''],
   ].filter(([, value]) => !!value) as [string, string][];
 
   const pricingRows = [
@@ -564,6 +717,7 @@ function CreatorPublicProfile({
           <TouchableOpacity
             style={styles.backBtn}
             onPress={onBack}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             accessibilityRole="button"
             accessibilityLabel="Go back"
           >
@@ -624,9 +778,11 @@ function CreatorPublicProfile({
           {/* Category / Price / Delivery highlight strip. */}
           <View style={styles.highlights}>
             <View style={styles.highlight}>
-              <Text style={styles.fieldLabel}>CATEGORY</Text>
-              <Text style={styles.highlightValue} numberOfLines={1}>
-                {category}
+              <Text style={styles.fieldLabel}>
+                {categories.length > 1 ? 'CATEGORIES' : 'CATEGORY'}
+              </Text>
+              <Text style={styles.highlightValue} numberOfLines={2}>
+                {categories.join(', ')}
               </Text>
             </View>
             <View style={styles.highlight}>
@@ -666,6 +822,22 @@ function CreatorPublicProfile({
 
           {loading && !data ? (
             <ActivityIndicator style={styles.loading} color="#4C4DD6" />
+          ) : loadError && !data ? (
+            <View style={styles.emptyBox} testID="profile-error">
+              <Text style={styles.emptyTitle}>Couldn't load this profile</Text>
+              <Text style={styles.emptyText}>{loadError}</Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => {
+                  setLoading(true);
+                  setReload(count => count + 1);
+                }}
+                accessibilityRole="button"
+                testID="profile-retry"
+              >
+                <Text style={styles.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
               {/* Videos */}
@@ -687,6 +859,10 @@ function CreatorPublicProfile({
                         fallbackCategory={category}
                         fallbackPrice={price}
                         fallbackDelivery={delivery}
+                        onWatch={url => {
+                          setWatchFailed(false);
+                          setWatching(url);
+                        }}
                       />
                     ))}
                   </ScrollView>
@@ -816,30 +992,111 @@ function CreatorPublicProfile({
                         from {ratingCount} review{ratingCount > 1 ? 's' : ''}
                       </Text>
                     </View>
-                    {reviews.map((review, index) => (
-                      <View key={index} style={styles.review}>
-                        <View style={styles.reviewStars}>
-                          {[1, 2, 3, 4, 5].map(star => (
-                            <Icon
-                              key={star}
-                              name="star"
-                              color={
-                                star <= (Number(review.rating) || 0)
-                                  ? '#F5B301'
-                                  : '#DCDEEC'
-                              }
-                              size={13}
-                            />
-                          ))}
+                    {ratingBars(reviews).map(({ star, count }) => (
+                      <View key={star} style={styles.barRow}>
+                        <Text style={styles.barLabel}>{star} Star{star > 1 ? 's' : ''}</Text>
+                        <View style={styles.barTrack}>
+                          <View
+                            style={[
+                              styles.barFill,
+                              { width: `${ratingCount ? (count / ratingCount) * 100 : 0}%` },
+                            ]}
+                          />
                         </View>
-                        {!!text(review.review) && (
-                          <Text style={styles.reviewText}>
-                            {text(review.review)}
-                          </Text>
-                        )}
+                        <Text style={styles.barCount}>({count})</Text>
                       </View>
                     ))}
+                    {reviews.map((review, index) => {
+                      const reviewer = reviewers[String(review.reviewer_id || '')];
+                      const who = (reviewer?.name || text((review as any).reviewer_name) || 'Brand').replace('@', '');
+                      const camp = campaigns[String((review as any).campaign_id || '')] || {};
+                      const bids: any[] = Array.isArray(camp.bids) ? camp.bids : [];
+                      const selBid = bids.find(b => b?.creator_id === camp.selected_creator) || {};
+                      const budget = Number(camp.budget_max || camp.budget_min) || 0;
+                      const reviewDays = Number(selBid.estimated_delivery_days || camp.estimated_delivery_days) || 0;
+                      const service = text(camp.category || camp.industry_type, 'UGC').replace(/_/g, ' ');
+                      const files: string[] = Array.isArray(camp.work_submission?.work_files)
+                        ? camp.work_submission.work_files
+                        : [];
+                      const clip = photoUrl(files.find(f => isVideo(photoUrl(f))) || '');
+                      return (
+                        <View key={String(review.id ?? index)} style={styles.review}>
+                          <View style={styles.reviewerRow}>
+                            <View style={styles.reviewerAva}>
+                              {reviewer?.photo ? (
+                                <Image source={{ uri: reviewer.photo }} style={styles.avatarImg} />
+                              ) : (
+                                <Text style={styles.reviewerInitial}>{who.charAt(0).toUpperCase()}</Text>
+                              )}
+                            </View>
+                            <View style={styles.titleCopy}>
+                              <Text style={styles.reviewerName} numberOfLines={1}>{who}</Text>
+                              <View style={styles.reviewStars}>
+                                {[1, 2, 3, 4, 5].map(star => (
+                                  <Icon
+                                    key={star}
+                                    name="star"
+                                    color={star <= (Number(review.rating) || 0) ? '#F5B301' : '#DCDEEC'}
+                                    size={13}
+                                  />
+                                ))}
+                                <Text style={styles.reviewWhen}>
+                                  {relTime(review.created_at) ? ` ${relTime(review.created_at)}` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                          {!!text(review.review) && (
+                            <Text style={styles.reviewText}>{text(review.review)}</Text>
+                          )}
+                          {!!(camp.id || camp.title) && (
+                            <View style={styles.reviewFacts}>
+                              <View style={styles.videoMetaCol}>
+                                <Text style={styles.fieldLabel}>PRICE</Text>
+                                <Text style={styles.videoMetaValue}>{budget ? inr(budget) : 'On request'}</Text>
+                              </View>
+                              <View style={styles.videoMetaCol}>
+                                <Text style={styles.fieldLabel}>DURATION</Text>
+                                <Text style={styles.videoMetaValue}>
+                                  {reviewDays ? `${reviewDays} day${reviewDays > 1 ? 's' : ''}` : '-'}
+                                </Text>
+                              </View>
+                              <View style={styles.videoMetaCol}>
+                                <Text style={styles.fieldLabel}>SERVICE</Text>
+                                <Text style={styles.videoMetaValue} numberOfLines={1}>{service}</Text>
+                              </View>
+                            </View>
+                          )}
+                          {!!clip && (
+                            <TouchableOpacity
+                              style={styles.reviewClip}
+                              onPress={() => {
+                                setWatchFailed(false);
+                                setWatching(clip);
+                              }}
+                              accessibilityRole="button"
+                              accessibilityLabel="Watch the delivered video"
+                            >
+                              <Icon name="play" color="#4C4DD6" size={12} />
+                              <Text style={styles.reviewClipText}>Watch delivered video</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      );
+                    })}
                   </>
+                ) : reviewsError ? (
+                  <View style={styles.emptyBox} testID="reviews-error">
+                    <Text style={styles.emptyTitle}>Couldn't load reviews</Text>
+                    <Text style={styles.emptyText}>Check your connection and try again.</Text>
+                    <TouchableOpacity
+                      style={styles.retryBtn}
+                      onPress={() => setReload(count => count + 1)}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.retryText}>Retry</Text>
+                    </TouchableOpacity>
+                  </View>
                 ) : (
                   <View style={styles.emptyBox}>
                     <Icon name="star" color="#B9BDD4" size={22} />
@@ -858,8 +1115,18 @@ function CreatorPublicProfile({
       {/* Send Message stays pinned; this screen hides the bottom nav, so it is
           the only bar competing for the bottom edge. */}
       <View style={styles.footer}>
+        {/* Send a Brief stays reachable while scrolling, like the website's
+            sticky header button. */}
         <TouchableOpacity
-          style={styles.messageBtn}
+          style={[styles.messageBtn, styles.briefFooterBtn]}
+          onPress={onSendBrief}
+          accessibilityRole="button"
+          testID="profile-send-brief"
+        >
+          <Text style={styles.briefFooterText}>Send a Brief</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.messageBtn, styles.messageFlex]}
           onPress={onMessage}
           accessibilityRole="button"
         >
@@ -867,6 +1134,40 @@ function CreatorPublicProfile({
           <Text style={styles.messageText}>Send Message</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Full-screen player: sound on, with controls (the website's lightbox). */}
+      <Modal
+        visible={!!watching}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setWatching(null)}
+      >
+        <View style={styles.player}>
+          {watchFailed || !watching ? (
+            <Text style={styles.playerError}>This video can't be played right now.</Text>
+          ) : (
+            <Video
+              source={{ uri: playableVideoUrl(watching) }}
+              style={styles.playerVideo}
+              resizeMode="contain"
+              controls
+              playInBackground={false}
+              playWhenInactive={false}
+              ignoreSilentSwitch="ignore"
+              onError={() => setWatchFailed(true)}
+            />
+          )}
+          <TouchableOpacity
+            style={styles.playerClose}
+            onPress={() => setWatching(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Close video"
+          >
+            <Text style={styles.playerCloseText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1224,6 +1525,111 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#EDEEF6',
+    flexDirection: 'row',
+    gap: scale(10),
+  },
+  messageFlex: { flex: 1.3 },
+  briefFooterBtn: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#15163F',
+  },
+  briefFooterText: {
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  retryBtn: {
+    marginTop: scale(8),
+    minHeight: scale(44),
+    paddingHorizontal: scale(22),
+    borderRadius: scale(22),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  barRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8), marginBottom: scale(6) },
+  barLabel: { width: scale(52), fontSize: fontScale(11), color: '#858AA3' },
+  barTrack: { flex: 1, height: scale(6), borderRadius: scale(3), backgroundColor: '#EDEEF6', overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: scale(3), backgroundColor: '#F5B301' },
+  barCount: { width: scale(30), fontSize: fontScale(11), color: '#858AA3' },
+  reviewerRow: { flexDirection: 'row', alignItems: 'center', gap: scale(10) },
+  reviewerAva: {
+    width: scale(34),
+    height: scale(34),
+    borderRadius: scale(17),
+    backgroundColor: '#4C4DD6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  reviewerInitial: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  reviewerName: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  reviewWhen: { fontSize: fontScale(11), color: '#9498B0' },
+  reviewFacts: {
+    marginTop: scale(10),
+    paddingTop: scale(10),
+    borderTopWidth: 1,
+    borderTopColor: '#EDEEF6',
+    flexDirection: 'row',
+    gap: scale(12),
+  },
+  reviewClip: {
+    marginTop: scale(8),
+    minHeight: scale(44),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(7),
+  },
+  reviewClipText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C4DD6',
+  },
+  player: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
+  playerVideo: { width: '100%', height: '100%' },
+  playerError: {
+    color: '#FFFFFF',
+    fontSize: fontScale(14),
+    textAlign: 'center',
+    paddingHorizontal: scale(32),
+  },
+  playerClose: {
+    position: 'absolute',
+    top: scale(44),
+    right: scale(16),
+    minWidth: scale(64),
+    height: scale(44),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(22),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  playerCloseText: {
+    color: '#FFFFFF',
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
   },
   messageBtn: {
     height: scale(52),

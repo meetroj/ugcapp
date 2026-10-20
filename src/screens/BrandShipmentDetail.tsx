@@ -8,9 +8,10 @@ import { Alert } from '../components/AppAlert';
  * status, tracking, product details, pickup address and the checklist, and
  * states plainly that the delivery address is withheld.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Modal,
   RefreshControl,
   ScrollView,
@@ -24,14 +25,20 @@ import { SkeletonBanner, SkeletonList } from '../components/Skeleton';
 import { launchImageLibrary } from 'react-native-image-picker';
 import {
   ApiError,
-  getBusinessCompany,
-  getBusinessProfile,
+  NetworkError,
   getShipment,
-  createShipLabel,
+  getShippingAccountAddress,
   requestShipment,
   updateShipment,
   uploadMedia,
 } from '../api';
+import {
+  isMockShipment,
+  isRealShipment,
+  lookupPincode,
+  resolveMediaUrl,
+  shipmentStatus,
+} from '../shipmentStatus';
 import { scale, fontScale } from '../theme';
 
 type Props = {
@@ -95,23 +102,48 @@ function dimensionText(dimensions: unknown): string {
   return `${sides[0]} x ${sides[1]} x ${sides[2]} cm`;
 }
 
-/** Big status banner at the top, derived from the shipment document. */
-function bannerFor(shipment: Shipment | null): {
+/** Big status banner at the top, from the same status mapping as the list. */
+export function bannerFor(shipment: Shipment | null): {
   label: string;
   bg: string;
   fg: string;
 } {
-  if (!shipment) {
+  if (!isRealShipment(shipment)) {
     return { label: 'NOT REQUESTED', bg: '#F1F2F8', fg: '#6E7391' };
   }
-  const status = String(shipment.status || '').toLowerCase();
-  if (status === 'delivered' || shipment.received_at) {
-    return { label: 'DELIVERED', bg: '#E2F7EE', fg: '#0F7B43' };
+  const chip = shipmentStatus(shipment);
+  return { label: chip.label.toUpperCase(), bg: chip.bg, fg: chip.fg };
+}
+
+/** What the brand should expect next, per status (the website's "What to do next"). */
+function noteFor(shipment: Shipment | null): { title: string; body: string } {
+  switch (shipmentStatus(shipment).key) {
+    case 'delivered':
+      return {
+        title: 'Delivered',
+        body: 'The creator has received the product. Wait for them to submit the content, then review it.',
+      };
+    case 'transit':
+      return {
+        title: 'On its way',
+        body: 'The product is on its way to the creator. Tracking updates appear here as the courier scans the package.',
+      };
+    case 'pickup':
+      return {
+        title: 'Label ready',
+        body: 'Waiting for the courier to pick the parcel up from your address.',
+      };
+    case 'issue':
+      return {
+        title: 'Needs attention',
+        body: 'This shipment was returned or lost. Contact support to arrange a new one.',
+      };
+    default:
+      return {
+        title: 'Shipment requested',
+        body: 'Our team is preparing your pre-paid label. Tracking appears here once the package is dispatched.',
+      };
   }
-  if (status === 'shipped' || shipment.tracking_number) {
-    return { label: 'IN TRANSIT', bg: '#E4F0FF', fg: '#1F62B8' };
-  }
-  return { label: 'AWAITING LABEL', bg: '#EEEFFF', fg: '#4C4DD6' };
 }
 
 function Icon({
@@ -178,11 +210,11 @@ function Icon({
   );
 }
 
-/** The three-point checklist from the design. */
+/** The three-point checklist; keys are the ones the website and backend store in `shipment_checklist`. */
 const CHECKS = [
-  { key: 'package_sealed', label: 'Package Sealed' },
+  { key: 'sealed', label: 'Package Sealed' },
   { key: 'correct_item', label: 'Correct Item' },
-  { key: 'working_condition', label: 'Working Condition' },
+  { key: 'working', label: 'Working Condition' },
 ];
 
 function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
@@ -192,16 +224,19 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [missing, setMissing] = useState(false);
+  // A failed load must not read as "Shipment requested".
+  const [loadError, setLoadError] = useState('');
   // Tracking editor: open flag, the three fields, and the in-flight save.
   const [editing, setEditing] = useState(false);
   const [tracking, setTracking] = useState('');
   const [courier, setCourier] = useState('');
   const [expected, setExpected] = useState('');
-  // The courier slip is a required field on ShipmentUpdate, so it is uploaded
-  // before the save rather than being an optional extra.
+  // The slip is optional (the website sends '' without one), uploaded before the save.
   const [slip, setSlip] = useState('');
   const [uploadingSlip, setUploadingSlip] = useState(false);
   const [saving, setSaving] = useState(false);
+  const submitting = useRef(false);
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
   // Request-a-shipment form, mirroring ShipLabelRequest on the backend:
   // description and weight required, dimensions optional, pickup address
   // required in full.
@@ -227,12 +262,22 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
     try {
       setShipment(await getShipment(token, campaignId, creatorId));
       setMissing(false);
+      setLoadError('');
     } catch (error) {
-      // A 404 means nothing has been requested yet — a normal state, not an
-      // error. Anything else keeps what is already on screen.
+      // A 404 means nothing has been requested yet: a normal state, not an
+      // error. Anything else is a real failure, so say so with a Retry.
       if (error instanceof ApiError && error.status === 404) {
         setShipment(null);
         setMissing(true);
+        setLoadError('');
+      } else {
+        setLoadError(
+          error instanceof NetworkError
+            ? "You're offline. Check your connection and try again."
+            : error instanceof Error && error.message
+            ? error.message
+            : 'Could not load this shipment. Please try again.',
+        );
       }
     } finally {
       setLoading(false);
@@ -277,30 +322,49 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
     }
   }, [token, uploadingSlip]);
 
-  /** Sends the tracking details, then refetches so the card updates. */
   /**
-   * Opens the request form, seeding the pickup address from the brand's own
-   * company record so the common case is a couple of product fields rather
-   * than retyping an address they have already given us.
+   * Opens the request form, seeding the pickup address from the same endpoint
+   * the website uses (GET /shipping/account-address: Settings > Company), so
+   * the common case is a couple of product fields. Never overwrites typing.
    */
   const openRequest = useCallback(async () => {
     setRequesting(true);
-    const [profile, company] = await Promise.all([
-      getBusinessProfile(token).catch(() => ({} as Record<string, unknown>)),
-      getBusinessCompany(token).catch(() => ({} as Record<string, unknown>)),
-    ]);
-    const pick = (...values: unknown[]) =>
-      values.map(value => text(value)).find(Boolean) || '';
-    setShip(current => ({
-      ...current,
-      full_name: pick(profile.contact_person, profile.brand_name),
-      phone: pick(profile.phone_number),
-      line1: pick(company.billing_address, profile.billing_address),
-      city: pick(company.city, profile.city),
-      state: pick(company.state, profile.state),
-      pincode: pick(company.pincode, profile.pincode),
-    }));
+    const result = await getShippingAccountAddress(token).catch(() => null);
+    const saved = result?.address;
+    if (!saved) return;
+    setShip(current =>
+      current.line1 || current.pincode
+        ? current
+        : {
+            ...current,
+            full_name: text(saved.full_name),
+            phone: text(saved.phone).replace(/\D/g, '').slice(-10),
+            line1: text(saved.line1),
+            line2: text(saved.line2),
+            city: text(saved.city),
+            state: text(saved.state),
+            pincode: text(saved.pincode),
+          },
+    );
   }, [token]);
+
+  // City and State follow the Pincode (India Post), as on the website, so they
+  // can never disagree with it.
+  useEffect(() => {
+    if (!requesting || ship.pincode.length !== 6) return;
+    let cancelled = false;
+    lookupPincode(ship.pincode).then(info => {
+      if (cancelled || !info) return;
+      setShip(current => ({
+        ...current,
+        city: info.city || current.city,
+        state: info.state || current.state,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [requesting, ship.pincode]);
 
   /** Everything the backend requires but the form has not been given. */
   const shipIssues = (): string[] => {
@@ -318,11 +382,13 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
   };
 
   const submitRequest = useCallback(async () => {
+    if (submitting.current) return;
     const gaps = shipIssues();
     if (gaps.length) {
       Alert.alert('Still needed', gaps.map(item => `•  ${item}`).join('\n'));
       return;
     }
+    submitting.current = true;
     setSaving(true);
     // The bare campaign id addresses the first (or only) hired creator,
     // which is the same id every other call on this screen uses.
@@ -346,48 +412,43 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
       },
     };
     try {
-      // Try the DIRECT Delhivery label first — the brand gets an instant AWB
-      // and doesn't wait on the ops queue. If the courier can't (e.g. the
-      // creator hasn't confirmed their address yet), fall back to the manual
-      // request queue so the shipment still gets moving.
-      try {
-        const res = await createShipLabel(token, dealId, payload);
-        setRequesting(false);
-        await load();
-        Alert.alert(
-          'Label generated',
-          res?.tracking_number
-            ? `Tracking number: ${res.tracking_number}. The courier will pick it up from your address.`
-            : 'Your shipping label is ready.',
-        );
-        return;
-      } catch (labelErr) {
-        // Courier declined — queue it for the ops team instead.
-        await requestShipment(token, dealId, payload);
-        setRequesting(false);
-        await load();
-        Alert.alert(
-          'Shipment requested',
-          labelErr instanceof Error && labelErr.message
-            ? `We couldn't auto-generate a label (${labelErr.message}). Our team will arrange the label and update tracking.`
-            : 'Our team will arrange the label and update tracking.',
-        );
-        return;
-      }
+      // Same call as the website (ShipmentTracking.js handleShipProduct). NOT
+      // /deals/{id}/ship-label: with no courier token that endpoint stores a
+      // MOCK tracking number the brand would take for a real parcel.
+      // request-shipment never invents one; the server itself generates the
+      // real label straight away when the courier is configured and both
+      // addresses are in, otherwise the ops queue prepares it.
+      const res = (await requestShipment(token, dealId, payload)) as {
+        tracking_number?: string;
+        label_error?: string;
+      };
+      setRequesting(false);
+      await load();
+      Alert.alert(
+        res?.tracking_number ? 'Label generated' : 'Shipment requested',
+        res?.tracking_number
+          ? `Tracking number: ${res.tracking_number}. The courier will pick it up from your address.`
+          : res?.label_error
+          ? `Our team will prepare your label shortly. (${res.label_error})`
+          : 'Shipment requested - our team will prepare your label shortly.',
+      );
     } catch (error) {
       Alert.alert(
         'Could not request',
-        error instanceof Error && error.message
+        error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message
           ? error.message
           : 'Please try again.',
       );
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
   }, [dealId, load, ship, token]);
 
   const saveTracking = useCallback(async () => {
-    if (!tracking.trim() || !slip || !expected || saving) return;
+    if (!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected) || saving) return;
     setSaving(true);
     try {
       await updateShipment(token, {
@@ -397,6 +458,11 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
         courier_slip: slip,
         expected_delivery: expected,
         courier_name: courier.trim() || undefined,
+        shipment_checklist: {
+          sealed: !!checks.sealed,
+          correct_item: !!checks.correct_item,
+          working: !!checks.working,
+        },
       });
       setEditing(false);
       await load();
@@ -410,10 +476,22 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [campaignId, courier, creatorId, expected, load, saving, slip, token, tracking]);
+  }, [campaignId, checks, courier, creatorId, expected, load, saving, slip, token, tracking]);
+
+  const openUrl = useCallback((url: unknown) => {
+    const target = resolveMediaUrl(url);
+    if (!target) return;
+    Linking.openURL(target).catch(() =>
+      Alert.alert('Unable to open', 'Could not open this file. Try again later.'),
+    );
+  }, []);
 
   const banner = bannerFor(shipment);
-  const checklist = (shipment?.checklist || {}) as Record<string, unknown>;
+  const note = noteFor(shipment);
+  const mock = isMockShipment(shipment);
+  // The website reads `shipment_checklist` (sealed, correct_item, working).
+  const checklist = (shipment?.shipment_checklist || {}) as Record<string, unknown>;
+  const notRequested = missing || (!!shipment && !isRealShipment(shipment));
   // `product` is the object stored by request-shipment; `product_summary` is
   // the same description flattened, kept as a fallback for older docs.
   const product = (shipment?.product || {}) as Record<string, unknown>;
@@ -472,7 +550,23 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
             </View>
           </View>
 
-          {missing ? (
+          {loadError && !shipment && !missing ? (
+            <View style={styles.noteCard} testID="shipment-error">
+              <Text style={styles.noteTitle}>Couldn't load this shipment</Text>
+              <Text style={styles.noteText}>{loadError}</Text>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  setLoading(true);
+                  load();
+                }}
+                accessibilityRole="button"
+                testID="shipment-retry"
+              >
+                <Text style={styles.actionBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : notRequested ? (
             <View style={styles.noteCard}>
               <Text style={styles.noteTitle}>No shipment requested</Text>
               <Text style={styles.noteText}>
@@ -491,14 +585,27 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
             </View>
           ) : (
             <>
+              {!!loadError && (
+                <View style={styles.noteCard} testID="shipment-stale">
+                  <Text style={styles.noteText}>
+                    {loadError} Showing the last details we loaded.
+                  </Text>
+                </View>
+              )}
               <View style={styles.noteCard}>
-                <Text style={styles.noteTitle}>Shipment requested</Text>
-                <Text style={styles.noteText}>
-                  {shipment?.tracking_number
-                    ? 'Your package is on its way to the creator.'
-                    : 'Our team is preparing your pre-paid label. Tracking appears here once dispatched.'}
-                </Text>
+                <Text style={styles.noteTitle}>{note.title}</Text>
+                <Text style={styles.noteText}>{note.body}</Text>
               </View>
+
+              {mock && (
+                <View style={[styles.noteCard, styles.warnCard]} testID="mock-shipment">
+                  <Text style={styles.noteTitle}>Test shipment</Text>
+                  <Text style={styles.noteText}>
+                    This tracking number is a placeholder, not a real courier booking.
+                    Contact support to get a real label before sending the product.
+                  </Text>
+                </View>
+              )}
 
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Tracking Information</Text>
@@ -529,7 +636,50 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                     </Text>
                   </View>
                 </View>
+                {!!shipment?.label_url && !mock && (
+                  <TouchableOpacity
+                    style={styles.linkRow}
+                    onPress={() => openUrl(shipment?.label_url)}
+                    accessibilityRole="link"
+                    testID="download-label"
+                  >
+                    <Text style={styles.linkText}>Shipping label: Download &amp; print</Text>
+                  </TouchableOpacity>
+                )}
+                {!!shipment?.courier_slip && (
+                  <TouchableOpacity
+                    style={styles.linkRow}
+                    onPress={() => openUrl(shipment?.courier_slip)}
+                    accessibilityRole="link"
+                    testID="view-slip"
+                  >
+                    <Text style={styles.linkText}>Courier slip: View document</Text>
+                  </TouchableOpacity>
+                )}
               </View>
+
+              {!!shipment?.unboxing_video && (
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Unboxing Video</Text>
+                  <TouchableOpacity
+                    style={styles.linkRow}
+                    onPress={() => openUrl(shipment?.unboxing_video)}
+                    accessibilityRole="link"
+                    testID="view-unboxing"
+                  >
+                    <Text style={styles.linkText}>View unboxing video</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {!!shipment?.dispute && (
+                <View style={[styles.noteCard, styles.disputeCard]} testID="shipment-dispute">
+                  <Text style={[styles.noteTitle, styles.disputeText]}>Dispute Reported</Text>
+                  <Text style={[styles.noteText, styles.disputeText]}>
+                    {text(shipment.dispute?.reason, 'The creator reported a problem with this shipment.')}
+                  </Text>
+                </View>
+              )}
 
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Product Details</Text>
@@ -624,7 +774,14 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 onPress={() => {
                   setTracking(text(shipment?.tracking_number));
                   setCourier(text(shipment?.courier_name));
-                  setExpected(text(shipment?.expected_delivery));
+                  // The field is an ISO date; stored values can carry a time.
+                  setExpected(text(shipment?.expected_delivery).slice(0, 10));
+                  setSlip(text(shipment?.courier_slip));
+                  setChecks({
+                    sealed: !!checklist.sealed,
+                    correct_item: !!checklist.correct_item,
+                    working: !!checklist.working,
+                  });
                   setEditing(true);
                 }}
                 accessibilityRole="button"
@@ -842,7 +999,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
               keyboardType="number-pad"
             />
 
-            <Text style={styles.editLabel}>Courier slip</Text>
+            <Text style={styles.editLabel}>Courier slip (optional)</Text>
             <TouchableOpacity
               style={styles.slipBtn}
               onPress={pickSlip}
@@ -861,6 +1018,25 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
               )}
             </TouchableOpacity>
 
+            <Text style={styles.editLabel}>Shipment checklist</Text>
+            {CHECKS.map(check => (
+              <TouchableOpacity
+                key={check.key}
+                style={styles.checkToggle}
+                onPress={() =>
+                  setChecks(current => ({ ...current, [check.key]: !current[check.key] }))
+                }
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: !!checks[check.key] }}
+                testID={`check-${check.key}`}
+              >
+                <View style={[styles.box, checks[check.key] && styles.boxOn]}>
+                  {checks[check.key] && <Icon name="check" color="#FFFFFF" size={12} />}
+                </View>
+                <Text style={styles.checkText}>{check.label}</Text>
+              </TouchableOpacity>
+            ))}
+
             <View style={styles.editActions}>
               <TouchableOpacity
                 style={styles.editGhost}
@@ -870,13 +1046,13 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 <Text style={styles.editGhostText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                // The server requires all three, so the button stays off until
-                // it would actually be accepted rather than failing on send.
+                // The server needs a tracking number and an ISO date, so the
+                // button stays off until it would actually be accepted.
                 style={[
                   styles.editSave,
-                  (!tracking.trim() || !slip || !expected) && styles.editSaveOff,
+                  (!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected)) && styles.editSaveOff,
                 ]}
-                disabled={!tracking.trim() || !slip || !expected || saving}
+                disabled={!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected) || saving}
                 onPress={saveTracking}
                 accessibilityRole="button"
               >
@@ -1145,6 +1321,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   editSaveOff: { opacity: 0.5 },
+  warnCard: { backgroundColor: '#FDECEC' },
+  disputeCard: { backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#EF4444' },
+  disputeText: { color: '#991B1B' },
+  linkRow: { minHeight: scale(44), justifyContent: 'center' },
+  linkText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#3D4FD8',
+  },
+  checkToggle: {
+    minHeight: scale(44),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
   editSaveText: {
     fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',

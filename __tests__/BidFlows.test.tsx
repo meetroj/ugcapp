@@ -1,7 +1,7 @@
 import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
 import { AppState, TouchableOpacity } from 'react-native';
-import MyBids, { isOpenBid } from '../src/screens/MyBids';
+import MyBids from '../src/screens/MyBids';
 import BrandCampaignDetail from '../src/screens/BrandCampaignDetail';
 import { getMyBids, getCampaign, getCampaignWork } from '../src/api';
 
@@ -21,21 +21,10 @@ const bid = (status = 'pending', campaign: any = {}) => ({
   my_bid: { creator_id: 'me', amount: 2000 },
 });
 
-test.each(['approved', 'accepted', 'selected', 'rejected', 'declined'])(
-  '%s bids no longer appear as pending', status => expect(isOpenBid(bid(status))).toBe(false),
-);
-test.each(['in_progress', 'completed', 'cancelled', 'under_review'])(
-  'bids on %s campaigns are hidden', status => expect(isOpenBid(bid('pending', { status }))).toBe(false),
-);
-test('another hire leaves pending bids visible while multi-creator slots remain', () => {
-  expect(isOpenBid(bid('pending', { selected_creators: ['other'], creators_wanted: 4 }))).toBe(true);
-  expect(isOpenBid(bid('pending', { selected_creators: ['other'], creators_wanted: 1 }))).toBe(false);
-  expect(isOpenBid(bid('pending', { selected_creators: ['other', 'me'], creators_wanted: 4 }))).toBe(false);
-});
 const content = (node: any): string =>
   typeof node === 'string' ? node : (node?.children || []).map(content).join('');
 
-test('resolved bid disappears when creator returns to the app', async () => {
+test('a bid that gets approved moves to the Accepted tab when creator returns to the app', async () => {
   let listener: any;
   jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, handler) => {
     listener = handler; return { remove: jest.fn() };
@@ -45,10 +34,12 @@ test('resolved bid disappears when creator returns to the app', async () => {
     tree = Renderer.create(<MyBids token="t" onBack={() => {}} />);
   });
   expect(content(tree.toJSON())).toContain('Launch');
+  expect(content(tree.toJSON())).toContain('Accepted (0)');
   (getMyBids as jest.Mock).mockResolvedValue([bid('approved', { title: 'Launch' })]);
   await act(async () => { listener('active'); });
-  expect(content(tree.toJSON())).not.toContain('Launch');
-  expect(content(tree.toJSON())).toContain('No pending bids');
+  // Won bids stay listed (the website shows them too) and are counted under Accepted.
+  expect(content(tree.toJSON())).toContain('Launch');
+  expect(content(tree.toJSON())).toContain('Accepted (1)');
 });
 
 test('brand can view a bidding creator profile before hiring', async () => {

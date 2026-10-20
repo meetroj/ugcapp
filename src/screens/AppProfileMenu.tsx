@@ -9,7 +9,7 @@ import { Alert } from '../components/AppAlert';
  * corners actually show against it; painting the page light made the same
  * radius invisible.
  */
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -19,6 +19,7 @@ import {
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
+import { HelpSheet } from './DealSheets';
 import type { AuthUser } from '../api';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -121,6 +122,24 @@ const icons = {
       />
     </Svg>
   ),
+  help: () => (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+      <Circle cx={12} cy={12} r={8.5} {...S} />
+      <Circle cx={12} cy={12} r={3.2} {...S} />
+      <Path d="m6 6 3.8 3.8M18 6l-3.8 3.8M6 18l3.8-3.8M18 18l-3.8-3.8" {...S} />
+    </Svg>
+  ),
+  bookmark: () => (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+      <Path d="M6.5 3.8h11v16.4l-5.5-4-5.5 4V3.8Z" {...S} />
+    </Svg>
+  ),
+  home: () => (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+      <Path d="M4 11 12 4l8 7v8.5H4V11Z" {...S} />
+      <Path d="M10 19.5v-5h4v5" {...S} />
+    </Svg>
+  ),
   messages: () => (
     <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
       <Path
@@ -136,6 +155,8 @@ type Item = {
   sub: string;
   path: string;
   icon: keyof typeof icons;
+  /** 'help' opens the support sheet (the website's "Need help?") instead of navigating. */
+  action?: 'help';
 };
 type Section = { title: string; items: Item[] };
 
@@ -254,6 +275,20 @@ const brandSections: Section[] = [
         icon: 'brief',
       },
       {
+        // No native screen: opens the website page inside the app.
+        label: 'Sent Briefs',
+        sub: 'Briefs you sent to creators',
+        path: '/dashboard/business/sent-briefs',
+        icon: 'brief',
+      },
+      {
+        // No native screen: opens the website page inside the app.
+        label: 'Saved Creators',
+        sub: 'Creators you bookmarked',
+        path: '/dashboard/business/saved-creators',
+        icon: 'bookmark',
+      },
+      {
         label: 'Pending Bids',
         sub: 'Review creator submissions',
         path: '/dashboard/business/pending-bids',
@@ -300,6 +335,21 @@ const brandSections: Section[] = [
     title: 'SUPPORT',
     items: [
       {
+        // Same as BrandTopNavLayout's "Need help?": a dialog, not a page.
+        label: 'Need help?',
+        sub: 'Email, call or WhatsApp our team',
+        path: '',
+        icon: 'help',
+        action: 'help',
+      },
+      {
+        // The /brand-home showcase has no native screen: opens in the app's web view.
+        label: 'Brand Home',
+        sub: 'See what UGCad offers brands',
+        path: '/brand-home',
+        icon: 'home',
+      },
+      {
         label: 'Follow Us',
         sub: 'Stay updated on our socials',
         path: '/app/follow-us',
@@ -316,6 +366,7 @@ function AppProfileMenu({
   onMessages,
   onLogout,
 }: Props) {
+  const [helpOpen, setHelpOpen] = useState(false);
   // Logging out clears the stored session, so confirm before doing it.
   const confirmLogout = useCallback(() => {
     Alert.alert('Log out', 'You will need to sign in again to continue.', [
@@ -371,12 +422,16 @@ function AppProfileMenu({
                   const RowIcon = icons[item.icon];
                   return (
                     <TouchableOpacity
-                      key={item.path}
+                      key={`${item.path}:${item.label}`}
                       style={[
                         styles.row,
                         index === section.items.length - 1 && styles.lastRow,
                       ]}
-                      onPress={() => onNavigate(item.path)}
+                      onPress={() =>
+                        item.action === 'help'
+                          ? setHelpOpen(true)
+                          : onNavigate(item.path)
+                      }
                       accessibilityRole="button"
                       accessibilityLabel={item.label}
                     >
@@ -409,6 +464,7 @@ function AppProfileMenu({
           </TouchableOpacity>
         )}
       </ScrollView>
+      <HelpSheet visible={helpOpen} onClose={() => setHelpOpen(false)} />
     </View>
   );
 }

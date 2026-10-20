@@ -16,9 +16,10 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBlock } from '../components/Skeleton';
 import { getKyc, type AuthUser } from '../api';
 import { scale, fontScale } from '../theme';
+import { errorMessage, kycStatusOf, type KycStatus } from '../payoutRules';
 
 type Kyc = Record<string, any>;
-type Status = 'verified' | 'pending' | 'rejected' | 'unsubmitted';
+type Status = KycStatus;
 
 /**
  * Copy and colour per status. Keeping them in one table means the render code
@@ -53,7 +54,7 @@ const STATES: Record<
     label: 'In review',
     title: 'Verification In Review',
     line1: 'Your documents are being checked.',
-    line2: 'This usually takes 1-2 business days.',
+    line2: 'This usually takes 24-48 hours.',
     noteTitle: 'Nothing to do right now',
     noteBody: 'We will notify you as soon as your verification is complete.',
   },
@@ -182,27 +183,6 @@ function Icon({
 const textOf = (value: unknown, fallback: string) =>
   typeof value === 'string' && value.trim() ? value : fallback;
 
-/** Maps the many spellings a backend might use onto our four states. */
-function statusOf(kyc: Kyc): Status {
-  const raw = String(
-    kyc.status ?? kyc.kyc_status ?? kyc.verification_status ?? '',
-  ).toLowerCase();
-  if (
-    ['verified', 'approved', 'complete', 'completed', 'success'].includes(raw)
-  ) {
-    return 'verified';
-  }
-  if (
-    ['pending', 'in_review', 'review', 'submitted', 'processing'].includes(raw)
-  ) {
-    return 'pending';
-  }
-  if (['rejected', 'failed', 'declined', 'denied'].includes(raw)) {
-    return 'rejected';
-  }
-  return 'unsubmitted';
-}
-
 function KycVerification({
   token,
   unread = 0,
@@ -233,7 +213,9 @@ function KycVerification({
   const [refreshing, setRefreshing] = useState(false);
   // The status could not be read. Distinct from "not submitted": showing that
   // to a verified creator would be actively wrong.
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState('');
+  // A status has been read at least once, so a failed refresh can keep showing it.
+  const [loaded, setLoaded] = useState(false);
 
   // GET /api/kyc/me — the record always belongs to the signed-in creator, so
   // no id is passed. (This used to call /api/kyc?user_id=..., which the
@@ -246,17 +228,18 @@ function KycVerification({
           if (isCancelled?.()) {
             return;
           }
-          setFailed(false);
+          setFailed('');
+          setLoaded(true);
           // An absent/empty record legitimately means "not submitted yet".
           if (record && Object.keys(record).length) {
             setKyc(record);
           }
         })
-        .catch(() => {
+        .catch(e => {
           // Leave the status unknown rather than claiming "not submitted" when
           // the request itself failed.
           if (!isCancelled?.()) {
-            setFailed(true);
+            setFailed(errorMessage(e, 'Could not load your verification status.'));
           }
         }),
     [token],
@@ -279,16 +262,40 @@ function KycVerification({
     load().finally(() => setRefreshing(false));
   }, [load]);
 
-  const status = useMemo(() => statusOf(kyc), [kyc]);
+  const retry = useCallback(() => {
+    setLoading(true);
+    load().finally(() => setLoading(false));
+  }, [load]);
+
+  const status = useMemo(() => kycStatusOf(kyc), [kyc]);
   const state = STATES[status];
   const submitted = status !== 'unsubmitted';
+  // Nothing has loaded: show only the error, not a made-up "Not started".
+  const unknown = !!failed && !loaded && !loading;
+  // The website only allows (re)submitting from not-submitted or rejected; the
+  // backend refuses anything else with "KYC already pending/verified".
+  const canEdit = status === 'unsubmitted' || status === 'rejected';
+  const noteBody =
+    status === 'rejected'
+      ? `${
+          textOf(kyc.rejection_reason, 'Your documents could not be verified.')
+        } Update your details below to resubmit, or contact support for help.`
+      : state.noteBody;
+  const aadhaar = String(kyc.aadhaar_number || '').replace(/D/g, '');
+  const submittedOn = kyc.submitted_at ? new Date(kyc.submitted_at) : null;
+  const payoutMethod = String(kyc.payout_method || kyc.payment_method || '');
 
   const rows = [
     {
       icon: 'person',
       label: 'Legal Name',
+      // The backend stores full_legal_name (name_on_pan mirrors it).
       value: textOf(
-        kyc.legal_name || kyc.full_name || kyc.name,
+        kyc.full_legal_name ||
+          kyc.name_on_pan ||
+          kyc.legal_name ||
+          kyc.full_name ||
+          kyc.name,
         submitted ? '-' : 'Not provided',
       ),
     },
@@ -300,21 +307,41 @@ function KycVerification({
         submitted ? '-' : 'Not provided',
       ),
     },
+    // Aadhaar is optional; when given, only the last four digits are shown.
+    ...(aadhaar
+      ? [
+          {
+            icon: 'card',
+            label: 'Aadhaar',
+            value: `XXXX XXXX ${aadhaar.slice(-4)}`,
+          },
+        ]
+      : []),
     {
       icon: 'rupee',
       label: 'Payout Method',
-      value: textOf(
-        kyc.payout_method || kyc.payment_method,
-        submitted ? '-' : 'Not set',
-      ),
+      value:
+        payoutMethod === 'bank'
+          ? 'Bank account'
+          : payoutMethod === 'upi'
+          ? 'UPI'
+          : submitted
+          ? '-'
+          : 'Not set',
     },
     {
       icon: 'calendar',
       label: 'Submitted On',
-      value: textOf(
-        kyc.submitted_on || kyc.submitted_at || kyc.created_at,
-        submitted ? '-' : 'Not submitted',
-      ),
+      value:
+        submittedOn && !Number.isNaN(submittedOn.getTime())
+          ? submittedOn.toLocaleDateString('en-IN', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+            })
+          : submitted
+          ? '-'
+          : 'Not submitted',
     },
   ];
 
@@ -343,6 +370,7 @@ function KycVerification({
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerRound}
+            hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}
             onPress={onNotifications}
             accessibilityRole="button"
             accessibilityLabel="Notifications"
@@ -361,6 +389,7 @@ function KycVerification({
         }
       >
         {/* Status banner */}
+        {!unknown && (
         <View
           style={[styles.card, styles.banner, { backgroundColor: state.tint }]}
         >
@@ -385,19 +414,25 @@ function KycVerification({
             <Text style={styles.pillText}>{state.label}</Text>
           </View>
         </View>
+        )}
 
         {/* Could not reach the server: say so rather than letting the status
             fields read as a confirmed "not submitted". */}
-        {failed && !loading && (
+        {!!failed && !loading && (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>
-              Could not load your verification status. Check your connection and
-              pull to refresh.
-            </Text>
+            <Text style={styles.errorText}>{failed}</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={retry}
+              accessibilityRole="button"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         )}
 
         {/* Details */}
+        {!unknown && (
         <View style={styles.card}>
           <View style={styles.cardHead}>
             <Icon name="people" size={19} color="#4741DB" />
@@ -437,8 +472,10 @@ function KycVerification({
             </Text>
           </View>
         </View>
+        )}
 
         {/* Guidance */}
+        {!unknown && (
         <View
           style={[styles.card, styles.note, { backgroundColor: state.tint }]}
         >
@@ -448,28 +485,35 @@ function KycVerification({
               {state.noteTitle}
             </Text>
           </View>
-          <Text style={styles.noteBody}>{state.noteBody}</Text>
+          <Text style={styles.noteBody}>{noteBody}</Text>
         </View>
+        )}
 
-        {/* Update details */}
+        {/* Update details: only before a submission or after a rejection */}
+        {!unknown && canEdit && (
         <View style={[styles.card, styles.actionCard]}>
           <View style={styles.actionCopy}>
             <Text style={styles.actionTitle}>
-              {submitted ? 'Need to update something?' : 'Ready to verify?'}
+              {submitted ? 'Ready to resubmit?' : 'Ready to verify?'}
             </Text>
             <Text style={styles.actionText}>
               {submitted
-                ? 'If your details have changed, you can update your information.'
+                ? 'Correct the details we could not verify and submit again.'
                 : 'Submit your details to complete verification.'}
             </Text>
           </View>
-          <TouchableOpacity style={styles.outlineBtn} onPress={onUpdateDetails}>
+          <TouchableOpacity
+            style={styles.outlineBtn}
+            onPress={onUpdateDetails}
+            accessibilityRole="button"
+          >
             <Icon name="pencil" size={14} color="#4741DB" />
             <Text style={styles.outlineText}>
               {submitted ? 'Update Details' : 'Start KYC'}
             </Text>
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Support */}
         <View style={[styles.card, styles.actionCard]}>
@@ -486,17 +530,24 @@ function KycVerification({
           <TouchableOpacity
             style={styles.outlineBtn}
             onPress={onContactSupport}
+            accessibilityRole="button"
           >
             <Icon name="chat" size={14} color="#4741DB" />
             <Text style={styles.outlineText}>Contact Support</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.primary} onPress={onGoToEarnings}>
-          <Icon name="wallet" size={17} color="#FFF" />
-          <Text style={styles.primaryText}>Go to Earnings</Text>
-          <Icon name="arrow" size={17} color="#FFF" />
-        </TouchableOpacity>
+        {!unknown && status === 'verified' && (
+          <TouchableOpacity
+            style={styles.primary}
+            onPress={onGoToEarnings}
+            accessibilityRole="button"
+          >
+            <Icon name="wallet" size={17} color="#FFF" />
+            <Text style={styles.primaryText}>Go to Earnings</Text>
+            <Icon name="arrow" size={17} color="#FFF" />
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </View>
   );
@@ -520,8 +571,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
   },
   headerBtn: {
-    width: scale(34),
-    height: scale(34),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -621,6 +672,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#B3261E',
   },
+  retryBtn: {
+    marginTop: scale(4),
+    minHeight: scale(44),
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4741DB',
+  },
   row: {
     height: scale(46),
     flexDirection: 'row',
@@ -677,7 +740,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(5),
-    height: scale(34),
+    minHeight: scale(44),
     paddingHorizontal: scale(11),
     borderRadius: scale(9),
     borderWidth: 1,

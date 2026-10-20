@@ -3,11 +3,11 @@ import { Alert } from '../components/AppAlert';
 /**
  * Creator Bids — the native replacement for the web
  * /dashboard/business/pending-bids page. Campaigns are the outer group and
- * each bid is a row underneath, matching the reference design. Read-only:
- * Accept / Decline / Profile all hand off to the existing web flow, because
- * accepting a bid moves money into escrow.
+ * each bid is a row underneath, matching the reference design. Accept hires
+ * the creator (the bid amount moves into escrow), Decline tells them no, and
+ * the star shortlists a bid for this session, as on the website.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -26,6 +26,23 @@ import {
   selectCreator,
 } from '../api';
 import AppHeader from '../components/AppHeader';
+import ChoiceSheet from '../components/ChoiceSheet';
+import { errorMessage } from '../payoutRules';
+import {
+  BID_SORTS,
+  BID_TABS,
+  bidDays,
+  bidInTab,
+  bidKey,
+  bidState,
+  creatorsWanted,
+  hasProposal,
+  hireMessage,
+  hiredCreatorIds,
+  isOpenForBids,
+  sortBids,
+  type BidSort,
+} from '../brandHiring';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -39,18 +56,6 @@ type Props = {
 type Campaign = Record<string, any> & { id: string };
 type Bid = Record<string, any>;
 
-/** Tabs mirror the bid lifecycle the backend stores on each bid. */
-const TABS = [
-  { key: 'all', label: 'All', statuses: null as string[] | null },
-  {
-    key: 'responded',
-    label: 'Responded',
-    statuses: ['pending', 'submitted', 'responded'],
-  },
-  { key: 'accepted', label: 'Accepted', statuses: ['accepted', 'selected'] },
-  { key: 'declined', label: 'Declined', statuses: ['declined', 'rejected'] },
-];
-
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
 
@@ -59,23 +64,16 @@ const rupees = (value: unknown) =>
     maximumFractionDigits: 0,
   })}`;
 
-/**
- * How many creators the brief hires. Briefs posted before the field existed
- * carry no `creators_wanted`, and the backend reads those as 1 — so the same
- * default here keeps the two in agreement.
- */
-const wantedFor = (campaign: Record<string, any>) =>
-  Math.max(1, Number(campaign.creators_wanted) || 1);
+/** How many creators the brief hires (same default as the backend). */
+const wantedFor = (campaign: Record<string, any>) => creatorsWanted(campaign);
 
 /** How many slots are already filled, however the payload reports it. */
 const hiredFor = (campaign: Record<string, any>) => {
-  if (Array.isArray(campaign.selected_creators)) {
-    return campaign.selected_creators.length;
-  }
-  if (Number.isFinite(Number(campaign.slots_filled))) {
-    return Number(campaign.slots_filled);
-  }
-  return campaign.selected_creator ? 1 : 0;
+  const roster = hiredCreatorIds(campaign).length;
+  if (roster) return roster;
+  return Number.isFinite(Number(campaign.slots_filled))
+    ? Number(campaign.slots_filled)
+    : 0;
 };
 
 function Icon({
@@ -120,13 +118,21 @@ function BrandBids({
   const [tab, setTab] = useState('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Why the last load failed ('' when it worked); shown inline with a Retry.
+  const [loadError, setLoadError] = useState('');
+  // Shortlisted bids (campaign:creator keys). Like the website this is a
+  // session-only marker, the backend has no shortlist-a-bid endpoint.
+  const [shortlist, setShortlist] = useState<string[]>([]);
+  const [sort, setSort] = useState<BidSort>('match');
+  const [sortOpen, setSortOpen] = useState(false);
   // Campaign ids the user collapsed. Everything starts expanded, as in the design.
   const [collapsed, setCollapsed] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
       const list = await getCampaigns(token);
-      // Only campaigns that actually received applications are worth a group.
+      // Only live briefs that still have a slot to fill and received
+      // applications are worth a group (the website lists the same set).
       setCampaigns(
         list
           .map((campaign, index) => ({
@@ -135,12 +141,15 @@ function BrandBids({
           }))
           .filter(
             campaign =>
-              Array.isArray(campaign.bids) && campaign.bids.length > 0,
+              Array.isArray(campaign.bids) &&
+              campaign.bids.length > 0 &&
+              isOpenForBids(campaign),
           ) as Campaign[],
       );
-    } catch {
-      // Backend unreachable — keep whatever is on screen; pull-to-refresh
-      // retries the real request.
+      setLoadError('');
+    } catch (error) {
+      // Keep whatever is on screen and say why it is stale, with a Retry.
+      setLoadError(errorMessage(error, 'Could not load creator applications.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -157,21 +166,28 @@ function BrandBids({
    * holds the bid id mid-request so its buttons can be disabled.
    */
   const [acting, setActing] = useState<string | null>(null);
+  // State alone lags a frame behind a fast double tap, so a ref blocks the second call.
+  const actingRef = useRef(false);
 
   const runAction = useCallback(
-    async (action: () => Promise<void>, failure: string) => {
+    async (
+      action: () => Promise<{ title: string; message: string } | void>,
+      failure: string,
+    ) => {
+      if (actingRef.current) return;
+      actingRef.current = true;
       try {
-        await action();
+        const done = await action();
         // Re-read from the server so the row shows the persisted status.
         await load();
+        if (done) Alert.alert(done.title, done.message);
       } catch (error) {
         // The helpers throw carrying the backend's own `detail` (already
-        // hired, view-only team role, …), which is more useful than `failure`.
-        Alert.alert(
-          'Could not complete',
-          text(error instanceof Error ? error.message : '', failure),
-        );
+        // hired, wallet short, view-only team role, ...), which is more useful
+        // than `failure`.
+        Alert.alert('Could not complete', errorMessage(error, failure));
       } finally {
+        actingRef.current = false;
         setActing(null);
       }
     },
@@ -231,15 +247,17 @@ function BrandBids({
             onPress: () => {
               const id = String(bid.id ?? bid.creator_id ?? '');
               setActing(id);
-              runAction(
-                () =>
-                  selectCreator(
-                    token,
-                    campaign.id,
-                    String(bid.creator_id ?? ''),
-                  ),
-                'The bid could not be accepted.',
-              );
+              runAction(async () => {
+                const result = await selectCreator(
+                  token,
+                  campaign.id,
+                  String(bid.creator_id ?? ''),
+                );
+                return {
+                  title: 'Creator hired',
+                  message: hireMessage(result, who),
+                };
+              }, 'The bid could not be accepted.');
             },
           },
         ],
@@ -263,11 +281,13 @@ function BrandBids({
               setActing(id);
               // Keyed on creator_id: a bid is a plain sub-object on the
               // campaign and has no id of its own.
-              runAction(
-                () =>
-                  declineBid(token, campaign.id, String(bid.creator_id ?? '')),
-                'The bid could not be declined.',
-              );
+              runAction(async () => {
+                await declineBid(token, campaign.id, String(bid.creator_id ?? ''));
+                return {
+                  title: 'Bid declined',
+                  message: `${who} has been notified.`,
+                };
+              }, 'The bid could not be declined.');
             },
           },
         ],
@@ -276,45 +296,69 @@ function BrandBids({
     [runAction, token],
   );
 
-  const matchesTab = useCallback(
-    (bid: Bid) => {
-      const spec = TABS.find(item => item.key === tab);
-      const statuses = spec?.statuses;
-      if (!statuses) return true;
-      // A bid with no status yet is still awaiting a response.
-      const status = String(bid.status || 'pending').toLowerCase();
-      return statuses.includes(status);
+  const hiredIdsOf = useCallback(
+    (campaign: Campaign) => hiredCreatorIds(campaign),
+    [],
+  );
+
+  const isShortlisted = useCallback(
+    (campaign: Campaign, bid: Bid, index = 0) =>
+      shortlist.includes(bidKey(campaign.id, bid, index)),
+    [shortlist],
+  );
+
+  const toggleShortlist = useCallback((key: string) => {
+    setShortlist(prev =>
+      prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key],
+    );
+  }, []);
+
+  /** Bids of one campaign that belong to `key`'s tab, sorted. */
+  const bidsFor = useCallback(
+    (campaign: Campaign, key: string) => {
+      const hired = hiredIdsOf(campaign);
+      return ((campaign.bids as Bid[]) || [])
+        .map((bid, index) => ({ bid, index }))
+        .filter(({ bid, index }) =>
+          bidInTab(
+            key,
+            bid,
+            bidState(bid, hired),
+            isShortlisted(campaign, bid, index),
+          ),
+        );
     },
-    [tab],
+    [hiredIdsOf, isShortlisted],
   );
 
   const groups = useMemo(
     () =>
       campaigns
-        .map(campaign => ({
-          campaign,
-          bids: (campaign.bids as Bid[]).filter(matchesTab),
-        }))
+        .map(campaign => {
+          const rows = bidsFor(campaign, tab);
+          const ordered = sortBids(
+            rows.map(row => row.bid),
+            sort,
+          );
+          return {
+            campaign,
+            bids: ordered.map(bid => ({
+              bid,
+              index: rows.find(row => row.bid === bid)?.index ?? 0,
+            })),
+          };
+        })
         .filter(group => group.bids.length > 0),
-    [campaigns, matchesTab],
+    [campaigns, tab, sort, bidsFor],
   );
 
   const totalFor = useCallback(
-    (key: string) => {
-      const spec = TABS.find(item => item.key === key);
-      const statuses = spec?.statuses;
-      return campaigns.reduce((sum, campaign) => {
-        const bids = (campaign.bids as Bid[]) || [];
-        if (!statuses) return sum + bids.length;
-        return (
-          sum +
-          bids.filter(bid =>
-            statuses.includes(String(bid.status || 'pending').toLowerCase()),
-          ).length
-        );
-      }, 0);
-    },
-    [campaigns],
+    (key: string) =>
+      campaigns.reduce(
+        (sum, campaign) => sum + bidsFor(campaign, key).length,
+        0,
+      ),
+    [campaigns, bidsFor],
   );
 
   return (
@@ -333,7 +377,7 @@ function BrandBids({
           style={styles.tabsBar}
           contentContainerStyle={styles.tabs}
         >
-          {TABS.map(item => {
+          {BID_TABS.map(item => {
             const active = tab === item.key;
             const count = totalFor(item.key);
             return (
@@ -350,6 +394,37 @@ function BrandBids({
             );
           })}
         </ScrollView>
+
+        <View style={styles.sortRow}>
+          <TouchableOpacity
+            style={styles.sortBtn}
+            onPress={() => setSortOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Sort bids"
+          >
+            <Text style={styles.sortText}>
+              Sort: {BID_SORTS.find(item => item.key === sort)?.label}
+            </Text>
+            <Icon name="caret" color="#4C5BF3" size={14} />
+          </TouchableOpacity>
+        </View>
+
+        {!!loadError && !loading && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{loadError}</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setRefreshing(true);
+                load();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading applications"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {loading ? (
           <View style={styles.content}>
@@ -371,10 +446,18 @@ function BrandBids({
           >
             {!groups.length ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>No applications</Text>
+                <Text style={styles.emptyTitle}>
+                  {loadError && !campaigns.length
+                    ? "Couldn't load applications"
+                    : 'No applications'}
+                </Text>
                 <Text style={styles.emptyText}>
-                  {tab === 'all'
+                  {loadError && !campaigns.length
+                    ? 'Pull down or tap Retry to try again.'
+                    : tab === 'all'
                     ? 'Creator applications appear here once your briefs go live.'
+                    : tab === 'shortlisted'
+                    ? 'Tap the star on a bid to shortlist it.'
                     : 'Nothing in this state right now.'}
                 </Text>
               </View>
@@ -422,23 +505,22 @@ function BrandBids({
                     </TouchableOpacity>
 
                     {open &&
-                      bids.map((bid, index) => {
+                      bids.map(({ bid, index }) => {
                         const who = text(
                           bid.creator_name || bid.creator_nickname,
                           'Creator',
                         );
                         const rating = Number(bid.creator_rating) || 0;
                         const bidId = String(bid.id ?? bid.creator_id ?? index);
-                        const status = String(
-                          bid.status || 'pending',
-                        ).toLowerCase();
+                        // Hired comes from the campaign roster: the backend
+                        // never sets bid.status to accepted.
+                        const state = bidState(bid, hiredCreatorIds(campaign));
+                        const declined = state === 'declined';
                         // Accept/Decline only make sense while a bid is open.
-                        const settled =
-                          status === 'accepted' ||
-                          status === 'selected' ||
-                          status === 'declined' ||
-                          status === 'rejected';
+                        const settled = state !== 'open';
                         const busy = acting === bidId;
+                        const starred = isShortlisted(campaign, bid, index);
+                        const days = bidDays(bid);
                         return (
                           <View key={bidId} style={styles.bidRow}>
                             <View style={styles.bidTop}>
@@ -463,6 +545,28 @@ function BrandBids({
                                       </Text>
                                     </View>
                                   )}
+                                  <TouchableOpacity
+                                    style={styles.starBtn}
+                                    onPress={() =>
+                                      toggleShortlist(
+                                        bidKey(campaign.id, bid, index),
+                                      )
+                                    }
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    accessibilityRole="button"
+                                    accessibilityState={{ selected: starred }}
+                                    accessibilityLabel={
+                                      starred
+                                        ? `Remove ${who} from shortlist`
+                                        : `Shortlist ${who}`
+                                    }
+                                  >
+                                    <Icon
+                                      name="star"
+                                      size={18}
+                                      color={starred ? '#F5B301' : '#C9CCDD'}
+                                    />
+                                  </TouchableOpacity>
                                 </View>
                                 {rating > 0 && (
                                   <View style={styles.ratingChip}>
@@ -489,15 +593,20 @@ function BrandBids({
                                   </Text>
                                 )}
                               </View>
-                              {!!bid.delivery_days && (
-                                <View style={styles.statCol}>
-                                  <Text style={styles.statValue}>
-                                    {bid.delivery_days} Days
-                                  </Text>
-                                  <Text style={styles.statLabel}>Delivery</Text>
-                                </View>
-                              )}
+                              {/* The backend stores estimated_delivery_days. */}
+                              <View style={styles.statCol}>
+                                <Text style={styles.statValue}>
+                                  {days ? `${days} Days` : '-'}
+                                </Text>
+                                <Text style={styles.statLabel}>Delivery</Text>
+                              </View>
                             </View>
+
+                            {hasProposal(bid) && (
+                              <Text style={styles.pitch} numberOfLines={3}>
+                                {String(bid.proposal).trim()}
+                              </Text>
+                            )}
 
                             <View style={styles.actions}>
                               <TouchableOpacity
@@ -518,23 +627,16 @@ function BrandBids({
                                 <View
                                   style={[
                                     styles.settledPill,
-                                    (status === 'declined' ||
-                                      status === 'rejected') &&
-                                      styles.settledPillDeclined,
+                                    declined && styles.settledPillDeclined,
                                   ]}
                                 >
                                   <Text
                                     style={[
                                       styles.settledText,
-                                      (status === 'declined' ||
-                                        status === 'rejected') &&
-                                        styles.settledDeclined,
+                                      declined && styles.settledDeclined,
                                     ]}
                                   >
-                                    {status === 'declined' ||
-                                    status === 'rejected'
-                                      ? 'Declined'
-                                      : 'Accepted'}
+                                    {declined ? 'Declined' : 'Accepted'}
                                   </Text>
                                 </View>
                               ) : (
@@ -617,6 +719,16 @@ function BrandBids({
           </ScrollView>
         )}
       </View>
+
+      <ChoiceSheet
+        visible={sortOpen}
+        title="Sort bids by"
+        options={BID_SORTS.map(item => ({
+          label: item.label,
+          onPress: () => setSort(item.key),
+        }))}
+        onClose={() => setSortOpen(false)}
+      />
     </View>
   );
 }
@@ -653,6 +765,48 @@ const styles = StyleSheet.create({
     color: '#6E7391',
   },
   tabTextActive: { color: '#FFFFFF' },
+
+  sortRow: { paddingHorizontal: scale(16), paddingBottom: scale(2), alignItems: 'flex-start' },
+  sortBtn: {
+    minHeight: scale(44),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(4),
+  },
+  sortText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+  errorBanner: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(10),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  retryBtn: {
+    minHeight: scale(44),
+    minWidth: scale(60),
+    paddingHorizontal: scale(12),
+    borderRadius: scale(10),
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#B3261E',
+  },
+  starBtn: { marginLeft: 'auto', alignItems: 'center', justifyContent: 'center' },
+  pitch: { marginTop: scale(8), fontSize: fontScale(11.5), color: '#5C6180' },
 
   loading: { marginTop: scale(40) },
   content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(30) + NAV_CLEARANCE },

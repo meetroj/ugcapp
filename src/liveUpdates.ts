@@ -4,6 +4,8 @@ import { BACKEND_URL } from './api';
 const listeners = new Set<() => void>();
 let keyboardVisible = false;
 const emit = () => { if (!keyboardVisible) listeners.forEach(listener => listener()); };
+/** Refetch every mounted live screen now (the website's publishLiveUpdate), e.g. after a notification is read. */
+export const publishLiveUpdate = () => emit();
 export function useLiveEffect(effect: () => void | (() => void), dependencies: DependencyList) {
   const latest = useRef(effect);
   latest.current = effect;

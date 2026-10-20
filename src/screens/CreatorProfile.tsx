@@ -34,6 +34,8 @@ import {
   type AuthUser,
 } from '../api';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { IMAGE_TOO_LARGE_MESSAGE, imageTooLarge } from '../profileImage';
+import { profilePercent } from '../profileCompletion';
 
 type Props = {
   token: string;
@@ -198,6 +200,9 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
   // Which image is mid-upload, so the tapped button can show a spinner and
   // both are locked against a second tap.
   const [uploading, setUploading] = useState<'banner' | 'photo' | null>(null);
+  // A failed refresh used to leave the session's stub profile on screen with no
+  // hint that the numbers were stale.
+  const [loadError, setLoadError] = useState('');
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -207,6 +212,10 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
 
     if (results[0].status === 'fulfilled') {
       setMe(results[0].value || {});
+      setLoadError('');
+    } else {
+      const reason: any = results[0].reason;
+      setLoadError(reason?.message || 'Could not load your profile.');
     }
     if (results[1].status === 'fulfilled') {
       setUnread(results[1].value);
@@ -255,6 +264,14 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
         if (result.errorMessage) {
           Alert.alert('Could not open your photos', result.errorMessage);
         }
+        return;
+      }
+      // Same 5 MB gate as the website's banner upload, checked before sending.
+      if (imageTooLarge(asset.fileSize)) {
+        Alert.alert(
+          kind === 'banner' ? 'Banner not updated' : 'Photo not updated',
+          IMAGE_TOO_LARGE_MESSAGE,
+        );
         return;
       }
 
@@ -316,6 +333,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
     profile.content_languages,
   );
   const deliverables = Number(me.deliverables_completed || 0);
+  const profilePct = profilePercent(me);
 
   const menu: Array<{
     label: string;
@@ -404,6 +422,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
         <TouchableOpacity
           style={styles.bannerBtn}
           onPress={() => pickAndUpload('banner')}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           disabled={uploading !== null}
           accessibilityRole="button"
           accessibilityState={{ disabled: uploading !== null }}
@@ -434,6 +453,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
             <TouchableOpacity
               style={styles.avatarBtn}
               onPress={() => pickAndUpload('photo')}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               disabled={uploading !== null}
               accessibilityRole="button"
               accessibilityLabel="Change profile photo"
@@ -479,6 +499,36 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
           </Text>
         </View>
       </View>
+
+      {!!loadError && (
+        <TouchableOpacity
+          style={styles.errorBox}
+          onPress={onRefresh}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading your profile"
+        >
+          <Text style={styles.errorText}>{loadError}</Text>
+          <Text style={styles.errorRetry}>Retry</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Mirrors the website's "Profile N% complete / Finish it" nudge. */}
+      {profilePct < 100 && (
+        <TouchableOpacity
+          style={styles.completeBox}
+          onPress={() => onNavigate('/settings')}
+          accessibilityRole="button"
+          accessibilityLabel={`Profile ${profilePct} percent complete. Finish it`}
+        >
+          <View style={styles.completeTop}>
+            <Text style={styles.completeText}>Profile {profilePct}% complete</Text>
+            <Text style={styles.completeCta}>Finish it</Text>
+          </View>
+          <View style={styles.completeTrack}>
+            <View style={[styles.completeFill, { width: `${profilePct}%` }]} />
+          </View>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.menu}>
         {menu.map(row => (
@@ -635,6 +685,61 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#777B96',
+  },
+
+  errorBox: {
+    marginTop: scale(16),
+    marginHorizontal: scale(16),
+    minHeight: scale(44),
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(14),
+    backgroundColor: '#FFE6E7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  errorRetry: {
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#C4373B',
+  },
+  completeBox: {
+    marginTop: scale(16),
+    marginHorizontal: scale(16),
+    minHeight: scale(44),
+    padding: scale(14),
+    borderRadius: scale(16),
+    backgroundColor: '#EEEFFF',
+    borderWidth: 1,
+    borderColor: '#DADCFB',
+  },
+  completeTop: { flexDirection: 'row', justifyContent: 'space-between' },
+  completeText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#15163F',
+  },
+  completeCta: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+  completeTrack: {
+    marginTop: scale(10),
+    height: scale(6),
+    borderRadius: scale(3),
+    backgroundColor: '#DADCFB',
+    overflow: 'hidden',
+  },
+  completeFill: {
+    height: '100%',
+    borderRadius: scale(3),
+    backgroundColor: '#4C5BF3',
   },
 
   menu: { marginTop: scale(20), paddingHorizontal: scale(16), gap: scale(12) },

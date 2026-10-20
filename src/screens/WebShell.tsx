@@ -1,4 +1,4 @@
-import { useLiveUpdates } from "../liveUpdates";
+import { publishLiveUpdate, useLiveEffect, useLiveUpdates } from "../liveUpdates";
 /**
  * The WebView shell around the live PWA, shown once the user is authenticated.
  * All UI comes from the website; this file only adds the native behaviour
@@ -24,6 +24,7 @@ import {
 import { WebView } from 'react-native-webview';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { getChatUnreadCount, type AuthUser } from '../api';
+import { chatPeerName } from '../actionCards';
 import CreatorHome from './CreatorHome';
 import AppProfileMenu from './AppProfileMenu';
 import CreatorProfile from './CreatorProfile';
@@ -99,6 +100,26 @@ const NOTCH_RADIUS = FAB_SIZE / 2 + NOTCH_GAP;
  * replaced. Rewriting them here keeps every entry point — tab, card, or
  * notification tap — landing on the native screen instead of the WebView.
  */
+/** Legacy notification links, same map as the website's LEGACY_LINK_MAP. */
+const LEGACY_LINKS: Record<string, string> = {
+  '/deals': '/my-deals',
+  '/payouts': '/withdrawal',
+  '/creator-dashboard': '/dashboard/creator',
+  '/dashboard/creator/inbox': '/messages',
+  '/dashboard/business/deals': '/dashboard/business/all-campaigns',
+};
+
+/** First `?key=` value in a path or query string, decoded; undefined when absent. */
+export function queryParam(path: string, key: string): string | undefined {
+  const hit = new RegExp(`[?&]${key}=([^&#]+)`).exec(path);
+  if (!hit) return undefined;
+  try {
+    return decodeURIComponent(hit[1]);
+  } catch {
+    return hit[1];
+  }
+}
+
 /**
  * Folds every path the website links to onto the path the native router
  * listens on.
@@ -109,10 +130,15 @@ const NOTCH_RADIUS = FAB_SIZE / 2 + NOTCH_GAP;
  * site inside the app. Every rewrite below is a real link that exists on the
  * website today; keep it in step when either side adds a route.
  */
-function normalizePath(path: string): string {
+export function normalizePath(path: string, role?: string): string {
   const cut = path.search(/[?#]/);
   const pure = cut === -1 ? path : path.slice(0, cut);
   const query = cut === -1 ? '' : path.slice(cut);
+
+  // Links older backend rows and emails still carry. The website maps the same
+  // set (utils/notificationLinks.js), so a tap lands on the screen it means.
+  // Re-run the result: '/deals?campaign=<id>' still has to become '/my-deals/<id>'.
+  if (LEGACY_LINKS[pure]) return normalizePath(LEGACY_LINKS[pure] + query, role);
 
   // ── Chat ──────────────────────────────────────────────────────────────────
   if (pure === '/chat') return '/messages';
@@ -129,9 +155,9 @@ function normalizePath(path: string): string {
 
   // ── Creator ───────────────────────────────────────────────────────────────
   // The creator nav says '/saved'; the native screen is '/saved-briefs'.
-  if (pure === '/saved') return '/saved-briefs';
+  if (pure === '/saved') return `/saved-briefs${query}`;
   // '/profile' is the web's creator profile page; the app's lives under /app.
-  if (pure === '/profile') return '/app/profile';
+  if (pure === '/profile') return `/app/profile${query}`;
   // Notification deep links carry the deal: '/my-deals?campaign=<id>'.
   // The native list reads the id off the path, so move it there.
   if (pure === '/my-deals') {
@@ -145,26 +171,40 @@ function normalizePath(path: string): string {
   }
 
   // ── Brand ─────────────────────────────────────────────────────────────────
-  if (pure === '/dashboard/business') return '/dashboard/business/browse-creator';
-  // '/dashboard/business/campaign/<id>' (and .../campaigns/<id>/shortlist)
-  // are the web's campaign detail; the app's is '/campaigns/<id>'.
-  const campaign = /^\/dashboard\/business\/campaigns?\/([^/]+)/.exec(pure);
-  if (campaign) return `/campaigns/${campaign[1]}`;
+  if (pure === '/dashboard/business') return `/dashboard/business/browse-creator${query}`;
+  // '/dashboard/business/campaign/<id>' (and .../campaigns/<id>/shortlist) and
+  // the public '/campaign/<id>' are the web's campaign detail. A brand's native
+  // screen is '/campaigns/<id>' (keeping '?creator=' so a notification such as
+  // "creator accepted your booking" brings that creator forward). A creator has
+  // no such screen, and the website has no '/campaigns/<id>' page for them, so
+  // the same brief opens from Browse instead.
+  const campaign = /^\/(?:dashboard\/business\/)?campaigns?\/([^/]+)/.exec(pure);
+  if (campaign) {
+    if (role === 'creator') return `/browse-briefs?open=${campaign[1]}`;
+    const focus = /[?&]creator=([^&#]+)/.exec(query);
+    return `/campaigns/${campaign[1]}${focus ? `?creator=${focus[1]}` : ''}`;
+  }
   // BrandCampaignDetail, BrandCreators and BrandReviewsPage all link a creator
   // as '/dashboard/business/creator/<id>'; the app's is '/creator/<id>'.
   const creator = /^\/dashboard\/business\/creator\/([^/]+)/.exec(pure);
   if (creator) return `/creator/${creator[1]}`;
   // The brand nav's Reviews tab. The native Reviews screen is role-aware and
   // serves both, so point the brand at the same one the creator gets.
-  if (pure === '/dashboard/business/reviews') return '/reviews';
-  // The web's public campaign page, linked from SavedBriefs and the dashboard.
-  const publicCampaign = /^\/campaign\/([^/]+)$/.exec(pure);
-  if (publicCampaign) return `/campaigns/${publicCampaign[1]}`;
-  // '/shipment?campaign=<id>' is the web's tracking page.
+  if (pure === '/dashboard/business/reviews') return `/reviews${query}`;
+  // '/shipment?campaign=<id>' is the web's tracking page. Only brands have a
+  // native shipment screen; a creator's shipping address and receipt live in
+  // the deal itself.
   if (pure === '/shipment') {
     const shipment = /[?&]campaign=([^&]+)/.exec(query);
-    if (shipment) return `/shipment/${decodeURIComponent(shipment[1])}`;
+    if (shipment) {
+      const id = decodeURIComponent(shipment[1]);
+      if (role === 'creator') return `/my-deals/${id}`;
+      const who = /[?&]creator=([^&#]+)/.exec(query);
+      return `/shipment/${id}${who ? `?creator=${who[1]}` : ''}`;
+    }
   }
+  const shipmentDetail = /^\/shipment\/([^/]+)$/.exec(pure);
+  if (shipmentDetail && role === 'creator') return `/my-deals/${shipmentDetail[1]}`;
 
   return path;
 }
@@ -220,9 +260,6 @@ function WebShell({
   const stackRef = useRef<{ path: string; web: boolean }[]>([]);
   const [webPath, setWebPath] = useState(initialPath);
   const [feedOpen, setFeedOpen] = useState(false);
-  // Display name for the open chat thread. The list knows it; the URL only
-  // carries the id, so it is stashed here when a thread is opened.
-  const [chatName, setChatName] = useState('Chat');
   // The creator record tapped on the Creators tab. The profile screen
   // seeds its header from this while GET /api/profile/:id is in flight.
   const [creatorSeed, setCreatorSeed] = useState<Record<string, any> | null>(
@@ -234,19 +271,11 @@ function WebShell({
 
   // Unread chat messages, for the header badge on screens that show one.
   const [unread, setUnread] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    // Badge only — a failure must not disturb the shell.
-    getChatUnreadCount(token)
-      .then(count => {
-        if (active) setUnread(count);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [token]);
+  // Display name for the thread opened from a list, keyed by the user it
+  // belongs to so a deep link to another thread never shows the wrong name.
+  const [chatTitle, setChatTitle] = useState<{ id: string; name: string } | null>(
+    null,
+  );
 
   const creatorApp =
     session.role === 'creator' && session.profile_completed !== false;
@@ -267,6 +296,20 @@ function WebShell({
   // notification must open the native screen, with the query kept only for
   // whatever actually falls through to the WebView URL.
   const purePath = currentPath.split(/[?#]/)[0];
+
+  // Badge only: a failure must not disturb the shell. Re-read on every live tick
+  // and whenever the screen changes, because opening a thread marks it read.
+  useLiveEffect(() => {
+    let active = true;
+    getChatUnreadCount(token)
+      .then(count => {
+        if (active) setUnread(count);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [token, purePath]);
   const showingCreatorHome = creatorApp && purePath === '/dashboard/creator';
   const showingBrowseCampaigns = creatorApp && purePath === '/browse-briefs';
   const showingActiveWork = creatorApp && purePath === '/my-active-work';
@@ -294,20 +337,14 @@ function WebShell({
     brandApp && purePath === '/dashboard/business/all-campaigns';
   const showingBrandCreators =
     brandApp && purePath === '/dashboard/business/browse-creator';
-  // '?amount=' is the deliberate handoff to the web checkout (the recharge
-  // needs a payment-gateway SDK the app doesn't bundle), so that one query
-  // keeps falling through to the WebView instead of matching the native tab.
-  const showingBrandWallet =
-    brandApp &&
-    purePath === '/dashboard/business/wallet' &&
-    !/[?&]amount=/.test(currentPath);
-  // The recharge/checkout handoff (wallet + ?amount=): it falls through to the
-  // WebView for the payment SDK, and the floating bottom nav must NOT sit over
-  // the payment screen.
-  const showingWalletCheckout =
-    brandApp &&
-    purePath === '/dashboard/business/wallet' &&
-    /[?&]amount=/.test(currentPath);
+  // The wallet always renders natively; its recharge opens Razorpay in a
+  // WalletCheckout modal inside the screen, so no query hands off to the web.
+  const showingBrandWallet = brandApp && purePath === '/dashboard/business/wallet';
+  // Settings > Billing links here with ?view=history|recharge to scroll to a section.
+  const walletView = /[?&]view=(history|recharge)/.exec(currentPath)?.[1] as
+    | 'history'
+    | 'recharge'
+    | undefined;
   const showingBrandBids =
     brandApp && purePath === '/dashboard/business/pending-bids';
   const showingBrandWorkReview =
@@ -334,6 +371,10 @@ function WebShell({
   const showingBrandShipmentDetail = brandApp && !!shipmentMatch;
   // /shipment/<campaign>?creator=<id> targets one hired creator on a multi-creator brief.
   const shipmentCreator = /[?&]creator=([^&#]+)/.exec(currentPath)?.[1];
+  // Query-string deep links read by the screens below. normalizePath keeps
+  // these on the path, so a notification or in-app link reaches them intact.
+  const draftId = queryParam(currentPath, 'draft');
+  const focusCreatorId = queryParam(currentPath, 'creator');
   // A creator's public profile: /creator/<id>. The screen fetches by id, so it
   // renders natively from anywhere — the Creators tab just also hands over its
   // directory record as a seed so the header paints without waiting.
@@ -344,6 +385,8 @@ function WebShell({
   const myDealMatch = /^\/my-deals\/([^/]+)$/.exec(purePath);
   const showingMyDeals =
     creatorApp && (purePath === '/my-deals' || !!myDealMatch);
+  // '/my-deals?tab=requested' (a booking request) opens that hub tab.
+  const myDealsTab = queryParam(currentPath, 'tab');
   const showingMyBids = creatorApp && purePath === '/my-bids';
   const showingSaved = creatorApp && purePath === '/saved-briefs';
   // Static policy pages — the last routes that used to drop the user onto the
@@ -380,8 +423,6 @@ function WebShell({
     // top of the fields and its own footer action.
     showingBrandPostBrief ||
     showingBrandWorkReview ||
-    // The wallet recharge/payment checkout — the nav must not cover it.
-    showingWalletCheckout ||
     showingReviews ||
     // Creator secondary screens, all reached from the profile menu or a card
     // rather than from a tab, and all carrying their own back arrow.
@@ -462,7 +503,7 @@ function WebShell({
         }
         target = target.replace(/^https?:\/\/[^/]*/i, '') || '/';
       }
-      const path = normalizePath(target);
+      const path = normalizePath(target, session.role);
       // '/notifications' is a page on the website but an overlay in the app.
       // Opening the feed over whatever is on screen keeps the bell and a
       // website link behaving the same, and stops the desktop page loading in
@@ -478,7 +519,16 @@ function WebShell({
       setCurrentPath(path);
       setWebPath(path);
     },
-    [],
+    [session.role],
+  );
+
+  /** Opens a chat thread, remembering the name the list already knows. */
+  const openThread = useCallback(
+    (userId: string, name: string) => {
+      setChatTitle({ id: String(userId), name });
+      navigateTo(`/messages/${userId}`);
+    },
+    [navigateTo],
   );
 
   /**
@@ -589,7 +639,7 @@ function WebShell({
       // Links followed inside the WebView are normalised too: a link tapped on
       // a web page must reach the same native screen the bottom nav would, or
       // the app drifts back onto the desktop site one tap at a time.
-      const path = normalizePath(url.pathname + url.search);
+      const path = normalizePath(url.pathname + url.search, session.role);
       if (goingBack.current !== null) {
         const from = goingBack.current;
         goingBack.current = null;
@@ -611,7 +661,7 @@ function WebShell({
         setCurrentPath(path);
       }
     } catch {}
-  }, [onLogout]);
+  }, [onLogout, session.role]);
 
   // Keep third-party flows (OAuth, payments, mailto/tel) out of the webview.
   const onShouldStartLoad = useCallback((req: ShouldStartLoadRequest) => {
@@ -629,8 +679,14 @@ function WebShell({
     if (isInternal(url)) {
       // Website logout lands on its login page; never show the web login in the app.
       try {
-        if (isWebLoginPath(new URL(url).pathname)) {
+        const pathname = new URL(url).pathname;
+        if (isWebLoginPath(pathname)) {
           onLogout?.();
+          return false;
+        }
+        // The website bell's "view all": the app shows notifications as an overlay.
+        if (pathname === '/notifications' && mobileDashboard) {
+          setFeedOpen(true);
           return false;
         }
       } catch {}
@@ -639,7 +695,7 @@ function WebShell({
 
     Linking.openURL(url).catch(() => {});
     return false;
-  }, [onLogout]);
+  }, [onLogout, mobileDashboard]);
 
   const onLoadEnd = useCallback(() => {
     setLoading(false);
@@ -675,9 +731,15 @@ function WebShell({
           onOpenProfile={() => navigateTo('/app/profile')}
           onOpenEarnings={() => navigateTo('/withdrawal')}
           onOpenDeals={() => navigateTo('/my-deals')}
+          onNavigate={navigateTo}
         />
       ) : showingBrowseCampaigns ? (
         <BrowseCampaigns
+          // Remount per URL so '?open=' / '?q=' from a link apply to a screen
+          // that is already on Browse.
+          key={currentPath}
+          openId={queryParam(currentPath, 'open')}
+          initialQuery={queryParam(currentPath, 'q')}
           onNavigate={navigateTo}
           token={token}
           session={session}
@@ -692,10 +754,7 @@ function WebShell({
           unread={unread}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
-          onOpenThread={(userId, name) => {
-            setChatName(name);
-            navigateTo(`/messages/${userId}`);
-          }}
+          onOpenThread={openThread}
         />
       ) : showingKyc ? (
         <KycVerification
@@ -714,7 +773,6 @@ function WebShell({
       ) : showingEarnings ? (
         <Earnings
           token={token}
-          session={session}
           unread={unread}
           onRequestWithdrawal={() => navigateTo('/withdrawal/new')}
           onMessages={() => navigateTo('/messages')}
@@ -728,6 +786,7 @@ function WebShell({
           onBack={backTo('/app/profile')}
           onMessages={() => navigateTo('/messages')}
           onNotifications={() => setFeedOpen(true)}
+          onNavigate={navigateTo}
         />
       ) : showingSecurity ? (
         <AccountSecurity
@@ -766,6 +825,7 @@ function WebShell({
         <BrandSettings
           token={token}
           onBack={backTo('/app/settings')}
+          onNavigate={navigateTo}
         />
       ) : showingBrandCampaigns ? (
         <BrandCampaigns
@@ -795,7 +855,13 @@ function WebShell({
               : null
           }
           onBack={backTo('/dashboard/business/browse-creator')}
-          onMessage={() => navigateTo(`/messages/${creatorMatch![1]}`)}
+          onMessage={() =>
+            // A first message has no conversation row yet, so hand the thread
+            // the name the profile already knows (first name only for a brand).
+            creatorSeed && String(creatorSeed.id) === creatorMatch![1]
+              ? openThread(creatorMatch![1], chatPeerName(creatorSeed, 'business'))
+              : navigateTo(`/messages/${creatorMatch![1]}`)
+          }
           onSendBrief={() =>
             navigateTo(
               `/dashboard/business/post-brief?creator=${encodeURIComponent(creatorMatch![1])}`,
@@ -805,6 +871,12 @@ function WebShell({
       ) : showingBrandWallet ? (
         <BrandWallet
           token={token}
+          initialView={walletView}
+          prefill={{
+            name: String(session.nickname || session.full_name || ''),
+            email: String(session.email || ''),
+            contact: String(session.phone || ''),
+          }}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
@@ -821,6 +893,7 @@ function WebShell({
         <BrandWorkReview
           token={token}
           onBack={backTo('/dashboard/business/all-campaigns')}
+          onOpenThread={openThread}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
@@ -849,6 +922,7 @@ function WebShell({
               ? decodeURIComponent(/[?&]creator=([^&]+)/.exec(currentPath)![1])
               : undefined
           }
+          resumeDraftId={draftId}
           onBack={backTo('/dashboard/business/all-campaigns')}
           onDone={id =>
             navigateTo(
@@ -862,10 +936,8 @@ function WebShell({
           campaignId={campaignMatch![1]}
           onBack={backTo('/dashboard/business/all-campaigns')}
           onNavigate={navigateTo}
-          onOpenThread={(userId, nickname) => {
-            setChatName(nickname);
-            navigateTo(`/messages/${userId}`);
-          }}
+          focusCreatorId={focusCreatorId}
+          onOpenThread={openThread}
         />
       ) : showingBrandShipmentDetail ? (
         <BrandShipmentDetail
@@ -879,7 +951,9 @@ function WebShell({
           token={token}
           session={session}
           otherUserId={chatMatch![1]}
-          title={chatName}
+          title={
+            chatTitle && chatTitle.id === chatMatch![1] ? chatTitle.name : undefined
+          }
           onBack={backTo('/messages')}
           onNavigate={navigateTo}
         />
@@ -887,10 +961,8 @@ function WebShell({
         <BrandMessages
           token={token}
           onNavigate={navigateTo}
-          onOpenThread={(userId, nickname) => {
-            setChatName(nickname);
-            navigateTo(`/messages/${userId}`);
-          }}
+          role={session.role}
+          onOpenThread={openThread}
           onBack={backTo(homePath)}
         />
       ) : showingMyDeals ? (
@@ -898,12 +970,11 @@ function WebShell({
           token={token}
           unread={unread}
           focusDealId={myDealMatch ? myDealMatch[1] : undefined}
+          initialTab={myDealsTab}
+          onBrowse={() => navigateTo('/browse-briefs')}
           onBack={backTo('/app/profile')}
           onMessages={() => navigateTo('/messages')}
-          onOpenThread={(userId, name) => {
-            setChatName(name);
-            navigateTo(`/messages/${userId}`);
-          }}
+          onOpenThread={openThread}
         />
       ) : showingKycSubmit ? (
         <KycSubmit
@@ -916,7 +987,6 @@ function WebShell({
       ) : showingWithdrawalForm ? (
         <WithdrawalRequest
           token={token}
-          available={Number(session.balance || 0)}
           onBack={backTo('/withdrawal')}
           onVerifyKyc={() => navigateTo('/kyc')}
         />
@@ -932,10 +1002,14 @@ function WebShell({
           unread={unread}
           onBack={backTo('/app/profile')}
           onMessages={() => navigateTo('/messages')}
+          onNavigate={navigateTo}
+          onOpenThread={openThread}
         />
       ) : showingSaved ? (
         <SavedBriefs
           token={token}
+          session={session}
+          onNavigate={navigateTo}
           onBack={backTo('/app/profile')}
           onBrowse={() => navigateTo('/browse-briefs')}
         />
@@ -1023,6 +1097,9 @@ function WebShell({
         visible={feedOpen}
         onClose={() => setFeedOpen(false)}
         onNavigate={navigateTo}
+        // Reading a notification must drop the bell badge everywhere at once
+        // (the website does the same with publishLiveUpdate).
+        onUnreadChange={publishLiveUpdate}
       />
 
       {mobileDashboard && !hidesBottomNav && (

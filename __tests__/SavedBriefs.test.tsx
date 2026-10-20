@@ -43,6 +43,12 @@ function findByLabel(tree: any, match: (label: string) => boolean) {
     .filter((n: any) => typeof n.props.onPress === 'function');
 }
 
+// Unmounted after each test so the "Saved" message timer cannot fire afterwards.
+const mounted: any[] = [];
+afterEach(async () => {
+  await ReactTestRenderer.act(async () => mounted.splice(0).forEach(t => t.unmount()));
+});
+
 async function mount() {
   let tree: any;
   await ReactTestRenderer.act(async () => {
@@ -50,6 +56,7 @@ async function mount() {
       <BrowseCampaigns token="t0ken" session={session} />,
     );
   });
+  mounted.push(tree);
   return tree;
 }
 

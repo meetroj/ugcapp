@@ -8,6 +8,8 @@ import { Alert } from '../components/AppAlert';
  * The backend (RevisionRequestIn) takes `items` (1-5, each with description +
  * severity + timestamp_seconds), an optional `notes` string, and `deadline_at`.
  * The legacy free-text `feedback` field is only used when no items are sent.
+ * The creator is only shown the items, so a typed note travels as the last
+ * item as well (see buildRevisionPayload).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -23,7 +25,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import Video, { type VideoRef } from 'react-native-video';
-import { BACKEND_URL, requestWorkRevision } from '../api';
+import { BACKEND_URL, getCampaignWork, requestWorkRevision } from '../api';
+import {
+  MAX_REVISION_ITEMS,
+  buildRevisionPayload,
+  findContactInfo,
+  revisionCounters,
+  revisionItemCount,
+  revisionNotice,
+  revisionSentMessage,
+  type RevisionCounters,
+} from '../brandHiring';
+import { errorMessage } from '../payoutRules';
 import { scale, fontScale } from '../theme';
 
 type Work = Record<string, any> & { id: string };
@@ -43,12 +56,8 @@ type Comment = {
   timestamp_seconds: number;
 };
 
-/** PRD Section 8: the first 2 revisions on a deal are free. */
-const FREE_REVISION_LIMIT = 2;
-/** INR charged for each revision beyond the free limit (₹300 of this goes to the creator). */
-const PAID_REVISION_FEE = 500;
-/** The backend rejects anything outside 1-5 items. */
-const MAX_ITEMS = 5;
+/** The backend rejects anything outside 1-5 items; a typed note takes one of them. */
+const MAX_ITEMS = MAX_REVISION_ITEMS;
 
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -152,6 +161,9 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
   const watermarked = work.watermark_protected !== false && work.status !== 'approved';
 
   const [playing, setPlaying] = useState(false);
+  // A video that fails to load says so and offers a retry (re-mounts the player).
+  const [videoError, setVideoError] = useState(false);
+  const [videoKey, setVideoKey] = useState(0);
 
   const insets = useSafeAreaInsets();
   const [position, setPosition] = useState(0);
@@ -169,34 +181,48 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
   const [sending, setSending] = useState(false);
 
   /**
-   * Revisions are counted per deal, and only the backend can count across
-   * resubmissions. `revisions` on this doc is the best the client has; it is
-   * exact for a first submission and never over-promises free rounds.
+   * Revisions are counted per deal and only the backend can count across
+   * resubmissions. The numbers (free limit, used, fee) ride on the row that was
+   * opened; when it carries none, they are read from the submission itself.
+   * Nothing is guessed: with no count there is simply no fee warning, and the
+   * server still enforces the limit and the charge.
    */
-  // The backend sends the real per-deal numbers: `revision_count_used` on the work /
-  // campaign payloads, `revisionsUsed` on the work-review list rows.
-  const count = (value: unknown): number | null =>
-    typeof value === 'number' && Number.isFinite(value) ? value : null;
-  const used =
-    count(work.revision_count_used) ??
-    count(work.revisionsUsed) ??
-    (Array.isArray(work.revisions) ? work.revisions.length : 0);
-  const freeLimit =
-    count(work.free_revision_limit) ?? count(work.freeRevisionLimit) ?? FREE_REVISION_LIMIT;
-  const paidFee =
-    count(work.paid_revision_fee) ?? count(work.paidRevisionFee) ?? PAID_REVISION_FEE;
-  const freeLeft = Math.max(0, freeLimit - used);
-
-  // The brand must be told BEFORE sending the second revision that the next one is paid.
+  const [counters, setCounters] = useState<RevisionCounters | null>(() =>
+    revisionCounters(work),
+  );
   useEffect(() => {
-    if (freeLeft === 1) {
-      Alert.alert(
-        'This is your second revision',
-        `It is the last free one. Put every change you need in this request - from the third revision onward ₹${paidFee} is deducted from your wallet for each revision.`,
-        [{ text: 'Got it' }],
-      );
+    if (counters || !work.campaign_id) return undefined;
+    let live = true;
+    (async () => {
+      try {
+        const rows = await getCampaignWork(
+          token,
+          String(work.campaign_id),
+          work.creator_id ? String(work.creator_id) : undefined,
+        );
+        const mine = rows.find(row => String(row.id) === String(work.id)) || rows[0];
+        const found = revisionCounters(mine);
+        if (live && found) setCounters(found);
+      } catch {
+        // Offline or not allowed: send without a pre-warning.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [counters, token, work.campaign_id, work.creator_id, work.id]);
+
+  const notice = useMemo(() => revisionNotice(counters), [counters]);
+  const freeLeft = counters?.freeLeft ?? null;
+
+  // The brand must be told BEFORE sending the last free revision that the next one is paid.
+  const noticeKind = notice?.kind;
+  useEffect(() => {
+    if (noticeKind === 'last' && notice) {
+      Alert.alert(notice.title, notice.body, [{ text: 'Got it' }]);
     }
-  }, [freeLeft, paidFee]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noticeKind]);
 
   const ordered = useMemo(() => {
     const list = [...comments];
@@ -211,10 +237,12 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
   const addComment = useCallback(() => {
     const body = draft.trim();
     if (!body) return;
-    if (comments.length >= MAX_ITEMS) {
+    if (revisionItemCount(comments.length, note) >= MAX_ITEMS) {
       Alert.alert(
         'Five changes maximum',
-        `A revision request can carry up to ${MAX_ITEMS} changes. Combine a few, or send these and follow up.`,
+        `A revision request can carry up to ${MAX_ITEMS} changes${
+          note.trim() ? ', and your note counts as one' : ''
+        }. Combine a few, or send these and follow up.`,
       );
       return;
     }
@@ -228,7 +256,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
       },
     ]);
     setDraft('');
-  }, [draft, position, comments.length]);
+  }, [draft, position, comments.length, note]);
 
   const removeComment = useCallback((key: string) => {
     setComments(list => list.filter(item => item.key !== key));
@@ -245,7 +273,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
     return new Date(Date.now() + hours * 3600 * 1000).toISOString();
   }, [deadline, customDays]);
 
+  // Phone numbers and emails are blocked by the server too; saying so before
+  // sending saves a round trip.
+  const contactHit =
+    !!findContactInfo(draft) ||
+    !!findContactInfo(note) ||
+    comments.some(item => !!findContactInfo(item.description));
+  const sendingRef = useRef(false);
+
   const send = useCallback(async () => {
+    if (sendingRef.current) return;
     if (!comments.length) {
       Alert.alert(
         'Add a change first',
@@ -253,30 +290,42 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
       );
       return;
     }
+    if (contactHit) {
+      Alert.alert(
+        'Remove contact details',
+        'Please remove phone numbers and email addresses. Keep all communication on-platform.',
+      );
+      return;
+    }
+    if (revisionItemCount(comments.length, note) > MAX_ITEMS) {
+      Alert.alert(
+        'Five changes maximum',
+        `Your note counts as one of the ${MAX_ITEMS} changes. Remove a comment or shorten it into the note.`,
+      );
+      return;
+    }
+    sendingRef.current = true;
     setSending(true);
     try {
       // Throws carrying the backend's own `detail`, which explains refusals
-      // precisely — revision limit hit, wallet short for a paid round, contact
+      // precisely: revision limit hit, wallet short for a paid round, contact
       // details in the text, or a race with an approval.
-      await requestWorkRevision(token, work.id, {
-        items: comments.map(item => ({
-          description: item.description,
-          // Everything typed here is a required change; the design has no
-          // must-fix / preference switch.
-          severity: 'must-fix',
-          timestamp_seconds: item.timestamp_seconds,
-        })),
-        notes: note.trim(),
-        deadline_at: deadlineAt(),
-      });
+      const result = await requestWorkRevision(
+        token,
+        work.id,
+        buildRevisionPayload(comments, note, deadlineAt()),
+      );
+      // Say so when money moved: a bare "requested" would hide the debit.
+      Alert.alert('Revision sent', revisionSentMessage(result as any));
       onDone();
       onClose();
     } catch (err: any) {
-      Alert.alert('Revision not sent', String(err?.message || err));
+      Alert.alert('Revision not sent', errorMessage(err, 'Please try again.'));
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [comments, note, deadlineAt, work.id, token, onDone, onClose]);
+  }, [comments, contactHit, note, deadlineAt, work.id, token, onDone, onClose]);
 
   const progress = length > 0 ? Math.min(1, position / length) : 0;
 
@@ -309,13 +358,15 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           <Text style={styles.headerTitle} numberOfLines={1}>
             {who}
           </Text>
-          <Text style={styles.headerSub}>
-            {freeLeft > 0
-              ? `${freeLeft} free revision${
-                  freeLeft === 1 ? '' : 's'
-                } remaining`
-              : 'Next revision is chargeable'}
-          </Text>
+          {freeLeft != null && (
+            <Text style={styles.headerSub}>
+              {freeLeft > 0
+                ? `${freeLeft} free revision${
+                    freeLeft === 1 ? '' : 's'
+                  } remaining`
+                : 'Next revision is chargeable'}
+            </Text>
+          )}
         </View>
         <TouchableOpacity
           style={styles.closeBtn}
@@ -345,15 +396,22 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
         <View style={styles.player}>
           {source ? (
             <Video
+              key={videoKey}
               ref={videoRef}
               source={{ uri: source }}
               style={styles.video}
               paused={!playing}
               resizeMode="cover"
               repeat
-              onLoad={meta => setLength(meta?.duration || 0)}
+              onLoad={meta => {
+                setVideoError(false);
+                setLength(meta?.duration || 0);
+              }}
               onProgress={p => setPosition(p?.currentTime || 0)}
-              onError={() => setPlaying(false)}
+              onError={() => {
+                setPlaying(false);
+                setVideoError(true);
+              }}
             />
           ) : work.thumbnail_url ? (
             <Image
@@ -362,6 +420,27 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
             />
           ) : (
             <View style={[styles.video, styles.videoFallback]} />
+          )}
+
+          {videoError && (
+            <View style={styles.videoErr}>
+              <Text style={styles.videoErrTitle}>Video could not be loaded</Text>
+              <Text style={styles.videoErrText}>
+                Check your connection and try again. You can still write your
+                changes without the video.
+              </Text>
+              <TouchableOpacity
+                style={styles.videoErrBtn}
+                onPress={() => {
+                  setVideoError(false);
+                  setVideoKey(k => k + 1);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading video"
+              >
+                <Text style={styles.videoErrBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           <TouchableOpacity
@@ -413,6 +492,23 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
         >
           <View style={styles.trackBase} />
           <View style={[styles.trackFill, { width: `${progress * 100}%` }]} />
+          {/* A marker per pinned comment, as the website's player draws them. */}
+          {length > 0 &&
+            comments.map(item => (
+              <View
+                key={`mark-${item.key}`}
+                pointerEvents="none"
+                style={[
+                  styles.trackMark,
+                  {
+                    left: `${Math.min(
+                      100,
+                      (item.timestamp_seconds / length) * 100,
+                    )}%`,
+                  },
+                ]}
+              />
+            ))}
           <View style={[styles.trackKnob, { left: `${progress * 100}%` }]} />
         </View>
 
@@ -586,11 +682,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
             maxLength={500}
           />
         )}
+        {noteOpen && (
+          <Text style={styles.noteHint}>
+            The creator sees your note as the last change in the list.
+          </Text>
+        )}
 
         <TouchableOpacity
-          style={[styles.submit, sending && styles.submitOff]}
+          style={[styles.submit, (sending || contactHit) && styles.submitOff]}
           onPress={send}
-          disabled={sending}
+          disabled={sending || contactHit}
           accessibilityRole="button"
         >
           {sending ? (
@@ -600,18 +701,15 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           )}
         </TouchableOpacity>
 
-        {freeLeft === 0 && (
-          <Text style={styles.feeWarn}>
-            The first {freeLimit} revisions are free. This one costs
-            ₹{paidFee} (₹300 of it goes to the creator), charged to your
-            wallet.
+        {contactHit && (
+          <Text style={styles.contactWarn}>
+            Please remove phone numbers and email addresses. Keep all
+            communication on-platform; sharing contact details isn't allowed.
           </Text>
         )}
-        {freeLeft === 1 && (
+        {!!notice && notice.kind !== 'free' && (
           <Text style={styles.feeWarn}>
-            This is your second revision - the last free one. Make sure it
-            covers everything: from the third revision onward ₹{paidFee} is
-            deducted for each revision (₹300 goes to the creator).
+            {notice.title}. {notice.body}
           </Text>
         )}
       </ScrollView>
@@ -743,6 +841,50 @@ const styles = StyleSheet.create({
     height: scale(4),
     borderRadius: scale(2),
     backgroundColor: '#5B63F5',
+  },
+  trackMark: {
+    position: 'absolute',
+    top: scale(5),
+    width: scale(4),
+    height: scale(18),
+    marginLeft: scale(-2),
+    borderRadius: scale(2),
+    backgroundColor: '#F0B45E',
+  },
+  videoErr: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 2,
+    padding: scale(16),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11,15,39,0.92)',
+  },
+  videoErrTitle: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  videoErrText: {
+    marginTop: scale(6),
+    fontSize: fontScale(12),
+    color: '#B9BED6',
+    textAlign: 'center',
+  },
+  videoErrBtn: {
+    marginTop: scale(12),
+    minHeight: scale(44),
+    paddingHorizontal: scale(22),
+    borderRadius: scale(12),
+    backgroundColor: '#5B63F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoErrBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   trackKnob: {
     position: 'absolute',
@@ -900,6 +1042,8 @@ const styles = StyleSheet.create({
     fontSize: fontScale(13),
   },
 
+  noteHint: { marginTop: scale(6), fontSize: fontScale(11), color: '#6B7091' },
+
   submit: {
     marginTop: scale(18),
     height: scale(52),
@@ -920,6 +1064,12 @@ const styles = StyleSheet.create({
     marginTop: scale(10),
     fontSize: fontScale(11),
     color: '#F0B45E',
+    textAlign: 'center',
+  },
+  contactWarn: {
+    marginTop: scale(10),
+    fontSize: fontScale(11.5),
+    color: '#FF8A8A',
     textAlign: 'center',
   },
 });

@@ -36,7 +36,7 @@ import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
 import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonReelRow } from '../components/Skeleton';
-import { BACKEND_URL, getCreatorDirectory } from '../api';
+import { BACKEND_URL, NetworkError, getCreatorDirectory } from '../api';
 import { playableVideoUrl, previewOf } from '../mediaPreview';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -63,6 +63,41 @@ export const categoriesOf = (creator: Creator): string[] =>
     .filter(Boolean);
 const categoryLabel = (value: string) =>
   value.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+
+/**
+ * Price text, same rule as the website card and quick preview (priceTextOf in
+ * pages/BrandCreators.js). The directory API sends the creator's rate as
+ * `budget_range` (server.py creator_directory_public_view); it never sends
+ * price_per_video.
+ */
+export const priceTextOf = (creator: Creator): string => {
+  const raw = String(
+    creator.budget_range ||
+      creator.price ||
+      creator.rate ||
+      creator.expected_payout ||
+      (creator.rate_card || {}).expected_payout ||
+      '',
+  ).trim();
+  if (raw) {
+    if (/[a-zA-Z\u20B9]/.test(raw) || raw.includes('-')) return raw;
+    const num = raw.replace(/[^0-9]/g, '');
+    if (num) return `Rs. ${Number(num).toLocaleString('en-IN')} / video`;
+  }
+  // No real rate set by the creator: don't fabricate a price.
+  return 'Rate on request';
+};
+
+/** "★ 4.5 (12)" from the API's `avg_rating` + `review_count`, else "New". */
+export const ratingText = (creator: Creator): string => {
+  const rating = Number(creator.avg_rating ?? creator.rating);
+  const count = Number(creator.review_count) || 0;
+  return rating > 0 ? `\u2605 ${rating.toFixed(1)}${count ? ` (${count})` : ''}` : 'New';
+};
+
+/** Location shown on the preview: the API's `city_tier`, else region, else India. */
+export const locationOf = (creator: Creator): string =>
+  text(creator.city_tier) || text(creator.location_region) || 'India';
 
 // One decoder for the entire directory, mounted only in the vertically visible row.
 const PREVIEW_BUFFER = {
@@ -245,6 +280,7 @@ function Icon({
 const ReelTile = React.memo(function ReelTileContent({
   creator,
   onOpen,
+  onMessage,
   onRequestPlay,
   index,
   play,
@@ -252,6 +288,7 @@ const ReelTile = React.memo(function ReelTileContent({
 }: {
   creator: Creator;
   onOpen: (creator: Creator) => void;
+  onMessage: (creator: Creator) => void;
   onRequestPlay: (index: number) => void;
   index: number;
   allowOriginal: boolean;
@@ -265,7 +302,9 @@ const ReelTile = React.memo(function ReelTileContent({
   const avatar = photoUrl(creator.profile_photo);
   const name = text(creator.name || creator.nickname, 'Creator');
   const category = text(creator.primary_category);
-  const rate = text(creator.budget_range);
+  const rate = priceTextOf(creator);
+  // Every category the creator picked, like the website card: first one plus a count.
+  const cats = categoriesOf(creator);
   const video = !!videoUrl;
   // Prefer the small preview, but uploads are playable even before a preview exists.
   const small = video ? previewOf(media) : null;
@@ -346,6 +385,14 @@ const ReelTile = React.memo(function ReelTileContent({
             </Text>
           </View>
         )}
+        {!!cats.length && (
+          <View style={styles.reelCats} pointerEvents="none">
+            <Text style={styles.reelCatsText} numberOfLines={1}>
+              {categoryLabel(cats[0])}
+              {cats.length > 1 ? ` +${cats.length - 1}` : ''}
+            </Text>
+          </View>
+        )}
         {video && !(showClip && ready) && (
           <TouchableOpacity style={styles.reelPlay}
             accessibilityRole="button" accessibilityLabel={`Play ${name}'s preview`}
@@ -376,16 +423,20 @@ const ReelTile = React.memo(function ReelTileContent({
             )}
           </View>
           <Text style={styles.tileRate} numberOfLines={1}>
-            {rate || `${Number(creator.deliverables_completed) || 0} delivered`}
+            {rate}
           </Text>
         </View>
-        {!!category && (
-          <View style={styles.tileTag}>
-            <Text style={styles.tileTagText} numberOfLines={1}>
-              {category}
-            </Text>
-          </View>
-        )}
+        {/* Message straight from the card, as on the website. */}
+        <TouchableOpacity
+          style={styles.tileMessage}
+          onPress={() => onMessage(creator)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Message ${name}`}
+          testID={`creator-message-${creator.id}`}
+        >
+          <Icon name="chat" color="#4C4DD6" size={15} />
+        </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
@@ -393,11 +444,12 @@ const ReelTile = React.memo(function ReelTileContent({
 
 
 /** Swipeable, virtualized row. Scrolling releases the decoder until settling. */
-const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen }: {
+const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen, onMessage }: {
   creators: Creator[];
   active: boolean;
   onActivate: () => void;
   onOpen: (creator: Creator) => void;
+  onMessage: (creator: Creator) => void;
 }) {
   const [scrolling, setScrolling] = useState(false);
   const [playingSlot, setPlayingSlot] = useState<number | null>(null);
@@ -435,9 +487,9 @@ const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivat
     setScrolling(false);
   }, [onActivate]);
   const renderItem = useCallback(({ item, index }: { item: Creator; index: number }) => (
-    <ReelTile creator={item} index={index} onOpen={onOpen} onRequestPlay={requestPlay}
+    <ReelTile creator={item} index={index} onOpen={onOpen} onMessage={onMessage} onRequestPlay={requestPlay}
       play={active && !scrolling && playingSlot === index} allowOriginal={requestedSlot === index} />
-  ), [active, scrolling, playingSlot, requestedSlot, onOpen, requestPlay]);
+  ), [active, scrolling, playingSlot, requestedSlot, onOpen, onMessage, requestPlay]);
   if (!creators.length) return null;
   return <FlatList horizontal data={creators} renderItem={renderItem}
     keyExtractor={creator => creator.id}
@@ -520,15 +572,11 @@ function CreatorPeekSheet({
   const category = text(creator.primary_category);
   const bio = text(creator.bio);
   const avatar = photoUrl(creator.profile_photo);
-  const price = Number(creator.price_per_video) || 0;
-  const rating = Number(creator.average_rating) || 0;
-  const reviews = Number(creator.total_reviews) || 0;
+  // Field names the directory API really returns (server.py:4425-4431, 4573-4574):
+  // budget_range, avg_rating, review_count, city_tier, categories.
   const delivered = Number(creator.deliverables_completed) || 0;
-  const location = text(creator.location, 'India');
-  const level = text(creator.level_label, 'New creator');
-  // No reviews yet shows the level instead of "0.0", which would read as a bad
-  // score rather than an absent one.
-  const ratingValue = reviews ? `${rating.toFixed(1)} (${reviews})` : level;
+  const location = locationOf(creator);
+  const peekCats = categoriesOf(creator);
   const clips = Array.from(
     new Set(
       [
@@ -611,9 +659,13 @@ function CreatorPeekSheet({
                   <Icon name="verified" color="#1FA971" size={15} />
                 )}
               </View>
-              {!!category && (
-                <View style={styles.peekTag}>
-                  <Text style={styles.peekTagText}>{category}</Text>
+              {(peekCats.length > 0 || !!category) && (
+                <View style={styles.peekTags}>
+                  {(peekCats.length ? peekCats.map(categoryLabel) : [category]).map(label => (
+                    <View key={label} style={styles.peekTag}>
+                      <Text style={styles.peekTagText}>{label}</Text>
+                    </View>
+                  ))}
                 </View>
               )}
             </View>
@@ -626,12 +678,8 @@ function CreatorPeekSheet({
           )}
 
           <View style={styles.peekCard}>
-            <PeekRow
-              icon="tag"
-              label="Price"
-              value={price ? `${price.toLocaleString('en-IN')}/video` : 'On request'}
-            />
-            <PeekRow icon="star" label="Rating / Level" value={ratingValue} />
+            <PeekRow icon="tag" label="Price" value={priceTextOf(creator)} />
+            <PeekRow icon="star" label="Rating" value={ratingText(creator)} />
             <PeekRow icon="box" label="Deliverables" value={String(delivered)} />
             <PeekRow icon="pin" label="Location" value={location} />
           </View>
@@ -640,16 +688,17 @@ function CreatorPeekSheet({
             <>
               <View style={styles.peekWorkHead}>
                 <Text style={styles.peekSection}>Recent work</Text>
-                <TouchableOpacity onPress={onOpenFull} accessibilityRole="button">
+                <TouchableOpacity onPress={onOpenFull} accessibilityRole="button" hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
                   <Text style={styles.peekSeeAll}>See all</Text>
                 </TouchableOpacity>
               </View>
 
-              {/* Three tiles side by side — the work the creator uploaded is
-                  what a brand is judging. Tapping a video plays it full-screen
-                  over this card; "See all" opens the full profile. */}
+              {/* Up to six clips, three across (the website shows six) - the work
+                  the creator uploaded is what a brand is judging. Tapping a
+                  video plays it full-screen with sound over this card; "See
+                  all" opens the full profile. */}
               <View style={styles.peekWorkRow}>
-                {clips.slice(0, 3).map((uri, index) => (
+                {clips.slice(0, 6).map((uri, index) => (
                   <TouchableOpacity
                     key={`${uri}-${index}`}
                     style={styles.peekClip}
@@ -755,6 +804,8 @@ function BrandCreators({
   onOpenCreator,
 }: Props) {
   const [creators, setCreators] = useState<Creator[]>([]);
+  // A failed load must not read as "No creators found".
+  const [loadError, setLoadError] = useState('');
   // The creator whose quick-preview sheet is open; null when none is.
   const [peek, setPeek] = useState<Creator | null>(null);
   // The sort chips were removed from the UI; the directory always comes back
@@ -826,8 +877,19 @@ function BrandCreators({
       if (!mounted.current || current !== request.current) return;
       const next = list.map((creator, index) => ({ ...creator, id: String(creator.id ?? index) })) as Creator[];
       setCreators(previous => reconcileDirectory(previous, next));
-    } catch {
-      // Keep loaded rows and playback intact on a failed background refresh.
+      setLoadError('');
+    } catch (error) {
+      // Keep loaded rows and playback intact on a failed background refresh, and
+      // say the refresh failed (with Retry) instead of showing an empty list.
+      if (mounted.current && current === request.current) {
+        setLoadError(
+          error instanceof NetworkError
+            ? "You're offline. Check your connection and try again."
+            : error instanceof Error && error.message
+            ? error.message
+            : 'Could not load creators. Please try again.',
+        );
+      }
     } finally {
       if (current === request.current) {
         pending.current = null;
@@ -872,6 +934,14 @@ function BrandCreators({
     visible.slice(0, Math.ceil(visible.length / 2)),
     visible.slice(Math.ceil(visible.length / 2)),
   ], [visible]);
+  const messageCreator = useCallback(
+    (creator: Creator) => onNavigate(`/messages/${creator.id}`),
+    [onNavigate],
+  );
+  const retry = useCallback(() => {
+    setLoading(true);
+    load();
+  }, [load]);
   const playbackAllowed = foreground && !peek && !searchFocused && !verticalScrolling && query === deferredQuery;
 
   return (
@@ -973,7 +1043,23 @@ function BrandCreators({
               />
             }
           >
-            {!visible.length ? (
+            {!!loadError && (
+              <View style={styles.errorBox} testID="creators-error">
+                <Text style={styles.errorText}>
+                  {loadError}
+                  {creators.length ? ' Showing the last list we loaded.' : ''}
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={retry}
+                  accessibilityRole="button"
+                  testID="creators-retry"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {!visible.length && loadError && !creators.length ? null : !visible.length ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>
                   {approvedOnly ? 'No approved creators to show' : 'No creators found'}
@@ -994,11 +1080,11 @@ function BrandCreators({
               <View style={styles.rows}>
                 <View testID="creator-directory-row-0" onLayout={event => { rowLayouts.current[0] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[0]} active={playbackAllowed && activeRow === 0}
-                    onActivate={activateFirst} onOpen={setPeek} />
+                    onActivate={activateFirst} onOpen={setPeek} onMessage={messageCreator} />
                 </View>
                 <View testID="creator-directory-row-1" onLayout={event => { rowLayouts.current[1] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[1]} active={playbackAllowed && activeRow === 1}
-                    onActivate={activateSecond} onOpen={setPeek} />
+                    onActivate={activateSecond} onOpen={setPeek} onMessage={messageCreator} />
                 </View>
               </View>
             )}
@@ -1270,18 +1356,53 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#4C4DD6',
   },
-  tileTag: {
-    maxWidth: scale(60),
-    paddingHorizontal: scale(6),
+  tileMessage: {
+    width: scale(30),
+    height: scale(30),
+    borderRadius: scale(15),
+    backgroundColor: '#EEEFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Categories sit on the picture (bottom-left) so the footer keeps its height.
+  reelCats: {
+    position: 'absolute',
+    left: scale(8),
+    bottom: scale(8),
+    maxWidth: TILE_WIDTH - scale(52),
+    paddingHorizontal: scale(7),
     paddingVertical: scale(3),
     borderRadius: scale(7),
-    backgroundColor: '#FFF0F5',
+    backgroundColor: 'rgba(12,16,42,0.6)',
   },
-  tileTagText: {
-    fontSize: fontScale(9),
+  reelCatsText: {
+    fontSize: fontScale(9.5),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
-    color: '#D6407F',
+    color: '#FFFFFF',
+  },
+  errorBox: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FEF3C7',
+    gap: scale(8),
+  },
+  errorText: { fontSize: fontScale(12), color: '#92400E' },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    minHeight: scale(44),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(10),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 
   // ── Creator quick-preview sheet ───────────────────────────────────────────
@@ -1353,9 +1474,9 @@ const styles = StyleSheet.create({
     color: '#15163F',
     flexShrink: 1,
   },
+  peekTags: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(6), marginTop: scale(6) },
   peekTag: {
     alignSelf: 'flex-start',
-    marginTop: scale(6),
     paddingHorizontal: scale(9),
     paddingVertical: scale(3),
     borderRadius: scale(8),
@@ -1420,9 +1541,9 @@ const styles = StyleSheet.create({
   },
   // Three clips across the card width, so each one keeps the 9:16 reel shape
   // without a fixed pixel width that would not divide evenly on every screen.
-  peekWorkRow: { flexDirection: 'row', gap: scale(8) },
+  peekWorkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   peekClip: {
-    flex: 1,
+    width: '31%',
     aspectRatio: 9 / 16,
     borderRadius: scale(12),
     overflow: 'hidden',

@@ -11,9 +11,10 @@ import { Alert } from '../components/AppAlert';
  *
  * Like the website, tabs also show what is no longer pending, from
  * GET /api/business/work-review: approved work (with Download) and work sent
- * back for a revision.
+ * back for a revision. That list also carries the per-deal revision counters
+ * (used, free limit, fee) the pending-review rows lack, so they are merged on.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -25,21 +26,34 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Text, TextInput } from '../components/Text';
+import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
-import VideoPreview from '../components/VideoPreview';
+import ChoiceSheet from '../components/ChoiceSheet';
+import RateCreatorSheet from '../components/RateCreatorSheet';
+import ReviewPlayer from '../components/ReviewPlayer';
 import { SkeletonList } from '../components/Skeleton';
 import WorkRevisionRequest from './WorkRevisionRequest';
-import { downloadUrlOf } from './BrandCampaignDetail';
 import {
   approveWork,
   BACKEND_URL,
   getPendingWork,
   getBusinessDeals,
+  getWorkDownloadLink,
   getWorkReview,
   postReview,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import {
+  REVIEW_PAGE_SIZES,
+  approveConfirm,
+  approveLabel,
+  approveMessage,
+  canReviewAfterApprove,
+  fileExt,
+  paginate,
+  revisionCounterFields,
+} from '../brandHiring';
+import { errorMessage } from '../payoutRules';
+import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -47,6 +61,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Opens the native chat with one creator; without it Message falls back to the inbox. */
+  onOpenThread?: (userId: string, name: string) => void;
 };
 
 type Work = Record<string, any> & { id: string };
@@ -182,6 +198,7 @@ function BrandWorkReview({
   onNavigate,
   onNotifications,
   onMessages,
+  onOpenThread,
 }: Props) {
   const [items, setItems] = useState<Work[]>([]);
   // Everything that is NOT awaiting review (approved, revision requested, with
@@ -193,14 +210,26 @@ function BrandWorkReview({
   const [refreshing, setRefreshing] = useState(false);
   // The submission whose revision composer is open.
   const [revising, setRevising] = useState<Work | null>(null);
-  // The submission playing in the full-screen preview player.
-  const [previewing, setPreviewing] = useState<Work | null>(null);
+  // The video playing in the full-screen player (watermarked until approved).
+  const [previewing, setPreviewing] = useState<{
+    id?: string;
+    uri: string;
+    watermark: boolean;
+    title?: string;
+  } | null>(null);
   // The just-approved submission whose creator the brand is being asked to
   // rate. Null hides the sheet.
   const [rating, setRating] = useState<Work | null>(null);
-  const [stars, setStars] = useState(5);
-  const [reviewText, setReviewText] = useState('');
-  const [postingReview, setPostingReview] = useState(false);
+  // Why the last load failed ('' when it worked), shown with a Retry.
+  const [loadError, setLoadError] = useState('');
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(REVIEW_PAGE_SIZES[0]);
+  const [perPageOpen, setPerPageOpen] = useState(false);
+  // Real length (seconds) of videos the brand has opened; the brief's requested
+  // length is shown until then.
+  const [durations, setDurations] = useState<Record<string, number>>({});
+  // Row id being downloaded, to block a double tap.
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -210,13 +239,24 @@ function BrandWorkReview({
         getWorkReview(token).catch(() => []),
         getBusinessDeals(token).catch(() => []),
       ]);
+      // pending-review rows carry no revision counters; the work-review row for
+      // the same (campaign, creator) does, so the composer can warn about fees.
+      const counters = new Map<string, Record<string, any>>();
+      review.forEach(row =>
+        counters.set(`${row.campaignId}:${row.creatorId}`, revisionCounterFields(row)),
+      );
       setItems(
-        list.map((work, index) => ({ ...work, id: String(work.id ?? index) })),
+        list.map((work, index) => ({
+          ...work,
+          id: String(work.id ?? index),
+          ...counters.get(`${work.campaign_id}:${work.creator_id}`),
+        })),
       );
       setOthers([...review.filter(row => row.status !== 'pending_review'), ...submissionHistory(deals)]);
-    } catch {
-      // Backend unreachable — keep whatever is on screen; pull-to-refresh
-      // retries the real request.
+      setLoadError('');
+    } catch (error) {
+      // Keep whatever is on screen and say why it is stale, with a Retry.
+      setLoadError(errorMessage(error, 'Could not load submissions.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -228,86 +268,120 @@ function BrandWorkReview({
   }, [load]);
 
   /**
-   * POST /api/work/{campaignId}/request-revision — the campaign-id form, which
-   * is what GET /api/work/pending-review returns as each row's `id`. (The
-   * /api/deals/{dealId}/... route is the deal-id form and would 404 on these
-   * ids.) The server syncs the underlying deal to REVISION_REQUESTED itself.
-   */
-  /**
    * Approving releases escrow to the creator and cannot be undone (PRD 8.6),
    * so it is confirmed first. `approving` holds the work id mid-request so the
    * card's button can show progress and block a double tap.
    */
   const [approving, setApproving] = useState<string | null>(null);
+  const approvingRef = useRef(false);
 
   const runApprove = useCallback(
     async (work: Work) => {
+      if (approvingRef.current) return;
+      approvingRef.current = true;
       setApproving(work.id);
       try {
         // approveWork throws with the backend's own `detail` message, which
         // explains refusals (open dispute, already approved).
-        await approveWork(token, work.id);
+        const result = await approveWork(token, work.id);
         // The deal leaves AWAITING_REVIEW, so it drops off this list.
         load();
-        // Rating the creator is the web's next step after an approval, and
-        // the only moment a brand is reliably willing to do it. Skipping is
-        // fine — the review is optional on the backend too.
-        if (work.creator_id) {
-          setRating(work);
-        }
+        // Rating the creator is the web's next step, but only once the creator
+        // was actually paid: the server refuses a review after a raw or partial
+        // approval. Skipping is fine, the review is optional too.
+        const canRate =
+          !!work.creator_id &&
+          !!work.campaign_id &&
+          canReviewAfterApprove(result as any, work);
+        Alert.alert('Approved', approveMessage(result as any, work), [
+          { text: canRate ? 'Continue' : 'OK', onPress: () => canRate && setRating(work) },
+        ]);
       } catch (err: any) {
-        Alert.alert('Not approved', String(err?.message || err));
+        Alert.alert('Not approved', errorMessage(err, 'Could not approve this work.'));
       } finally {
+        approvingRef.current = false;
         setApproving(null);
       }
     },
     [token, load],
   );
 
-  /** Posts the rating, then closes the sheet either way. */
-  const submitRating = useCallback(async () => {
-    if (!rating || postingReview) return;
-    setPostingReview(true);
-    try {
+  /** Posts the rating; the sheet shows any failure inline and stays open. */
+  const submitRating = useCallback(
+    async (stars: number, review: string) => {
+      if (!rating) return;
       await postReview(token, {
-        campaign_id: rating.campaign_id || rating.id,
+        campaign_id: rating.campaign_id,
         creator_id: rating.creator_id,
         rating: stars,
-        review: reviewText.trim(),
+        review,
       });
       setRating(null);
-      setStars(5);
-      setReviewText('');
-    } catch (err: any) {
-      Alert.alert('Could not submit', String(err?.message || err));
-    } finally {
-      setPostingReview(false);
-    }
-  }, [postingReview, rating, reviewText, stars, token]);
+      Alert.alert('Review submitted', 'Thanks for the feedback!');
+    },
+    [rating, token],
+  );
 
   const confirmApprove = useCallback(
     (work: Work) => {
-      const who = text(work.creator_name, 'the creator');
-      const rawStage = work.stage === 'raw';
-      Alert.alert(
-        rawStage ? 'Approve the raw video?' : 'Approve this work?',
-        rawStage && work.edit_mode === 'creator'
-          ? `${who} will edit it and submit the edited video next. Payment is released when you approve the edited video.`
-          : rawStage && work.edit_mode === 'ugc'
-          ? `Payment will be released to ${who} and UGC.ad's team will edit the video for you. This cannot be undone.`
-          : `Payment will be released to ${who} and the files unlocked. This cannot be undone.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Approve', onPress: () => runApprove(work) },
-        ],
-      );
+      const { title, body } = approveConfirm(work, text(work.creator_name, 'the creator'));
+      Alert.alert(title, body, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Approve', onPress: () => runApprove(work) },
+      ]);
     },
     [runApprove],
+  );
+
+  /** Chat with the creator of a submission (native thread when wired). */
+  const message = useCallback(
+    (creatorId: unknown, name: string) => {
+      if (creatorId && onOpenThread) onOpenThread(String(creatorId), name);
+      else onNavigate('/messages');
+    },
+    [onNavigate, onOpenThread],
+  );
+
+  /**
+   * Downloads an approved delivery through GET /work/{id}/download?as_link=1:
+   * the server only unlocks it after approval and names the file with its real
+   * extension. `kind` picks the raw or edited file when both exist.
+   */
+  const download = useCallback(
+    async (row: Record<string, any>, kind?: string) => {
+      const key = `${row.id}:${kind || ''}`;
+      if (downloading) return;
+      setDownloading(key);
+      try {
+        const link = await getWorkDownloadLink(token, String(row.id), kind);
+        const url = mediaUrl(link?.url);
+        if (!url) throw new Error('The download link is unavailable.');
+        await Linking.openURL(url);
+      } catch (err: any) {
+        Alert.alert('Download failed', errorMessage(err, 'Download failed'));
+      } finally {
+        setDownloading(null);
+      }
+    },
+    [downloading, token],
   );
 
   const pendingShown = tab === 'all' || tab === 'pending_review' ? items : [];
   const othersShown =
     tab === 'all' ? others : others.filter(row => row.status === tab);
+
+  // One list over both sources, pending first, so the footer counts every row.
+  const combined = [
+    ...pendingShown.map(work => ({ kind: 'pending' as const, work })),
+    ...othersShown.map(row => ({ kind: 'other' as const, row })),
+  ];
+  const paged = paginate(combined, page, perPage);
+  const pagePending = paged.rows.flatMap(entry =>
+    entry.kind === 'pending' ? [entry.work] : [],
+  );
+  const pageOthers = paged.rows.flatMap(entry =>
+    entry.kind === 'other' ? [entry.row] : [],
+  );
 
   return (
     <View style={styles.screen}>
@@ -391,7 +465,10 @@ function BrandWorkReview({
                   <TouchableOpacity
                     key={t.key}
                     style={[styles.tab, on && styles.tabOn]}
-                    onPress={() => setTab(t.key)}
+                    onPress={() => {
+                      setTab(t.key);
+                      setPage(1);
+                    }}
                     accessibilityRole="button"
                     accessibilityState={{ selected: on }}
                   >
@@ -403,16 +480,36 @@ function BrandWorkReview({
               })}
             </ScrollView>
 
+            {!!loadError && (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorText}>{loadError}</Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={() => {
+                    setRefreshing(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading submissions"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {!pendingShown.length && !othersShown.length ? (
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>Nothing here</Text>
+                <Text style={styles.emptyTitle}>
+                  {loadError ? "Couldn't load submissions" : 'Nothing here'}
+                </Text>
                 <Text style={styles.emptyText}>
-                  Submissions from creators appear here when they're ready for
-                  your approval.
+                  {loadError
+                    ? 'Pull down or tap Retry to try again.'
+                    : "Submissions from creators appear here when they're ready for your approval."}
                 </Text>
               </View>
             ) : (
-              pendingShown.map(work => {
+              pagePending.map(work => {
                 const files = Array.isArray(work.work_files) ? work.work_files : [];
                 const rawPlayable =
                   work.watermarked_url ||
@@ -438,10 +535,14 @@ function BrandWorkReview({
                     <TouchableOpacity
                       style={styles.media}
                       disabled={!playable}
-                      onPress={() => {
-                        
-                        setPreviewing(work);
-                      }}
+                      onPress={() =>
+                        setPreviewing({
+                          id: work.id,
+                          uri: playable as string,
+                          watermark: true,
+                          title: campaign || undefined,
+                        })
+                      }
                       accessibilityRole="button"
                       accessibilityLabel="Play preview"
                     >
@@ -485,9 +586,13 @@ function BrandWorkReview({
                         <View style={styles.metaItem}>
                           <Icon name="clock" color="#9498B0" size={13} />
                           <View>
-                            <Text style={styles.metaLabel}>Duration</Text>
+                            <Text style={styles.metaLabel}>
+                              {durations[work.id] ? 'Duration' : 'Duration (brief)'}
+                            </Text>
                             <Text style={styles.metaValue}>
-                              {duration(work.duration_seconds)}
+                              {durations[work.id] || work.duration_seconds
+                                ? duration(durations[work.id] || work.duration_seconds)
+                                : '-'}
                             </Text>
                           </View>
                         </View>
@@ -496,7 +601,7 @@ function BrandWorkReview({
                           <View>
                             <Text style={styles.metaLabel}>File type</Text>
                             <Text style={styles.metaValue}>
-                              {text(work.file_type, 'MP4').toUpperCase()}
+                              {fileExt(rawPlayable) || '-'}
                             </Text>
                           </View>
                         </View>
@@ -511,15 +616,21 @@ function BrandWorkReview({
                             </Text>
                           </View>
                         </View>
-                        <View style={styles.metaItem}>
-                          <Icon name="campaign" color="#9498B0" size={13} />
+                        <TouchableOpacity
+                          style={styles.metaItem}
+                          disabled={!work.campaign_id}
+                          onPress={() => onNavigate(`/campaigns/${work.campaign_id}`)}
+                          accessibilityRole="link"
+                          accessibilityLabel={`Open campaign ${campaign || ''}`}
+                        >
+                          <Icon name="campaign" color="#4C5BF3" size={13} />
                           <View>
                             <Text style={styles.metaLabel}>Campaign</Text>
-                            <Text style={styles.metaValue} numberOfLines={1}>
+                            <Text style={styles.metaLinkValue} numberOfLines={1}>
                               {campaign || '-'}
                             </Text>
                           </View>
-                        </View>
+                        </TouchableOpacity>
                       </View>
 
                       {/* Every submitted file (raw AND edited), each playable. */}
@@ -529,10 +640,13 @@ function BrandWorkReview({
                             <TouchableOpacity
                               key={`${f.kind}-${f.url}`}
                               style={styles.secondaryBtn}
-                              onPress={() => {
-                                
-                                setPreviewing({ ...work, watermarked_url: f.url, preview_url: f.url, video_url: f.url });
-                              }}
+                              onPress={() =>
+                                setPreviewing({
+                                  uri: mediaUrl(f.url) as string,
+                                  watermark: true,
+                                  title: `${campaign} - ${f.label}`,
+                                })
+                              }
                               accessibilityRole="button"
                             >
                               <Icon name="play" color="#5C6180" size={14} />
@@ -543,7 +657,14 @@ function BrandWorkReview({
                       )}
 
                       <TouchableOpacity style={styles.secondaryBtn}
-                        onPress={() => setPreviewing({ ...work, video_url: playable })}
+                        onPress={() =>
+                          setPreviewing({
+                            id: work.id,
+                            uri: playable as string,
+                            watermark: true,
+                            title: campaign || undefined,
+                          })
+                        }
                         disabled={!playable} accessibilityRole="button" accessibilityLabel="Open full-screen video">
                         <Text style={styles.secondaryText}>View full video</Text>
                       </TouchableOpacity>
@@ -564,11 +685,7 @@ function BrandWorkReview({
                           <>
                             <Icon name="approve" color="#FFFFFF" size={16} />
                             <Text style={styles.approveText}>
-                              {work.stage === 'raw'
-                                ? work.edit_mode === 'ugc'
-                                  ? 'Approve raw'
-                                  : 'Approve raw'
-                                : 'Approve'}
+                              {approveLabel(work)}
                             </Text>
                           </>
                         )}
@@ -589,11 +706,12 @@ function BrandWorkReview({
                       <View style={styles.secondaryRow}>
                         <TouchableOpacity
                           style={styles.secondaryBtn}
-                          onPress={() => onNavigate('/messages')}
+                          onPress={() => message(work.creator_id, who)}
                           accessibilityRole="button"
+                          accessibilityLabel={`Message ${who}`}
                         >
                           <Icon name="chat" color="#5C6180" size={14} />
-                          <Text style={styles.secondaryText}>Message</Text>
+                          <Text style={styles.secondaryText}>Message creator</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -602,7 +720,7 @@ function BrandWorkReview({
               })
             )}
 
-            {othersShown.map(row => {
+            {pageOthers.map(row => {
               const urls: string[] = Array.isArray(row.files) ? row.files : [];
               const playable = mediaUrl(
                 urls.find(u => isVideoUrl(mediaUrl(u))) || urls[0],
@@ -614,10 +732,14 @@ function BrandWorkReview({
                   <TouchableOpacity
                     style={styles.media}
                     disabled={!playable}
-                    onPress={() => {
-                      
-                      setPreviewing({ id: String(row.id), video_url: playable });
-                    }}
+                    onPress={() =>
+                      setPreviewing({
+                        id: String(row.id),
+                        uri: playable as string,
+                        watermark: row.status !== 'approved',
+                        title: text(row.title) || undefined,
+                      })
+                    }
                     accessibilityRole="button"
                     accessibilityLabel="Play video"
                   >
@@ -648,27 +770,33 @@ function BrandWorkReview({
                     </Text>
 
                     {approved ? (
-                      <TouchableOpacity
-                        style={styles.approveBtn}
-                        onPress={() => {
-                          const unavailable = () =>
-                            Alert.alert(
-                              'Could not open',
-                              'The download link is unavailable.',
-                            );
-                          // Approved rows carry the clean files; edited first.
-                          const url = downloadUrlOf({
-                            files: row.labeledFiles,
-                            work_files: row.files,
-                          });
-                          if (!url) return unavailable();
-                          Linking.openURL(url).catch(unavailable);
-                        }}
-                        accessibilityRole="button"
-                      >
-                        <Icon name="download" color="#FFFFFF" size={16} />
-                        <Text style={styles.approveText}>Download</Text>
-                      </TouchableOpacity>
+                      (Array.isArray(row.labeledFiles) && row.labeledFiles.length > 1
+                        ? row.labeledFiles
+                        : [{ kind: undefined, label: '' }]
+                      ).map((file: any) => (
+                        <TouchableOpacity
+                          key={file.kind || 'file'}
+                          style={[
+                            styles.approveBtn,
+                            downloading === `${row.id}:${file.kind || ''}` &&
+                              styles.approveBtnOff,
+                          ]}
+                          disabled={!!downloading}
+                          onPress={() => download(row, file.kind)}
+                          accessibilityRole="button"
+                        >
+                          {downloading === `${row.id}:${file.kind || ''}` ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                          ) : (
+                            <>
+                              <Icon name="download" color="#FFFFFF" size={16} />
+                              <Text style={styles.approveText}>
+                                {file.label ? `Download ${file.label}` : 'Download'}
+                              </Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      ))
                     ) : (
                       <Text style={styles.waitingNote}>
                         {row.historical ? 'Previous upload - retained for comparison.' : row.status === 'revision_requested'
@@ -680,22 +808,90 @@ function BrandWorkReview({
                     )}
 
                     <View style={styles.secondaryRow}>
+                      {!!row.campaignId && (
+                        <TouchableOpacity
+                          style={styles.secondaryBtn}
+                          onPress={() => onNavigate(`/campaigns/${row.campaignId}`)}
+                          accessibilityRole="link"
+                          accessibilityLabel="Open campaign"
+                        >
+                          <Icon name="campaign" color="#5C6180" size={14} />
+                          <Text style={styles.secondaryText}>Campaign</Text>
+                        </TouchableOpacity>
+                      )}
                       <TouchableOpacity
                         style={styles.secondaryBtn}
-                        onPress={() => onNavigate('/messages')}
+                        onPress={() =>
+                          message(row.creatorId, text(row.creator, 'the creator'))
+                        }
                         accessibilityRole="button"
                       >
                         <Icon name="chat" color="#5C6180" size={14} />
-                        <Text style={styles.secondaryText}>Message</Text>
+                        <Text style={styles.secondaryText}>Message creator</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
                 </View>
               );
             })}
+
+            {paged.total > 0 && (
+              <View style={styles.pager}>
+                <Text style={styles.pagerCount}>
+                  Showing {paged.from}-{paged.to} of {paged.total} results
+                </Text>
+                <View style={styles.pagerRow}>
+                  <TouchableOpacity
+                    style={[styles.pagerBtn, paged.page <= 1 && styles.pagerBtnOff]}
+                    disabled={paged.page <= 1}
+                    onPress={() => setPage(paged.page - 1)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Previous page"
+                  >
+                    <Text style={styles.pagerBtnText}>Previous</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.pagerPage}>
+                    {paged.page} / {paged.pageCount}
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.pagerBtn,
+                      paged.page >= paged.pageCount && styles.pagerBtnOff,
+                    ]}
+                    disabled={paged.page >= paged.pageCount}
+                    onPress={() => setPage(paged.page + 1)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Next page"
+                  >
+                    <Text style={styles.pagerBtnText}>Next</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  style={styles.pagerBtn}
+                  onPress={() => setPerPageOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Rows per page"
+                >
+                  <Text style={styles.pagerBtnText}>{perPage} per page</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </ScrollView>
         )}
       </View>
+
+      <ChoiceSheet
+        visible={perPageOpen}
+        title="Rows per page"
+        options={REVIEW_PAGE_SIZES.map(size => ({
+          label: `${size} per page`,
+          onPress: () => {
+            setPerPage(size);
+            setPage(1);
+          },
+        }))}
+        onClose={() => setPerPageOpen(false)}
+      />
 
       {/* The structured composer replaces the old text-only sheet: comments
           pinned to a video timestamp, a deadline, and an optional note. */}
@@ -715,85 +911,23 @@ function BrandWorkReview({
         )}
       </Modal>
 
-      {/* Rate the creator, offered right after an approval — the web does the
-          same, and it is the one moment a brand will actually do it. */}
-      <Modal
+      {/* Rate the creator, offered right after an approval that paid them; the
+          web does the same, and it is the one moment a brand will do it. */}
+      <RateCreatorSheet
         visible={!!rating}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setRating(null)}
-      >
-        <View style={styles.ratingBackdrop}>
-          <View style={styles.ratingSheet}>
-            <Text style={styles.ratingTitle}>
-              How was working with{' '}
-              {text(rating?.creator_name, 'this creator')}?
-            </Text>
-            <Text style={styles.ratingBody}>
-              Optional, and visible on their public profile.
-            </Text>
+        creatorName={text(rating?.creator_name, 'this creator')}
+        onSubmit={submitRating}
+        onClose={() => setRating(null)}
+      />
 
-            <View style={styles.stars}>
-              {[1, 2, 3, 4, 5].map(value => (
-                <TouchableOpacity
-                  key={value}
-                  onPress={() => setStars(value)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${value} star${value > 1 ? 's' : ''}`}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <Text
-                    style={[
-                      styles.star,
-                      value <= stars && styles.starOn,
-                    ]}
-                  >
-                    ★
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <TextInput
-              style={styles.ratingInput}
-              value={reviewText}
-              onChangeText={setReviewText}
-              placeholder="What stood out? (optional)"
-              placeholderTextColor="#A9ADC2"
-              multiline
-            />
-
-            <View style={styles.ratingActions}>
-              <TouchableOpacity
-                style={styles.ratingSkip}
-                onPress={() => {
-                  setRating(null);
-                  setStars(5);
-                  setReviewText('');
-                }}
-                accessibilityRole="button"
-              >
-                <Text style={styles.ratingSkipText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.ratingSend}
-                onPress={submitRating}
-                disabled={postingReview}
-                accessibilityRole="button"
-              >
-                {postingReview ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.ratingSendText}>Submit review</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <VideoPreview
-        uri={previewing ? mediaUrl(previewing.watermarked_url || previewing.preview_url || previewing.video_url) : null}
+      <ReviewPlayer
+        uri={previewing ? previewing.uri : null}
+        watermark={!!previewing?.watermark}
+        title={previewing?.title}
+        onDuration={seconds => {
+          const id = previewing?.id;
+          if (id) setDurations(prev => ({ ...prev, [id]: seconds }));
+        }}
         onClose={() => setPreviewing(null)}
       />
     </View>
@@ -864,7 +998,63 @@ const styles = StyleSheet.create({
   },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingTop: scale(16), paddingBottom: scale(30) },
+  content: { padding: scale(16), paddingTop: scale(16), paddingBottom: scale(30) + NAV_CLEARANCE },
+
+  errorBanner: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  retryBtn: {
+    minHeight: scale(44),
+    minWidth: scale(60),
+    paddingHorizontal: scale(12),
+    borderRadius: scale(10),
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#B3261E',
+  },
+  metaLinkValue: {
+    marginTop: scale(1),
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+
+  pager: { marginTop: scale(4), alignItems: 'center', gap: scale(10) },
+  pagerCount: { fontSize: fontScale(12), color: '#777B96' },
+  pagerRow: { flexDirection: 'row', alignItems: 'center', gap: scale(14) },
+  pagerBtn: {
+    minHeight: scale(44),
+    minWidth: scale(88),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pagerBtnOff: { opacity: 0.4 },
+  pagerBtnText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6180',
+  },
+  pagerPage: { fontSize: fontScale(12), color: '#15163F' },
 
   // Full-screen preview player.
   previewScreen: {

@@ -1,11 +1,12 @@
 import { Alert } from '../components/AppAlert';
 /**
  * Privacy & Security — native settings screen reached from the profile menu.
- * Sections: Security (account rows), Privacy (marked "Coming soon" until a
- * creator-preferences endpoint exists), Legal & Policies (native documents),
- * Account (deactivate / delete via the account settings screen).
+ * Sections: Account standing (policy strikes, GET /chat/warnings), Security
+ * (account rows), Privacy (switches saved via PUT /profile/preferences), Legal &
+ * Policies (native documents), Account (deactivate / delete, both on the
+ * Account Security screen).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Linking,
   ScrollView,
@@ -17,7 +18,13 @@ import {
 import { Text } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import ScreenHeader from '../components/ScreenHeader';
-import { getPrivacyPrefs, savePrivacyPrefs, type PrivacyPrefs } from '../api';
+import {
+  getChatWarnings,
+  getPrivacyPrefs,
+  savePrivacyPrefs,
+  type PrivacyPrefs,
+} from '../api';
+import { accountStanding, type ChatWarnings } from '../accountStanding';
 import { scale, fontScale } from '../theme';
 
 type RowIconName =
@@ -152,6 +159,7 @@ function Row({
   onPress,
   danger,
   last,
+  disabled,
 }: {
   icon: RowIconName;
   iconTint: string;
@@ -165,6 +173,7 @@ function Row({
   onPress?: () => void;
   danger?: boolean;
   last?: boolean;
+  disabled?: boolean;
 }) {
   const body = (
     <>
@@ -186,6 +195,7 @@ function Row({
         <Switch
           value={on}
           onValueChange={onToggle}
+          disabled={disabled}
           accessibilityLabel={label}
           trackColor={{ false: '#E3E5EF', true: '#4D57E3' }}
           thumbColor="#FFFFFF"
@@ -219,6 +229,44 @@ function SectionTitle({ children }: { children: string }) {
   return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
+const STANDING_COLORS = {
+  good: { bg: '#F0FDF4', border: '#BBF7D0', fg: '#166534' },
+  warn: { bg: '#FFF7ED', border: '#FED7AA', fg: '#9A3412' },
+  bad: { bg: '#FEF2F2', border: '#FECACA', fg: '#B91C1C' },
+};
+
+/** Policy-strike card, same copy and tones as the website's account standing card. */
+function StandingCard({ warnings }: { warnings: ChatWarnings }) {
+  const s = accountStanding(warnings);
+  const c = STANDING_COLORS[s.tone];
+  return (
+    <View
+      style={[styles.standing, { backgroundColor: c.bg, borderColor: c.border }]}
+      accessibilityLabel={`Account standing: ${s.status}`}
+    >
+      <View style={styles.standingTop}>
+        <Text style={[styles.standingTitle, { color: c.fg }]}>
+          Account standing: {s.status}
+        </Text>
+        <Text style={[styles.standingPill, { color: c.fg, borderColor: c.border }]}>
+          {s.strikes} / 3 strikes
+        </Text>
+      </View>
+      <Text style={[styles.standingBody, { color: c.fg }]}>{s.consequence}</Text>
+      {s.lastStrikeAt ? (
+        <Text style={[styles.standingMeta, { color: c.fg }]}>
+          Last strike: {new Date(s.lastStrikeAt).toLocaleString()}
+        </Text>
+      ) : null}
+      {s.restrictionEndsAt ? (
+        <Text style={[styles.standingMeta, { color: c.fg }]}>
+          Restriction lifts: {new Date(s.restrictionEndsAt).toLocaleString()}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function PrivacySecurity({
   token,
   onBack,
@@ -231,15 +279,44 @@ function PrivacySecurity({
   unread?: number;
 }) {
   const [privacy, setPrivacy] = useState<PrivacyPrefs>({});
+  // The switches stay disabled until the saved block has loaded. Letting them
+  // work on defaults would save a block that overwrites the real settings.
+  const [prefsState, setPrefsState] = useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
+  const [prefsError, setPrefsError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [warnings, setWarnings] = useState<ChatWarnings | null>(null);
+  // Serialises saves so two quick toggles cannot roll each other back.
+  const saving = useRef(false);
 
   useEffect(() => {
     let active = true;
+    setPrefsState('loading');
     getPrivacyPrefs(token)
       .then(prefs => {
-        if (active) setPrivacy(prefs);
+        if (!active) return;
+        setPrivacy(prefs);
+        setPrefsState('ready');
       })
-      // An unreadable preference block leaves the switches on their defaults,
-      // which is what the backend applies anyway.
+      .catch(error => {
+        if (!active) return;
+        setPrefsError(error?.message || 'Could not load your privacy settings.');
+        setPrefsState('error');
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, reloadKey]);
+
+  // Account standing (policy strikes). Non-critical: the card just stays hidden
+  // if this fails, exactly like the website.
+  useEffect(() => {
+    let active = true;
+    getChatWarnings(token)
+      .then(data => {
+        if (active) setWarnings(data as ChatWarnings);
+      })
       .catch(() => {});
     return () => {
       active = false;
@@ -252,13 +329,23 @@ function PrivacySecurity({
    * leaving the UI claiming a setting that did not stick.
    */
   const setPref = (key: keyof PrivacyPrefs, value: boolean) => {
+    if (saving.current || prefsState !== 'ready') return;
+    saving.current = true;
     const previous = privacy;
     const next = { ...privacy, [key]: value };
     setPrivacy(next);
-    savePrivacyPrefs(token, next).catch(() => {
-      setPrivacy(previous);
-      Alert.alert('Not saved', 'Could not reach the server. Please try again.');
-    });
+    savePrivacyPrefs(token, next)
+      .catch(error => {
+        setPrivacy(previous);
+        // NetworkError already says "check your internet connection".
+        Alert.alert(
+          'Not saved',
+          error?.message || 'Could not save this setting. Please try again.',
+        );
+      })
+      .finally(() => {
+        saving.current = false;
+      });
   };
 
   return (
@@ -274,6 +361,8 @@ function PrivacySecurity({
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        {warnings ? <StandingCard warnings={warnings} /> : null}
+
         <SectionTitle>Security</SectionTitle>
         <View style={styles.card}>
           <Row
@@ -299,6 +388,17 @@ function PrivacySecurity({
             the website's privacy tab uses. They were marked "Coming soon" on
             the strength of a comment saying no endpoint existed. */}
         <SectionTitle>Privacy</SectionTitle>
+        {prefsState === 'error' && (
+          <TouchableOpacity
+            style={styles.prefsError}
+            onPress={() => setReloadKey(key => key + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading privacy settings"
+          >
+            <Text style={styles.prefsErrorText}>{prefsError}</Text>
+            <Text style={styles.prefsErrorRetry}>Retry</Text>
+          </TouchableOpacity>
+        )}
         <View style={styles.card}>
           <Row
             icon="eye"
@@ -307,6 +407,7 @@ function PrivacySecurity({
             label="Public Profile"
             hint="Let brands discover your profile"
             toggle
+            disabled={prefsState !== 'ready'}
             on={privacy.public_profile !== false}
             onToggle={next => setPref('public_profile', next)}
           />
@@ -317,6 +418,7 @@ function PrivacySecurity({
             label="Show Earnings"
             hint={'Display total earned on\nyour public profile'}
             toggle
+            disabled={prefsState !== 'ready'}
             on={!!privacy.show_earnings}
             onToggle={next => setPref('show_earnings', next)}
           />
@@ -327,8 +429,9 @@ function PrivacySecurity({
             label="Allow Direct Messages"
             hint={'Let brands message you\nwithout a deal'}
             toggle
-            on={privacy.allow_direct_messages !== false}
-            onToggle={next => setPref('allow_direct_messages', next)}
+            disabled={prefsState !== 'ready'}
+            on={privacy.allow_messages !== false}
+            onToggle={next => setPref('allow_messages', next)}
             last
           />
         </View>
@@ -378,7 +481,7 @@ function PrivacySecurity({
             iconBg="#FEF4E6"
             label="Deactivate Account"
             hint="Temporarily hide your profile"
-            onPress={() => onNavigate('/settings')}
+            onPress={() => onNavigate('/app/security')}
           />
           <Row
             icon="trash"
@@ -386,7 +489,7 @@ function PrivacySecurity({
             iconBg="#FDECEC"
             label="Delete Account"
             hint={'Permanently remove your account\nand all data'}
-            onPress={() => onNavigate('/settings')}
+            onPress={() => onNavigate('/app/security')}
             danger
             last
           />
@@ -415,6 +518,60 @@ const styles = StyleSheet.create({
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#7A7F99',
+  },
+  standing: {
+    marginTop: scale(14),
+    marginHorizontal: scale(16),
+    padding: scale(14),
+    borderRadius: scale(16),
+    borderWidth: 1,
+  },
+  standingTop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: scale(8),
+  },
+  standingTitle: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+  },
+  standingPill: {
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(2),
+    borderRadius: scale(999),
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    fontSize: fontScale(11.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+  },
+  standingBody: {
+    marginTop: scale(8),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(18),
+  },
+  standingMeta: { marginTop: scale(6), fontSize: fontScale(11), opacity: 0.8 },
+  prefsError: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(10),
+    minHeight: scale(44),
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(14),
+    backgroundColor: '#FFE6E7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  prefsErrorText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  prefsErrorRetry: {
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#C4373B',
   },
   card: {
     marginHorizontal: scale(16),

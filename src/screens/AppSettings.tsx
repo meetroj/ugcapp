@@ -1,8 +1,8 @@
 /**
  * Settings — the hub reached from the Profile tab's Settings row. Four cards:
  * Profile, Notifications, Follow Us, Privacy. Each one just routes; the actual
- * screens already exist (NotificationSettings, FollowUs, PrivacySecurity) or
- * live on the web (/settings for editing profile fields).
+ * screens already exist (NotificationSettings, FollowUs, PrivacySecurity,
+ * and /settings, which is CreatorSettings or BrandSettings by role).
  */
 import React from 'react';
 import {

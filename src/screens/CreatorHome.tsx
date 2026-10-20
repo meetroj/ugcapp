@@ -23,12 +23,19 @@ import {
   BACKEND_URL,
   getCampaigns,
   getMe,
+  getPayoutOverview,
   getTopEarners,
   getUnreadCount,
   type AuthUser,
 } from '../api';
 import AppHeader from '../components/AppHeader';
+import { isSelectedCreator, loadErrorText } from '../briefs';
+import { profileNudge, profilePercent } from '../profileCompletion';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+
+// "Later" on the complete-your-profile pop-up hides it until the app restarts
+// (the website hides it for the browser session).
+let nudgeDismissed = false;
 
 // Normalized shape for the home screen's "top creators" rail, populated from
 // getTopEarners() (GET /api/home/top-earners) below — see the normalization
@@ -49,6 +56,7 @@ type Creator = {
   // Backend-computed: true when portfolio_preview is a video file.
   premium?: boolean;
   deliverables_completed?: number;
+  earned?: number;
 };
 
 type Props = {
@@ -63,6 +71,8 @@ type Props = {
   /** The hero stat rows: Total Earnings opens Earnings, Deals opens My Deals. */
   onOpenEarnings?: () => void;
   onOpenDeals?: () => void;
+  /** Sends the "complete your profile" pop-up to /kyc when KYC is all that is left. */
+  onNavigate?: (path: string) => void;
 };
 
 const money = (value: unknown) =>
@@ -172,10 +182,18 @@ function CreatorHome({
   onOpenProfile,
   onOpenEarnings,
   onOpenDeals,
+  onNavigate,
 }: Props) {
   const [profile, setProfile] = useState<AuthUser>(session);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [completedDeals, setCompletedDeals] = useState(0);
+  // Lifetime released payouts from /payout/overview; null until it answers.
+  const [allTimeEarned, setAllTimeEarned] = useState<number | null>(null);
+  // The creator's first running deal, for the card under the hero.
+  const [activeDeal, setActiveDeal] = useState<Record<string, any> | null>(null);
+  // Why a card failed to load ('' = fine), so a failure is never shown as 0 or empty.
+  const [loadError, setLoadError] = useState('');
+  const [creatorsError, setCreatorsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // Real unread-notification count for the header bell (was hardcoded to 1).
@@ -201,14 +219,40 @@ function CreatorHome({
       // call here was getCreatorDirectory(), which is every approved creator in
       // arbitrary order — that is why the app's rail disagreed with the site.
       getTopEarners(token),
+      // Lifetime earnings. Best effort: without it the hero falls back to the balance.
+      getPayoutOverview(token),
     ]).then(results => {
       if (!active) return;
       if (results[0].status === 'fulfilled') {
         setProfile(results[0].value as AuthUser);
       }
       if (results[1].status === 'fulfilled') {
-        setCompletedDeals(results[1].value.length);
+        // Deals closed = campaigns this creator was selected for that are completed.
+        // Filtered here too in case the server's status filter is ignored.
+        setCompletedDeals(
+          results[1].value.filter(
+            c =>
+              isSelectedCreator(c, session.user_id) &&
+              String(c.status).toLowerCase() === 'completed',
+          ).length,
+        );
       }
+      if (results[3].status === 'fulfilled') {
+        const earned = Number(
+          (results[3].value as Record<string, unknown>).all_time_earnings,
+        );
+        setAllTimeEarned(Number.isFinite(earned) ? earned : null);
+      }
+      // One message for the first failure among the cards that matter.
+      const failed = results.slice(0, 3).find(r => r.status === 'rejected') as
+        | PromiseRejectedResult
+        | undefined;
+      setLoadError(failed ? loadErrorText(failed.reason, 'your home page') : '');
+      setCreatorsError(
+        results[2].status === 'rejected'
+          ? loadErrorText(results[2].reason, 'top creators')
+          : '',
+      );
       if (results[2].status === 'fulfilled') {
         // Top-earners uses different field names than the directory did, so
         // normalise here and the card markup below stays untouched.
@@ -218,6 +262,8 @@ function CreatorHome({
             name: earner.name,
             primary_category: earner.category,
             deliverables_completed: earner.deals,
+            // The website's "TOP EARNER Rs. X on UGCad" figure.
+            earned: earner.earned,
             // The showreel is a Cloudinary .mp4; VideoPreview handles it and
             // isVideo() detects it from the /video/upload/ path.
             portfolio_preview: earner.video_url,
@@ -233,6 +279,16 @@ function CreatorHome({
     // and the brief itself stays active.
     getCampaigns(token)
       .then(async list => {
+        // The card under the hero: the first deal this creator is running.
+        if (active) {
+          setActiveDeal(
+            list.find(
+              c =>
+                isSelectedCreator(c, session.user_id) &&
+                (c.status === 'in_progress' || c.status === 'active'),
+            ) || null,
+          );
+        }
         const brief = list.find(c =>
           c.visibility === 'private' && c.status === 'active' &&
           (c.selected_creator === session.user_id ||
@@ -340,8 +396,39 @@ function CreatorHome({
     };
   }, [cards.length, clearResume]);
 
-  const earnings = profile.total_earned || profile.balance || 0;
+  // Released payouts to date; before that answers (or if it fails) the wallet balance.
+  const earnings = allTimeEarned ?? (profile.total_earned || profile.balance || 0);
   const deals = Number(profile.completed_deals || completedDeals || 0);
+  const percent = profilePercent(profile);
+  const category = String(
+    (profile as Record<string, any>).category ||
+      (profile as Record<string, any>).profile?.category ||
+      (profile as Record<string, any>).niche ||
+      (profile as Record<string, any>).primary_category ||
+      '',
+  )
+    .replace(/_/g, ' ')
+    .trim();
+  const rating = Number((profile as Record<string, any>).average_rating || 0);
+
+  // Team-requested items (photo, intro video, KYC...) still missing: ask once.
+  const nudge = profileNudge(profile);
+  const nudgeShown = useRef(false);
+  useEffect(() => {
+    if (!nudge.left.length || nudgeDismissed || nudgeShown.current) return;
+    nudgeShown.current = true;
+    Alert.alert(
+      'Complete your profile',
+      `Add your ${nudge.text} to finish setting up. Brands check these first before sending you deals.`,
+      [
+        { text: 'Later', style: 'cancel', onPress: () => { nudgeDismissed = true; } },
+        {
+          text: 'Complete now',
+          onPress: () => (nudge.to === '/kyc' && onNavigate ? onNavigate('/kyc') : onOpenProfile()),
+        },
+      ],
+    );
+  }, [nudge.left.length, nudge.text, nudge.to, onNavigate, onOpenProfile]);
 
   return (
     <View style={styles.screen}>
@@ -370,6 +457,12 @@ function CreatorHome({
         <View style={styles.hero}>
           <View style={styles.heroIntro}>
             <Text style={styles.greeting}>Hi, {displayName(profile)}</Text>
+            {(!!category || rating > 0) && (
+              <View style={styles.metaRow}>
+                {!!category && <Text style={styles.metaChip}>{category}</Text>}
+                {rating > 0 && <Text style={styles.metaRating}>★ {rating.toFixed(1)}</Text>}
+              </View>
+            )}
             <Text style={styles.tagline}>Create more. Collaborate more.</Text>
             <TouchableOpacity
               style={styles.browseButton}
@@ -428,6 +521,60 @@ function CreatorHome({
           </View>
         </View>
 
+        {!!loadError && !loading && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{loadError}</Text>
+            <TouchableOpacity
+              style={styles.retry}
+              onPress={() => {
+                setRefreshing(true);
+                loadData();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {percent < 100 && (
+          <TouchableOpacity
+            style={styles.progressCard}
+            onPress={onOpenProfile}
+            accessibilityRole="button"
+            accessibilityLabel={`Profile ${percent}% complete. Finish it`}
+          >
+            <View style={styles.progressTop}>
+              <Text style={styles.progressText}>Profile {percent}% complete</Text>
+              <Text style={styles.progressCta}>Finish it ›</Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${percent}%` }]} />
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {!!activeDeal && (
+          <TouchableOpacity
+            style={styles.dealCard}
+            onPress={onOpenDeals}
+            disabled={!onOpenDeals}
+            accessibilityRole="button"
+            accessibilityLabel="Open My Deals"
+          >
+            <Text style={styles.dealLabel}>ACTIVE DEAL</Text>
+            <Text style={styles.dealTitle} numberOfLines={1}>
+              {String(activeDeal.title || 'Active campaign')}
+            </Text>
+            <Text style={styles.dealMeta} numberOfLines={1}>
+              {String(activeDeal.brand_name || activeDeal.business_name || 'Brand').replace(/^@+/, '')}
+              {' · '}
+              {activeDeal.status === 'in_progress' ? 'In progress' : 'Starting'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Top Creators</Text>
         </View>
@@ -458,9 +605,26 @@ function CreatorHome({
             ))}
           </View>
         ) : !topCreators.length ? (
-          <Text style={styles.emptyText}>
-            Top creators aren't available right now.
-          </Text>
+          creatorsError ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{creatorsError}</Text>
+              <TouchableOpacity
+                style={styles.retry}
+                onPress={() => {
+                  setRefreshing(true);
+                  loadData();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry top creators"
+              >
+                <Text style={styles.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={styles.emptyText}>
+              Top creators aren't available right now.
+            </Text>
+          )
         ) : (
           <ScrollView
             ref={railRef}
@@ -544,6 +708,13 @@ function CreatorHome({
                     </View>
                     <View style={styles.creatorMetrics}>
                       <View>
+                        <Text style={styles.metricLabel}>Total Earned</Text>
+                        <Text style={styles.metricValue} numberOfLines={1}>
+                          {money(creator.earned)}
+                        </Text>
+                      </View>
+                      <View style={styles.metricRule} />
+                      <View style={styles.metricShrink}>
                         <Text style={styles.metricLabel}>Category</Text>
                         <Text style={styles.metricValue} numberOfLines={1}>
                           {creator.primary_category || 'Creator'}
@@ -645,6 +816,62 @@ const styles = StyleSheet.create({
     borderColor: '#E8E8FC',
   },
   heroIntro: { flex: 1.05, paddingRight: scale(14) },
+  metaRow: { marginTop: scale(8), flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: scale(8) },
+  metaChip: {
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(3),
+    borderRadius: scale(8),
+    overflow: 'hidden',
+    backgroundColor: '#E4E3FF',
+    fontSize: fontScale(11),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4D48EF',
+    textTransform: 'capitalize',
+  },
+  metaRating: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B4790B' },
+  errorBox: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  retry: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
+  retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
+  progressCard: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(12),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(12),
+    minHeight: scale(44),
+    borderRadius: scale(14),
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: '#E9E9F4',
+  },
+  progressTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  progressText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#11123D' },
+  progressCta: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4D48EF' },
+  progressTrack: { marginTop: scale(8), height: scale(6), borderRadius: scale(3), backgroundColor: '#E9EAF3', overflow: 'hidden' },
+  progressFill: { height: scale(6), borderRadius: scale(3), backgroundColor: '#4C5BF3' },
+  dealCard: {
+    marginHorizontal: scale(16),
+    marginBottom: scale(12),
+    padding: scale(14),
+    minHeight: scale(44),
+    borderRadius: scale(14),
+    backgroundColor: '#F1F1FF',
+    borderWidth: 1,
+    borderColor: '#E8E8FC',
+  },
+  dealLabel: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#6658F5', letterSpacing: 0.5 },
+  dealTitle: { marginTop: scale(4), fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#11123D' },
+  dealMeta: { marginTop: scale(3), fontSize: fontScale(12), color: '#7E829D' },
   heroDivider: {
     width: 1,
     marginVertical: scale(4),
@@ -871,6 +1098,8 @@ const styles = StyleSheet.create({
     color: '#5B5CF6',
   },
   metricRule: { width: 1, backgroundColor: '#ECECF4' },
+  // Three metrics share the card; a long category truncates instead of pushing.
+  metricShrink: { flexShrink: 1 },
 });
 
 export default CreatorHome;

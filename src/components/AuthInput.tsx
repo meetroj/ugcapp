@@ -20,9 +20,22 @@ type Props = TextInputProps & {
   /** Picks the leading glyph and turns on the eye toggle for 'lock'. */
   icon: 'mail' | 'lock' | 'phone' | 'person' | 'globe';
   compact?: boolean;
+  /** Tappable text shown before the input, e.g. a country code picker. */
+  prefixLabel?: string;
+  onPrefixPress?: () => void;
+  /** Inline message under the field; also turns the border red. */
+  error?: string;
 };
 
-function AuthInput({ label, icon, compact = false, ...inputProps }: Props) {
+function AuthInput({
+  label,
+  icon,
+  compact = false,
+  prefixLabel,
+  onPrefixPress,
+  error,
+  ...inputProps
+}: Props) {
   const isPassword = icon === 'lock';
   const [hidden, setHidden] = useState(isPassword);
 
@@ -30,7 +43,13 @@ function AuthInput({ label, icon, compact = false, ...inputProps }: Props) {
     <View style={[styles.wrap, compact && styles.wrapCompact]}>
       <Text style={styles.label}>{label}</Text>
 
-      <View style={[styles.field, compact && styles.fieldCompact]}>
+      <View
+        style={[
+          styles.field,
+          compact && styles.fieldCompact,
+          !!error && styles.fieldError,
+        ]}
+      >
         <View style={styles.leading}>
           {icon === 'lock' ? (
             <LockIcon />
@@ -44,6 +63,18 @@ function AuthInput({ label, icon, compact = false, ...inputProps }: Props) {
             <MailIcon />
           )}
         </View>
+
+        {!!prefixLabel && (
+          <TouchableOpacity
+            style={styles.prefix}
+            onPress={onPrefixPress}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Country code ${prefixLabel}`}
+          >
+            <Text style={styles.prefixText}>{prefixLabel}</Text>
+          </TouchableOpacity>
+        )}
 
         <TextInput
           style={styles.input}
@@ -73,6 +104,7 @@ function AuthInput({ label, icon, compact = false, ...inputProps }: Props) {
           </TouchableOpacity>
         )}
       </View>
+      {!!error && <Text style={styles.error}>{error}</Text>}
     </View>
   );
 }
@@ -98,6 +130,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(12),
   },
   fieldCompact: { height: scale(44) },
+  fieldError: { borderColor: '#E5484D' },
+  prefix: {
+    marginRight: scale(8),
+    paddingRight: scale(8),
+    borderRightWidth: 1,
+    borderRightColor: colors.border,
+    justifyContent: 'center',
+    minHeight: 32,
+  },
+  prefixText: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: colors.text,
+  },
+  error: {
+    marginTop: scale(5),
+    fontSize: fontScale(12),
+    color: '#E5484D',
+  },
   leading: { marginRight: scale(8) },
   trailing: { marginLeft: scale(8) },
   input: {

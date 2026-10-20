@@ -25,6 +25,8 @@ async function openBid(onNavigate = jest.fn()) {
   const card = tree.root.findAllByType(TouchableOpacity).find((node: any) => node.props.accessibilityLabel === 'Brand: Launch');
   await act(async () => { card.props.onPress(); });
   await act(async () => { await button('Submit Your Bid').props.onPress(); });
+  // The platform-fee sheet comes before the form, as on the website.
+  if (button('Continue to bid')) await act(async () => { button('Continue to bid').props.onPress(); });
 }
 test('one combined amount includes both files and is sent without split fields', async () => {
   await openBid();
@@ -44,6 +46,8 @@ test('verified KYC with an incomplete profile opens profile settings', async () 
   (getMe as jest.Mock).mockResolvedValue({ profile_completed: false, kyc: { status: 'verified' } });
   const navigate = jest.fn();
   await openBid(navigate);
+  // The missing-profile sheet offers the way out instead of redirecting silently.
+  await act(async () => { button('Complete profile').props.onPress(); });
   expect(navigate).toHaveBeenCalledWith('/settings?tab=profile');
   expect(navigate).not.toHaveBeenCalledWith('/kyc');
 });

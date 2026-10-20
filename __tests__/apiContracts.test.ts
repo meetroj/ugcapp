@@ -58,14 +58,17 @@ test('resetPassword sends `password`, which is what ResetPasswordRequest declare
   expect(body.new_password).toBeUndefined();
 });
 
-test('changePassword keeps its params in the query string', async () => {
+test('changePassword sends a JSON body (the backend accepts it; URLs get logged)', async () => {
   const {sent} = capture();
   const {changePassword} = require('../src/api');
 
   await changePassword('tok', 'OldPass1', 'NewPass1');
 
-  expect(sent[0].url).toContain('old_password=OldPass1');
-  expect(sent[0].url).toContain('new_password=NewPass1');
+  expect(sent[0].url).not.toContain('old_password');
+  expect(bodyOf(sent[0])).toEqual({
+    old_password: 'OldPass1',
+    new_password: 'NewPass1',
+  });
 });
 
 test('confirmDealReceipt always sends unboxing_video_url', async () => {
@@ -101,9 +104,9 @@ test('updateShipment fills in every field ShipmentUpdate requires', async () => 
   // The checklist is required too, and a caller that only has tracking
   // details should not be rejected for omitting it.
   expect(body.shipment_checklist).toEqual({
-    package_sealed: true,
+    sealed: true,
     correct_item: true,
-    working_condition: true,
+    working: true,
   });
 });
 

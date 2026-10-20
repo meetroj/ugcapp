@@ -2,16 +2,14 @@ import { Alert } from '../components/AppAlert';
 /**
  * KYC details — the native screen behind "Start KYC" / "Update Details".
  *
- * This used to collect the three text fields and then send the creator to the
- * website to finish, because the app had no image picker. It has one now
- * (`react-native-image-picker`, already used by the deal room and the profile
- * screens), so the whole submission happens here: the same payload the web's
- * CreatorKYC page posts, documents included.
- *
- * Validation mirrors the backend so a rejection is caught before the request:
- * PAN by format, Aadhaar by the Verhoeff checksum, IFSC and UPI by shape.
+ * The whole submission happens here (document photos included, via
+ * `react-native-image-picker`) and posts the same payload as the website's
+ * CreatorKYC page. Rules mirror CreatorKYC.js and server.py /kyc/submit so a
+ * rejection is caught before the request: PAN by format, Aadhaar (optional)
+ * by the Verhoeff checksum, IFSC / UPI by shape, bank accounts 9-18 digits,
+ * the creator must be 18+, and only the PAN photo is required.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -24,8 +22,23 @@ import {
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Text, TextInput } from '../components/Text';
 import ScreenHeader from '../components/ScreenHeader';
-import { getKyc, submitKyc, uploadMedia } from '../api';
+import ChoiceSheet from '../components/ChoiceSheet';
+import { getKyc, getPayoutOverview, submitKyc, uploadMedia } from '../api';
 import { scale, fontScale } from '../theme';
+import {
+  GENDERS,
+  IFSC_RE,
+  MAX_KYC_DOC_BYTES,
+  PAN_RE,
+  UPI_RE,
+  aadhaarValid,
+  ageFromDob,
+  daysInMonth,
+  errorMessage,
+  kycIssues,
+  kycStatusOf,
+  lookupPincode,
+} from '../payoutRules';
 
 type Props = {
   onBack: () => void;
@@ -34,60 +47,39 @@ type Props = {
   onSubmitted?: () => void;
 };
 
-/** Same rules the backend applies in /api/kyc/submit. */
-const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-const UPI_RE = /^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/;
-const PINCODE_RE = /^[1-9][0-9]{5}$/;
-
-/** Aadhaar is 12 digits and must pass the Verhoeff checksum, as on the server. */
-const VERHOEFF_D = [
-  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-  [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
-  [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
-  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
-  [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
-  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
-  [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
-  [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
-  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-];
-const VERHOEFF_P = [
-  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-  [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
-  [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
-  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
-  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
-  [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
-  [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ];
 
-function aadhaarValid(value: string): boolean {
-  if (!/^[2-9][0-9]{11}$/.test(value)) return false;
-  let c = 0;
-  value
-    .split('')
-    .reverse()
-    .forEach((digit, index) => {
-      c = VERHOEFF_D[c][VERHOEFF_P[index % 8][Number(digit)]];
-    });
-  return c === 0;
-}
-
-/** The three documents the backend requires, in the order the form asks. */
+/** Photos the form asks for. Only the PAN card is required (CreatorKYC.js). */
 const DOCS = [
-  { key: 'pan_doc_url', label: 'PAN card' },
+  { key: 'pan_doc_url', label: 'PAN card photo' },
   { key: 'aadhaar_front_url', label: 'Aadhaar - front' },
   { key: 'aadhaar_back_url', label: 'Aadhaar - back' },
 ] as const;
 
 type DocKey = (typeof DOCS)[number]['key'];
 
+const pad = (n: number) => String(n).padStart(2, '0');
+
 function KycSubmit({ onBack, token, onSubmitted }: Props) {
   const [name, setName] = useState('');
-  const [dob, setDob] = useState('');
+  // Date of birth is picked as day / month / year (no typed text), then joined.
+  const [dobY, setDobY] = useState(0);
+  const [dobM, setDobM] = useState(0);
+  const [dobD, setDobD] = useState(0);
+  const [dobSheet, setDobSheet] = useState<'' | 'day' | 'month' | 'year'>('');
   const [gender, setGender] = useState('');
   const [pan, setPan] = useState('');
   const [aadhaar, setAadhaar] = useState('');
@@ -95,8 +87,12 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [pincode, setPincode] = useState('');
+  const [pinHint, setPinHint] = useState<'' | 'loading' | 'found' | 'not-found'>(
+    '',
+  );
 
-  const [payoutMethod, setPayoutMethod] = useState<'upi' | 'bank'>('bank');
+  // UPI first, like the website.
+  const [payoutMethod, setPayoutMethod] = useState<'upi' | 'bank'>('upi');
   const [upi, setUpi] = useState('');
   const [holder, setHolder] = useState('');
   const [bankName, setBankName] = useState('');
@@ -112,47 +108,128 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
   /** Which document is uploading, so only its tile shows a spinner. */
   const [uploading, setUploading] = useState<DocKey | ''>('');
   const [saving, setSaving] = useState(false);
+  const submitting = useRef(false);
+  // 'pending' / 'verified': the backend refuses a second submission.
+  const [locked, setLocked] = useState<'' | 'pending' | 'verified'>('');
+  const [loadError, setLoadError] = useState('');
+
+  const dob =
+    dobY && dobM && dobD ? `${dobY}-${pad(dobM)}-${pad(dobD)}` : '';
+  const dobAge = dob ? ageFromDob(dob) : null;
+  const dobError =
+    dobAge !== null && dobAge < 18
+      ? 'You must be at least 18 to receive payouts.'
+      : '';
+  const maxYear = new Date().getFullYear() - 18;
+
+  const setDobFromIso = (iso: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (!m) return;
+    setDobY(Number(m[1]));
+    setDobM(Number(m[2]));
+    setDobD(Number(m[3]));
+  };
+
+  /** Picks one part of the date and keeps the day inside the month. */
+  const pickDob = (part: 'day' | 'month' | 'year', value: number) => {
+    const year = part === 'year' ? value : dobY;
+    const month = part === 'month' ? value : dobM;
+    if (part === 'year') setDobY(value);
+    if (part === 'month') setDobM(value);
+    if (part === 'day') setDobD(value);
+    if (year && month && dobD > daysInMonth(year, month)) {
+      setDobD(daysInMonth(year, month));
+    }
+  };
 
   /**
    * Pre-fill from any existing submission, so "Update details" after a
    * rejection means correcting one field rather than retyping the form and
-   * re-photographing three documents.
+   * re-photographing documents. The saved payout account lives on the user
+   * (not inside the kyc record), so it comes from /payout/overview.
    */
+  const loadSaved = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      setLoadError('');
+      const [kycResult, payoutResult] = await Promise.allSettled([
+        getKyc(token),
+        getPayoutOverview(token),
+      ]);
+      if (!isActive()) return;
+
+      if (kycResult.status === 'rejected') {
+        setLoadError(
+          errorMessage(kycResult.reason, 'Could not load your saved details.'),
+        );
+      } else {
+        const prior = (kycResult.value || {}) as Record<string, any>;
+        const status = kycStatusOf(prior);
+        if (status === 'pending' || status === 'verified') setLocked(status);
+        if (prior.pan_number) {
+          const address = (prior.address || {}) as Record<string, any>;
+          setName(String(prior.full_legal_name || ''));
+          setDobFromIso(String(prior.date_of_birth || ''));
+          setGender(String(prior.gender || '').toLowerCase());
+          setPan(String(prior.pan_number || ''));
+          setAadhaar(String(prior.aadhaar_number || ''));
+          setLine(String(address.line || ''));
+          setCity(String(address.city || ''));
+          setState(String(address.state || ''));
+          setPincode(String(address.pincode || ''));
+          setDocs({
+            pan_doc_url: String(prior.pan_doc_url || ''),
+            aadhaar_front_url: String(prior.aadhaar_front_url || ''),
+            aadhaar_back_url: String(prior.aadhaar_back_url || ''),
+          });
+          if (prior.payout_method === 'bank') setPayoutMethod('bank');
+        }
+      }
+
+      if (payoutResult.status === 'fulfilled') {
+        const saved = payoutResult.value as Record<string, any>;
+        const bank = (saved?.bank_details || {}) as Record<string, any>;
+        if (saved?.upi_id) setUpi(String(saved.upi_id));
+        if (bank.account_number) {
+          setHolder(String(bank.account_holder_name || ''));
+          setBankName(String(bank.bank_name || ''));
+          setAccount(String(bank.account_number || ''));
+          setIfsc(String(bank.ifsc_code || ''));
+        }
+      }
+    },
+    [token],
+  );
+
   useEffect(() => {
     let active = true;
-    getKyc(token)
-      .then(record => {
-        const prior = (record || {}) as Record<string, any>;
-        if (!active || !prior.pan_number) return;
-        const address = (prior.address || {}) as Record<string, any>;
-        const bank = (prior.bank_details || {}) as Record<string, any>;
-        setName(String(prior.full_legal_name || ''));
-        setDob(String(prior.date_of_birth || ''));
-        setGender(String(prior.gender || ''));
-        setPan(String(prior.pan_number || ''));
-        setAadhaar(String(prior.aadhaar_number || ''));
-        setLine(String(address.line || ''));
-        setCity(String(address.city || ''));
-        setState(String(address.state || ''));
-        setPincode(String(address.pincode || ''));
-        setPayoutMethod(prior.upi_id ? 'upi' : 'bank');
-        setUpi(String(prior.upi_id || ''));
-        setHolder(String(bank.account_holder_name || ''));
-        setBankName(String(bank.bank_name || ''));
-        setAccount(String(bank.account_number || ''));
-        setIfsc(String(bank.ifsc_code || ''));
-        setDocs({
-          pan_doc_url: String(prior.pan_doc_url || ''),
-          aadhaar_front_url: String(prior.aadhaar_front_url || ''),
-          aadhaar_back_url: String(prior.aadhaar_back_url || ''),
-        });
-      })
-      // No record yet is the normal first-time case, not an error.
-      .catch(() => {});
+    loadSaved(() => active);
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [loadSaved]);
+
+  // Fill city and state from the pincode, as the website does.
+  useEffect(() => {
+    if (!/^\d{6}$/.test(pincode)) {
+      setPinHint('');
+      return undefined;
+    }
+    let active = true;
+    setPinHint('loading');
+    lookupPincode(pincode).then(location => {
+      if (!active) return;
+      if (!location) {
+        setPinHint('not-found');
+        return;
+      }
+      setCity(location.city);
+      setState(location.state);
+      setPinHint('found');
+    });
+    return () => {
+      active = false;
+    };
+  }, [pincode]);
 
   const panError = useMemo(
     () =>
@@ -182,6 +259,10 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
         : '',
     [payoutMethod, upi],
   );
+  const accountError =
+    payoutMethod === 'bank' && account && !/^\d{9,18}$/.test(account)
+      ? 'Account numbers are 9 to 18 digits.'
+      : '';
 
   const pickDoc = async (key: DocKey) => {
     if (uploading) return;
@@ -196,6 +277,10 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
     }).catch(() => null);
     const asset = picked?.assets?.[0];
     if (!asset?.uri) return;
+    if (asset.fileSize && asset.fileSize > MAX_KYC_DOC_BYTES) {
+      Alert.alert('File too large', 'Maximum 5MB. Pick a smaller photo.');
+      return;
+    }
 
     setUploading(key);
     try {
@@ -206,45 +291,33 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
       });
       setDocs(current => ({ ...current, [key]: url }));
     } catch (error) {
-      Alert.alert(
-        'Upload failed',
-        error instanceof Error && error.message
-          ? error.message
-          : 'Could not upload that photo. Please try again.',
-      );
+      Alert.alert('Upload failed', errorMessage(error, 'Could not upload that photo. Please try again.'));
     } finally {
       setUploading('');
     }
   };
 
-  /** Everything still missing, named, so the alert can list it. */
-  const issues = (): string[] => {
-    const m: string[] = [];
-    if (name.trim().length < 3) m.push('Full legal name');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) m.push('Date of birth (YYYY-MM-DD)');
-    if (!gender) m.push('Gender');
-    if (!PAN_RE.test(pan)) m.push('Valid PAN number');
-    if (!aadhaarValid(aadhaar)) m.push('Valid Aadhaar number');
-    if (!line.trim()) m.push('Address');
-    if (!city.trim()) m.push('City');
-    if (!state.trim()) m.push('State');
-    if (!PINCODE_RE.test(pincode)) m.push('6-digit pincode');
-    DOCS.forEach(doc => {
-      if (!docs[doc.key]) m.push(`${doc.label} photo`);
-    });
-    if (payoutMethod === 'upi') {
-      if (!UPI_RE.test(upi)) m.push('Valid UPI ID');
-    } else {
-      if (!holder.trim()) m.push('Account holder name');
-      if (!bankName.trim()) m.push('Bank name');
-      if (!/^\d{6,18}$/.test(account)) m.push('Account number');
-      if (!IFSC_RE.test(ifsc)) m.push('Valid IFSC code');
-    }
-    return m;
-  };
+  const form = () => ({
+    name,
+    dob,
+    gender,
+    pan,
+    aadhaar,
+    line,
+    city,
+    state,
+    pincode,
+    panDoc: docs.pan_doc_url,
+    payoutMethod,
+    upi,
+    holder,
+    account,
+    ifsc,
+  });
 
   const submit = async () => {
-    const missing = issues();
+    if (submitting.current) return;
+    const missing = kycIssues(form());
     if (missing.length) {
       Alert.alert(
         'Still needed',
@@ -254,6 +327,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
       return;
     }
 
+    submitting.current = true;
     setSaving(true);
     try {
       await submitKyc(token, {
@@ -288,14 +362,90 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
     } catch (error) {
       Alert.alert(
         'Could not submit',
-        error instanceof Error && error.message
-          ? error.message
-          : 'Please check your details and try again.',
+        errorMessage(error, 'Please check your details and try again.'),
       );
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
   };
+
+  const dobOptions = (part: 'day' | 'month' | 'year') => {
+    if (part === 'month') {
+      return MONTHS.map((label, index) => ({
+        label,
+        onPress: () => pickDob('month', index + 1),
+      }));
+    }
+    if (part === 'year') {
+      return Array.from({ length: 83 }, (_, i) => maxYear - i).map(year => ({
+        label: String(year),
+        onPress: () => pickDob('year', year),
+      }));
+    }
+    const days = dobY && dobM ? daysInMonth(dobY, dobM) : 31;
+    return Array.from({ length: days }, (_, i) => i + 1).map(day => ({
+      label: String(day),
+      onPress: () => pickDob('day', day),
+    }));
+  };
+
+  const renderDoc = (doc: (typeof DOCS)[number]) => (
+    <TouchableOpacity
+      key={doc.key}
+      style={styles.docRow}
+      onPress={() => pickDoc(doc.key)}
+      disabled={!!uploading}
+      accessibilityRole="button"
+      accessibilityLabel={`${doc.label}. ${
+        docs[doc.key] ? 'Attached' : 'Not attached'
+      }`}
+    >
+      {docs[doc.key] ? (
+        <Image source={{ uri: docs[doc.key] }} style={styles.docThumb} />
+      ) : (
+        <View style={[styles.docThumb, styles.docEmpty]}>
+          <Text style={styles.docPlus}>+</Text>
+        </View>
+      )}
+      <View style={styles.docText}>
+        <Text style={styles.docLabel}>{doc.label}</Text>
+        <Text style={styles.docState}>
+          {docs[doc.key] ? 'Attached - tap to replace' : 'Tap to attach (photo, up to 5MB)'}
+        </Text>
+      </View>
+      {uploading === doc.key && (
+        <ActivityIndicator size="small" color="#4C5BF3" />
+      )}
+    </TouchableOpacity>
+  );
+
+  if (locked) {
+    return (
+      <View style={styles.screen}>
+        <ScreenHeader title="KYC Details" onBack={onBack} />
+        <View style={styles.sheet}>
+          <View style={styles.content}>
+            <Text style={styles.section}>
+              {locked === 'verified' ? 'KYC is verified' : 'KYC is under review'}
+            </Text>
+            <Text style={styles.sectionHint}>
+              {locked === 'verified'
+                ? 'Your identity is confirmed, so there is nothing more to submit.'
+                : 'You can submit again only if the review is rejected.'}
+            </Text>
+            <TouchableOpacity
+              style={styles.submit}
+              onPress={onBack}
+              accessibilityRole="button"
+            >
+              <Text style={styles.submitText}>Back to KYC status</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -308,8 +458,24 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
         >
           <Text style={styles.intro}>
             Check your details against your documents before you submit -
-            mismatches are the most common reason KYC is rejected.
+            mismatches are the most common reason KYC is rejected. Your ID and
+            payout details are visible only to you and our review team.
           </Text>
+
+          {loadError ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorBoxText}>
+                {loadError} You can still fill in the form.
+              </Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => loadSaved()}
+                accessibilityRole="button"
+              >
+                <Text style={styles.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           <Text style={styles.label}>Name as printed on PAN</Text>
           <TextInput
@@ -321,47 +487,63 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
           />
 
           <Text style={styles.label}>Date of birth</Text>
-          <TextInput
-            style={styles.input}
-            value={dob}
-            onChangeText={text =>
-              // Dashes appear on their own so the stored value is always the
-              // ISO date the backend expects.
-              setDob(
-                text
-                  .replace(/\D/g, '')
-                  .slice(0, 8)
-                  .replace(/^(\d{4})(\d)/, '$1-$2')
-                  .replace(/^(\d{4}-\d{2})(\d)/, '$1-$2'),
-              )
-            }
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="number-pad"
-          />
+          <View style={styles.row}>
+            <TouchableOpacity
+              style={[styles.input, styles.rowItem, styles.pickBtn]}
+              onPress={() => setDobSheet('day')}
+              accessibilityRole="button"
+              accessibilityLabel="Birth day"
+            >
+              <Text style={dobD ? styles.pickText : styles.pickPlaceholder}>
+                {dobD || 'Day'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.input, styles.rowItemWide, styles.pickBtn]}
+              onPress={() => setDobSheet('month')}
+              accessibilityRole="button"
+              accessibilityLabel="Birth month"
+            >
+              <Text style={dobM ? styles.pickText : styles.pickPlaceholder}>
+                {dobM ? MONTHS[dobM - 1] : 'Month'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.input, styles.rowItem, styles.pickBtn]}
+              onPress={() => setDobSheet('year')}
+              accessibilityRole="button"
+              accessibilityLabel="Birth year"
+            >
+              <Text style={dobY ? styles.pickText : styles.pickPlaceholder}>
+                {dobY || 'Year'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {dobError ? <Text style={styles.error}>{dobError}</Text> : null}
 
           <Text style={styles.label}>Gender</Text>
           <View style={styles.chips}>
-            {['Male', 'Female', 'Other'].map(option => (
+            {GENDERS.map(option => (
               <TouchableOpacity
-                key={option}
-                style={[styles.chip, gender === option && styles.chipOn]}
-                onPress={() => setGender(option)}
+                key={option.value}
+                style={[styles.chip, gender === option.value && styles.chipOn]}
+                onPress={() => setGender(option.value)}
                 accessibilityRole="button"
-                accessibilityState={{ selected: gender === option }}
+                accessibilityState={{ selected: gender === option.value }}
               >
                 <Text
                   style={[
                     styles.chipText,
-                    gender === option && styles.chipTextOn,
+                    gender === option.value && styles.chipTextOn,
                   ]}
                 >
-                  {option}
+                  {option.label}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
 
+          <Text style={styles.section}>PAN card</Text>
           <Text style={styles.label}>PAN number</Text>
           <TextInput
             style={styles.input}
@@ -379,7 +561,12 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
             autoCapitalize="characters"
           />
           {panError ? <Text style={styles.error}>{panError}</Text> : null}
+          <Text style={styles.sectionHint}>
+            A clear photo of your PAN card. All four corners visible, no glare.
+          </Text>
+          {renderDoc(DOCS[0])}
 
+          <Text style={styles.section}>Aadhaar card (optional)</Text>
           <Text style={styles.label}>Aadhaar number</Text>
           <TextInput
             style={styles.input}
@@ -394,15 +581,36 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
           {aadhaarError ? (
             <Text style={styles.error}>{aadhaarError}</Text>
           ) : null}
+          {renderDoc(DOCS[1])}
+          {renderDoc(DOCS[2])}
 
-          <Text style={styles.section}>Address</Text>
+          <Text style={styles.section}>Residential address</Text>
           <TextInput
             style={styles.input}
             value={line}
             onChangeText={setLine}
-            placeholder="Flat / street"
+            placeholder="House / flat, street, area"
             placeholderTextColor="#9CA3AF"
           />
+          <TextInput
+            style={[styles.input, styles.inputStacked]}
+            value={pincode}
+            onChangeText={text => setPincode(text.replace(/\D/g, '').slice(0, 6))}
+            placeholder="Pincode (6 digits)"
+            placeholderTextColor="#9CA3AF"
+            keyboardType="number-pad"
+          />
+          {pinHint === 'loading' ? (
+            <Text style={styles.hint}>Finding city and state…</Text>
+          ) : null}
+          {pinHint === 'found' ? (
+            <Text style={styles.hint}>City and state filled automatically.</Text>
+          ) : null}
+          {pinHint === 'not-found' ? (
+            <Text style={styles.hint}>
+              Pincode not found. Enter city and state manually.
+            </Text>
+          ) : null}
           <View style={styles.row}>
             <TextInput
               style={[styles.input, styles.rowItem]}
@@ -419,53 +627,13 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
               placeholderTextColor="#9CA3AF"
             />
           </View>
-          <TextInput
-            style={[styles.input, styles.inputStacked]}
-            value={pincode}
-            onChangeText={text => setPincode(text.replace(/\D/g, '').slice(0, 6))}
-            placeholder="Pincode"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="number-pad"
-          />
-
-          <Text style={styles.section}>Documents</Text>
-          <Text style={styles.sectionHint}>
-            Photos of your PAN card and both sides of your Aadhaar. Make sure
-            all four corners and the text are readable.
-          </Text>
-          {DOCS.map(doc => (
-            <TouchableOpacity
-              key={doc.key}
-              style={styles.docRow}
-              onPress={() => pickDoc(doc.key)}
-              disabled={!!uploading}
-              accessibilityRole="button"
-              accessibilityLabel={`${doc.label}. ${
-                docs[doc.key] ? 'Attached' : 'Not attached'
-              }`}
-            >
-              {docs[doc.key] ? (
-                <Image source={{ uri: docs[doc.key] }} style={styles.docThumb} />
-              ) : (
-                <View style={[styles.docThumb, styles.docEmpty]}>
-                  <Text style={styles.docPlus}>+</Text>
-                </View>
-              )}
-              <View style={styles.docText}>
-                <Text style={styles.docLabel}>{doc.label}</Text>
-                <Text style={styles.docState}>
-                  {docs[doc.key] ? 'Attached - tap to replace' : 'Tap to attach'}
-                </Text>
-              </View>
-              {uploading === doc.key && (
-                <ActivityIndicator size="small" color="#4C5BF3" />
-              )}
-            </TouchableOpacity>
-          ))}
 
           <Text style={styles.section}>Where we pay you</Text>
+          <Text style={styles.sectionHint}>
+            Where we send your earnings after a deal completes. Choose one.
+          </Text>
           <View style={styles.chips}>
-            {(['bank', 'upi'] as const).map(option => (
+            {(['upi', 'bank'] as const).map(option => (
               <TouchableOpacity
                 key={option}
                 style={[styles.chip, payoutMethod === option && styles.chipOn]}
@@ -479,7 +647,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
                     payoutMethod === option && styles.chipTextOn,
                   ]}
                 >
-                  {option === 'bank' ? 'Bank account' : 'UPI'}
+                  {option === 'bank' ? 'Bank account' : 'UPI ID'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -491,10 +659,11 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
               <TextInput
                 style={styles.input}
                 value={upi}
-                onChangeText={setUpi}
+                onChangeText={text => setUpi(text.trim())}
                 placeholder="name@bank"
                 placeholderTextColor="#9CA3AF"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
               {upiError ? <Text style={styles.error}>{upiError}</Text> : null}
             </>
@@ -508,7 +677,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
                 placeholder="As printed on the passbook"
                 placeholderTextColor="#9CA3AF"
               />
-              <Text style={styles.label}>Bank name</Text>
+              <Text style={styles.label}>Bank name (optional)</Text>
               <TextInput
                 style={styles.input}
                 value={bankName}
@@ -527,6 +696,9 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
                 placeholderTextColor="#9CA3AF"
                 keyboardType="number-pad"
               />
+              {accountError ? (
+                <Text style={styles.error}>{accountError}</Text>
+              ) : null}
               <Text style={styles.label}>IFSC code</Text>
               <TextInput
                 style={styles.input}
@@ -559,8 +731,25 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
               <Text style={styles.submitText}>Submit for verification</Text>
             )}
           </TouchableOpacity>
+          <Text style={styles.hint}>
+            By submitting you confirm these documents are yours. A PAN can only
+            be linked to one account.
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <ChoiceSheet
+        visible={!!dobSheet}
+        title={
+          dobSheet === 'day'
+            ? 'Birth day'
+            : dobSheet === 'month'
+            ? 'Birth month'
+            : 'Birth year'
+        }
+        options={dobSheet ? dobOptions(dobSheet) : []}
+        onClose={() => setDobSheet('')}
+      />
     </View>
   );
 }
@@ -604,6 +793,12 @@ const styles = StyleSheet.create({
     lineHeight: fontScale(17),
     color: '#8A8FA8',
   },
+  hint: {
+    marginTop: scale(6),
+    fontSize: fontScale(11),
+    lineHeight: fontScale(16),
+    color: '#8A8FA8',
+  },
   input: {
     height: scale(48),
     paddingHorizontal: scale(13),
@@ -617,6 +812,10 @@ const styles = StyleSheet.create({
   inputStacked: { marginTop: scale(10) },
   row: { flexDirection: 'row', gap: scale(10), marginTop: scale(10) },
   rowItem: { flex: 1 },
+  rowItemWide: { flex: 2 },
+  pickBtn: { justifyContent: 'center' },
+  pickText: { fontSize: fontScale(13), color: '#181943' },
+  pickPlaceholder: { fontSize: fontScale(13), color: '#9CA3AF' },
   error: {
     marginTop: scale(6),
     fontSize: fontScale(11),
@@ -624,10 +823,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#C0392B',
   },
+  errorBox: {
+    marginTop: scale(8),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+  },
+  errorBoxText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#B3261E',
+  },
+  retryBtn: {
+    marginTop: scale(4),
+    minHeight: scale(44),
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4C5BF3',
+  },
 
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   chip: {
-    height: scale(38),
+    minHeight: scale(44),
     paddingHorizontal: scale(15),
     borderRadius: scale(11),
     alignItems: 'center',

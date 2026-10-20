@@ -1,14 +1,17 @@
 import { useLiveEffect } from "../liveUpdates";
 import { submissionHistory } from '../submissionHistory';
-import VideoPreview from '../components/VideoPreview';
+import ReviewPlayer from '../components/ReviewPlayer';
+import RateCreatorSheet from '../components/RateCreatorSheet';
 import { Alert } from '../components/AppAlert';
 /**
  * Campaign detail — the native replacement for the web /campaigns/{id} page.
  * Three tabs from the design: Overview (progress + creator + deliverables),
  * About Campaign (the full brief) and Work Review (submissions on this
- * campaign). Reads GET /api/campaigns/{id} and GET /api/work/campaign/{id}.
+ * campaign). Reads GET /api/campaigns/{id}, GET /api/deals/business (one deal
+ * per hired creator: progress, revision tracker, deal chat) and
+ * GET /api/work/campaign/{id}.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -35,13 +38,37 @@ import {
   BACKEND_URL,
   confirmScript,
   declineBid,
+  decideBookingPrice,
   finishHiring,
   getCampaign,
   getBusinessDeals,
   getCampaignWork,
+  getCreatorReviews,
+  getShortlist,
+  inviteShortlistedCreator,
+  postReview,
+  requestNewShortlist,
   selectCreator,
+  sendBookingBrief,
+  sendDealMessage,
   submitCampaign,
 } from '../api';
+import {
+  approveConfirm,
+  approveLabel,
+  approveMessage,
+  bidDays,
+  canReviewAfterApprove,
+  dealProgressStep,
+  dealStateIndex,
+  editModeOf,
+  findCreatorDeal,
+  hireMessage,
+  hiredCreatorIds,
+  revisionChanges,
+  workStatusOf,
+} from '../brandHiring';
+import { errorMessage } from '../payoutRules';
 import WorkRevisionRequest from './WorkRevisionRequest';
 import Video from 'react-native-video';
 import { scale, fontScale, NAV_CLEARANCE } from '../theme';
@@ -53,6 +80,11 @@ type Props = {
   onNavigate: (path: string) => void;
   /** Opens a native chat thread with the selected creator. */
   onOpenThread?: (userId: string, name: string) => void;
+  /**
+   * A hired creator to bring forward (the `?creator=` of a notification link
+   * such as "creator accepted your booking"). Ignored if they are not hired.
+   */
+  focusCreatorId?: string;
 };
 
 type Campaign = Record<string, any>;
@@ -68,6 +100,16 @@ if (
 }
 
 const TABS = ['Overview', 'About', 'Work Review'];
+
+/** Labels for a submission's state, as the website's Work Review card shows them. */
+const WORK_STATUS_LABEL: Record<string, string> = {
+  approved: 'Approved',
+  pending_review: 'Pending Review',
+  submitted: 'Pending Review',
+  revision_requested: 'Revision',
+  awaiting_edit: 'With UGC.ad Editors',
+  awaiting_edited: 'Creator Editing',
+};
 
 /** The lifecycle shown as the progress rail on the Overview tab. */
 const STAGES = [
@@ -312,9 +354,18 @@ function BrandCampaignDetail({
   onBack,
   onNavigate,
   onOpenThread,
+  focusCreatorId,
 }: Props) {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [work, setWork] = useState<Work[]>([]);
+  // One deal per hired creator: drives progress, the revision card and deal chat.
+  const [deals, setDeals] = useState<Record<string, any>[]>([]);
+  // Which hired creator the panels are showing (multi-creator briefs).
+  const [activeCreatorId, setActiveCreatorId] = useState<string | null>(
+    focusCreatorId ? String(focusCreatorId) : null,
+  );
+  // Why the campaign could not be loaded ('' when it did).
+  const [loadError, setLoadError] = useState('');
   // The submission whose Request-Revision composer is open, and the id of the
   // one being approved (blocks a double-tap + shows progress). Mirrors the
   // standalone BrandWorkReview screen so a brand can review right here on the
@@ -323,7 +374,11 @@ function BrandCampaignDetail({
   const [approving, setApproving] = useState<string | null>(null);
   // Which submission's inline video is currently playing (tap to toggle).
   const [playingWork, setPlayingWork] = useState<string | null>(null);
-  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    uri: string;
+    watermark: boolean;
+    title?: string;
+  } | null>(null);
   const [tab, setTab] = useState(0);
   /** Campaign Progress starts open; the header arrow folds it away. */
   const [progressOpen, setProgressOpen] = useState(true);
@@ -337,28 +392,51 @@ function BrandCampaignDetail({
   const [bidBusy, setBidBusy] = useState('');
   const [finishingHiring, setFinishingHiring] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
+  // Ops-curated shortlist (briefs posted with "Request matches").
+  const [shortlist, setShortlist] = useState<Record<string, any> | null>(null);
+  const [shortlistBusy, setShortlistBusy] = useState(false);
+  const [inviting, setInviting] = useState<string | null>(null);
+  const [inviteNote, setInviteNote] = useState('');
+  // Direct booking: counter-offer answer and the brief to send.
+  const [bookingBusy, setBookingBusy] = useState(false);
+  const [briefOpen, setBriefOpen] = useState(false);
+  const [briefText, setBriefText] = useState('');
+  // Reviews this brand already left, by creator id (rating), and the sheet target.
+  const [myReviews, setMyReviews] = useState<Record<string, number>>({});
+  const [rateFor, setRateFor] = useState<{ id: string; name: string } | null>(null);
+  // Deal chat composer.
+  const [chatText, setChatText] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  // Hire/approve/revise are one-way money moves: a ref blocks a fast double tap.
+  const actionRef = useRef(false);
+
+  // A notification link can bring a different creator forward later.
+  useEffect(() => {
+    if (focusCreatorId) setActiveCreatorId(String(focusCreatorId));
+  }, [focusCreatorId]);
 
   const load = useCallback(async () => {
     // The brief and its submissions fail independently: a campaign with no
     // submitted work yet is a normal state, so an empty work list must not
     // blank out the brief itself.
-    const [detail, deals] = await Promise.allSettled([
+    const [detail, dealList] = await Promise.allSettled([
       getCampaign(token, campaignId), getBusinessDeals(token),
     ]);
 
     // Leaving `campaign` null on failure is what renders the "Couldn't load
-    // this campaign" state below.
+    // this campaign" state below, with the reason and a Retry.
     if (detail.status === 'fulfilled') {
       setCampaign(detail.value);
+      setLoadError('');
+    } else {
+      setLoadError(errorMessage(detail.reason, 'Could not load this campaign.'));
     }
+    if (dealList.status === 'fulfilled') setDeals(dealList.value as any[]);
 
     // Without a creator id the backend returns only the LATEST submission on the
     // brief, so on a multi-creator brief ask for each hired creator's separately.
     const hired: string[] =
-      detail.status === 'fulfilled' &&
-      Array.isArray(detail.value?.selected_creators)
-        ? detail.value.selected_creators.map(String)
-        : [];
+      detail.status === 'fulfilled' ? hiredCreatorIds(detail.value) : [];
     const results = await Promise.allSettled(
       hired.length > 1
         ? hired.map(id => getCampaignWork(token, campaignId, id))
@@ -367,45 +445,99 @@ function BrandCampaignDetail({
     const seen = new Set<string>();
     setWork(
       [...results.flatMap(r => (r.status === 'fulfilled' ? r.value : [])),
-        ...submissionHistory(deals.status === 'fulfilled' ? deals.value : [], campaignId)]
+        ...submissionHistory(dealList.status === 'fulfilled' ? dealList.value : [], campaignId)]
         .map((item, index) => ({ ...item, id: String(item.id ?? index) }))
         .filter(item => !seen.has(item.id) && !!seen.add(item.id)),
     );
 
+    // The ops shortlist exists only for briefs posted with "Request matches".
+    if (detail.status === 'fulfilled' && detail.value?.match_status) {
+      try {
+        setShortlist(await getShortlist(token, campaignId));
+      } catch {
+        // Non-fatal: the panel falls back to its "being curated" message.
+      }
+    }
+
     setLoading(false);
     setRefreshing(false);
   }, [campaignId, token]);
+
+  // Which of this brand's reviews exist, so a rated creator shows "You rated N".
+  const hiredKey = campaign ? hiredCreatorIds(campaign).join(',') : '';
+  useEffect(() => {
+    if (!campaign || !hiredKey) return undefined;
+    let live = true;
+    (async () => {
+      const found: Record<string, number> = {};
+      for (const creatorId of hiredKey.split(',')) {
+        try {
+          const reviews = await getCreatorReviews(token, creatorId);
+          const mine = reviews.find(
+            (review: any) =>
+              String(review.campaign_id) === String(campaignId) &&
+              (!campaign.business_id ||
+                String(review.business_id) === String(campaign.business_id)),
+          );
+          if (mine) found[creatorId] = Number(mine.rating) || 0;
+        } catch {
+          // Unknown: the Add a review button stays and the server refuses a repeat.
+        }
+      }
+      if (live) setMyReviews(found);
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign?.id, hiredKey, token, campaignId]);
 
   // Approving releases escrow to the creator and can't be undone, so confirm
   // first. Uses the work-submission id (what /api/work/campaign/{id} returns),
   // which /api/work/{id}/approve expects.
   const runApprove = useCallback(
     async (item: Work) => {
+      if (actionRef.current) return;
+      actionRef.current = true;
       setApproving(item.id);
       try {
-        await approveWork(token, item.id);
+        const result = await approveWork(token, item.id);
         load();
+        const withMode = { ...item, edit_mode: editModeOf(campaign) };
+        const canRate = !!item.creator_id && canReviewAfterApprove(result as any, withMode);
+        Alert.alert('Approved', approveMessage(result as any, withMode), [
+          {
+            text: canRate ? 'Continue' : 'OK',
+            onPress: () =>
+              canRate &&
+              setRateFor({
+                id: String(item.creator_id),
+                name: text(item.creator_name, 'this creator'),
+              }),
+          },
+        ]);
       } catch (err: any) {
-        Alert.alert('Not approved', String(err?.message || err));
+        Alert.alert('Not approved', errorMessage(err, 'Could not approve this work.'));
       } finally {
+        actionRef.current = false;
         setApproving(null);
       }
     },
-    [token, load],
+    [token, load, campaign],
   );
 
   const confirmApprove = useCallback(
     (item: Work) => {
-      Alert.alert(
-        'Approve this work?',
-        'Payment will be released to the creator and the files unlocked. This cannot be undone.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Approve', onPress: () => runApprove(item) },
-        ],
+      const { title, body } = approveConfirm(
+        { ...item, edit_mode: editModeOf(campaign) },
+        text(item.creator_name, 'the creator'),
       );
+      Alert.alert(title, body, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Approve', onPress: () => runApprove(item) },
+      ]);
     },
-    [runApprove],
+    [runApprove, campaign],
   );
 
   const handlePublish = useCallback(() => {
@@ -471,14 +603,23 @@ function BrandCampaignDetail({
           {
             text: 'Hire',
             onPress: async () => {
+              if (actionRef.current) return;
+              actionRef.current = true;
               setBidBusy(creatorId);
               try {
-                await selectCreator(token, campaignId, creatorId);
-                Alert.alert('Hired', `${who} is now hired. Ship the product to get started.`);
+                const result = await selectCreator(token, campaignId, creatorId);
+                // Only a physical brief has a product to ship.
+                const ship = campaign?.requires_shipment || campaign?.shipment_required;
+                Alert.alert(
+                  'Hired',
+                  `${hireMessage(result, who)}${ship ? ' Ship the product to get started.' : ''}`,
+                );
                 load();
               } catch (e) {
-                Alert.alert('Could not hire', e instanceof Error ? e.message : 'Please try again.');
+                // Includes a short wallet ("needs Rs. X more") worded by the backend.
+                Alert.alert('Could not hire', errorMessage(e, 'Please try again.'));
               } finally {
+                actionRef.current = false;
                 setBidBusy('');
               }
             },
@@ -486,7 +627,7 @@ function BrandCampaignDetail({
         ],
       );
     },
-    [campaignId, load, token],
+    [campaign, campaignId, load, token],
   );
 
   const handleDeclineBid = useCallback(
@@ -511,6 +652,160 @@ function BrandCampaignDetail({
       ]);
     },
     [campaignId, load, token],
+  );
+
+  // ----- direct booking: the creator's counter-offer and the brief to send
+  const answerPrice = useCallback(
+    (action: 'accept' | 'reject') => {
+      const run = async () => {
+        if (actionRef.current) return;
+        actionRef.current = true;
+        setBookingBusy(true);
+        try {
+          const res = await decideBookingPrice(token, campaignId, action);
+          if (action === 'accept') {
+            const diff = Number(res?.difference_charged || 0);
+            Alert.alert(
+              'New price accepted',
+              diff > 0
+                ? `${rupees(diff)} more was charged from your wallet.`
+                : diff < 0
+                ? `${rupees(-diff)} was refunded to your wallet.`
+                : 'The booking is confirmed. Send the brief next.',
+            );
+          } else {
+            Alert.alert('Booking cancelled', 'You have been refunded in full.');
+          }
+          await load();
+        } catch (e) {
+          // A short wallet arrives as the backend's own "needs Rs. X more" text.
+          Alert.alert('Could not update the booking', errorMessage(e, 'Please try again.'));
+        } finally {
+          actionRef.current = false;
+          setBookingBusy(false);
+        }
+      };
+      if (action === 'reject') {
+        Alert.alert(
+          'Cancel this booking?',
+          'The creator is told you did not accept their price and you are refunded in full.',
+          [
+            { text: 'Keep booking', style: 'cancel' },
+            { text: 'Cancel and refund', style: 'destructive', onPress: run },
+          ],
+        );
+      } else {
+        run();
+      }
+    },
+    [campaignId, load, token],
+  );
+
+  const sendBrief = useCallback(async () => {
+    if (actionRef.current) return;
+    if (!briefText.trim()) {
+      Alert.alert('Write the brief', 'Tell the creator what to make before sending.');
+      return;
+    }
+    actionRef.current = true;
+    setBookingBusy(true);
+    try {
+      await sendBookingBrief(token, campaignId, briefText.trim());
+      setBriefOpen(false);
+      setBriefText('');
+      Alert.alert('Brief sent', 'The work has started.');
+      await load();
+    } catch (e) {
+      Alert.alert('Could not send the brief', errorMessage(e, 'Please try again.'));
+    } finally {
+      actionRef.current = false;
+      setBookingBusy(false);
+    }
+  }, [briefText, campaignId, load, token]);
+
+  // ----- ops-curated shortlist
+  const inviteFromShortlist = useCallback(
+    async (creatorId: string, name: string) => {
+      if (actionRef.current) return;
+      actionRef.current = true;
+      setShortlistBusy(true);
+      try {
+        await inviteShortlistedCreator(token, campaignId, creatorId, {
+          message: inviteNote.trim(),
+        });
+        setInviting(null);
+        setInviteNote('');
+        await load();
+        Alert.alert(
+          'Invitation sent',
+          `${name} has a private offer in Messages. The rest of this shortlist is closed.`,
+          [
+            {
+              text: 'Open chat',
+              onPress: () => (onOpenThread ? onOpenThread(creatorId, name) : onNavigate('/messages')),
+            },
+          ],
+        );
+      } catch (e) {
+        Alert.alert('Could not send the invitation', errorMessage(e, 'Please try again.'));
+      } finally {
+        actionRef.current = false;
+        setShortlistBusy(false);
+      }
+    },
+    [campaignId, inviteNote, load, onNavigate, onOpenThread, token],
+  );
+
+  const askForNewShortlist = useCallback(async () => {
+    if (actionRef.current) return;
+    actionRef.current = true;
+    setShortlistBusy(true);
+    try {
+      await requestNewShortlist(token, campaignId);
+      await load();
+      Alert.alert('New shortlist requested', 'Our team will curate fresh matches for this brief.');
+    } catch (e) {
+      Alert.alert('Could not request a new shortlist', errorMessage(e, 'Please try again.'));
+    } finally {
+      actionRef.current = false;
+      setShortlistBusy(false);
+    }
+  }, [campaignId, load, token]);
+
+  // ----- review the creator once the deal is complete
+  const submitReview = useCallback(
+    async (stars: number, review: string) => {
+      if (!rateFor) return;
+      await postReview(token, {
+        campaign_id: campaignId,
+        creator_id: rateFor.id,
+        rating: stars,
+        review,
+      });
+      setMyReviews(prev => ({ ...prev, [rateFor.id]: stars }));
+      setRateFor(null);
+      Alert.alert('Review submitted', 'Thanks for the feedback!');
+    },
+    [campaignId, rateFor, token],
+  );
+
+  // ----- deal chat (shared thread with the creator, including platform lines)
+  const sendChat = useCallback(
+    async (dealId: string) => {
+      const body = chatText.trim();
+      if (!body || chatBusy) return;
+      setChatBusy(true);
+      try {
+        await sendDealMessage(token, dealId, body);
+        setChatText('');
+        await load();
+      } catch (e) {
+        Alert.alert('Could not send', errorMessage(e, 'Please try again.'));
+      } finally {
+        setChatBusy(false);
+      }
+    },
+    [chatBusy, chatText, load, token],
   );
 
   const handleScript = useCallback(
@@ -592,15 +887,25 @@ function BrandCampaignDetail({
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Couldn't load this campaign</Text>
             <Text style={styles.emptyText}>
-              Pull down to retry, or go back and open it again.
+              {loadError || 'Please try again, or go back and open it again.'}
             </Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setLoading(true);
+                load();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading this campaign"
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
     );
   }
 
-  const current = stageIndex(campaign);
   const status = String(campaign.status || '').replace(/_/g, ' ');
   // Short human-facing code for the strip: the backend's own code when it
   // sends one, otherwise CMP- plus the tail of the id.
@@ -619,12 +924,7 @@ function BrandCampaignDetail({
   );
   // Every hired creator, named from their bid. The single-creator card above only
   // knows the first pick, so a multi-creator brief lists the rest here.
-  const selectedIds = Array.isArray(campaign.selected_creators)
-    ? campaign.selected_creators.filter(Boolean).map(String)
-    : [];
-  if (!selectedIds.length && campaign.selected_creator) {
-    selectedIds.push(String(campaign.selected_creator));
-  }
+  const selectedIds = hiredCreatorIds(campaign);
   const wanted = Math.max(1, Number(campaign.creators_wanted) || 1);
   const remainingSlots = Math.max(0, wanted - selectedIds.length);
   const hiringOpen = campaign.status === 'active' && remainingSlots > 0;
@@ -638,6 +938,63 @@ function BrandCampaignDetail({
       name: text(hired?.name || bid?.creator_name || bid?.creator_nickname || bid?.creator?.full_name || bid?.creator?.name || (String(campaign.selected_creator) === id ? creatorName : ''), 'Creator'),
     };
   });
+  // The creator the panels follow: the one picked on the switcher, else the one a
+  // notification link asked for, else the first hire.
+  const activeId =
+    activeCreatorId && selectedIds.includes(String(activeCreatorId))
+      ? String(activeCreatorId)
+      : selectedIds[0] || null;
+  const activeName = hiredList.find(c => c.id === activeId)?.name || '';
+  const activeDeal = findCreatorDeal(deals, campaignId, activeId);
+  // Progress follows that creator's own deal (as the website does); a brief
+  // with no deal yet falls back to the campaign status.
+  const current = dealProgressStep(activeDeal, STAGES.length) ?? stageIndex(campaign);
+  // On a multi-creator brief only the active creator's submissions are shown.
+  const workShown =
+    hiredList.length > 1 && activeId
+      ? work.filter(item => {
+          const owner = item.creator_id ?? item.creatorId;
+          return owner == null || String(owner) === activeId;
+        })
+      : work;
+  // Direct bookings carry their state on the deal's campaign; fall back to the brief.
+  const booking = activeDeal?.campaign?.booking_status ? activeDeal.campaign : campaign;
+  const bookingStatus = String(booking?.booking_status || '');
+  const showBooking =
+    !!bookingStatus &&
+    bookingStatus !== 'declined' &&
+    !(bookingStatus === 'accepted' && booking.brief_sent);
+  const dealDone =
+    dealStateIndex(activeDeal?.current_state) >= 6 || campaign.status === 'completed';
+
+  // Switcher between hired creators (multi-creator briefs only).
+  const creatorTabs =
+    hiredList.length > 1 ? (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.creatorTabs}
+        contentContainerStyle={styles.creatorTabsInner}
+      >
+        {hiredList.map(c => {
+          const on = c.id === activeId;
+          return (
+            <TouchableOpacity
+              key={c.id}
+              style={[styles.creatorTab, on && styles.creatorTabOn]}
+              onPress={() => setActiveCreatorId(c.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: on }}
+              accessibilityLabel={`Show ${c.name}`}
+            >
+              <Text style={[styles.creatorTabText, on && styles.creatorTabTextOn]} numberOfLines={1}>
+                {c.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    ) : null;
   const needsShipping = !!(
     campaign.requires_shipment || campaign.shipment_required
   );
@@ -702,7 +1059,7 @@ function BrandCampaignDetail({
               >
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>
                   {label}
-                  {index === 2 && work.length > 0 ? ` (${work.length})` : ''}
+                  {index === 2 && workShown.length > 0 ? ` (${workShown.length})` : ''}
                 </Text>
                 {active && <View style={styles.tabUnderline} />}
               </TouchableOpacity>
@@ -725,17 +1082,86 @@ function BrandCampaignDetail({
         >
           {tab === 0 && (
             <>
-              {work.filter(item => !item.historical && item.status === 'revision_requested').map(item => (
-                <View key={`revision-${item.id}`} style={styles.card}>
-                  <Text style={styles.cardTitle}>Revision requested</Text>
-                  <Text style={styles.bidProposal}>
-                    {text(item.creator_name, 'Creator')} is preparing a revised video. The previous upload remains in Work Review.
-                  </Text>
-                  {!!item.revisions?.length && <Text style={styles.bidProposal}>
-                    {String(item.revisions[item.revisions.length - 1]?.feedback || '')}
-                  </Text>}
+              {!!loadError && (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorBannerText}>{loadError}</Text>
+                  <TouchableOpacity
+                    style={styles.errorBannerBtn}
+                    onPress={() => {
+                      setRefreshing(true);
+                      load();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry loading"
+                  >
+                    <Text style={styles.errorBannerBtnText}>Retry</Text>
+                  </TouchableOpacity>
                 </View>
-              ))}
+              )}
+              {creatorTabs}
+              {workShown.filter(item => !item.historical && item.status === 'revision_requested').map(item => {
+                // The deal's tracker has the structured change list, the deadline and
+                // how the creator answered; without a deal only the last note is known.
+                const tracker =
+                  findCreatorDeal(deals, campaignId, item.creator_id)?.revision_tracker || null;
+                const lastFeedback = String(
+                  item.revisions?.[item.revisions.length - 1]?.feedback || '',
+                );
+                const changes = revisionChanges(
+                  tracker || { latest_feedback: lastFeedback },
+                );
+                const answer: Record<string, string> = {
+                  accepted: 'Creator accepted the revision and is reworking the content.',
+                  scope_creep:
+                    'Creator says these changes go beyond the brief. Nothing is disputed yet - reply in the deal chat to agree what is in scope.',
+                  partial_dispute:
+                    'Creator accepted some changes and pushed back on the rest. Nothing is disputed yet - reply in the deal chat to settle the remaining items.',
+                };
+                return (
+                  <View key={`revision-${item.id}`} style={styles.card}>
+                    <Text style={styles.cardTitle}>Revision requested</Text>
+                    <Text style={styles.bidProposal}>
+                      {text(item.creator_name, 'Creator')} is preparing a revised video. The previous upload remains in Work Review.
+                    </Text>
+                    {!!tracker && (
+                      <Text style={styles.bidMeta}>
+                        {Number(tracker.revision_count_used) || 0}
+                        {tracker.revision_limit ? ` of ${tracker.revision_limit}` : ''} revisions used
+                      </Text>
+                    )}
+                    {changes.length > 0 && (
+                      <View style={styles.changeList}>
+                        <Text style={styles.changeHead}>Changes you asked for</Text>
+                        {changes.map((change, i) => (
+                          <View key={i} style={styles.changeRow}>
+                            {!!change.severity && (
+                              <Text style={styles.changeSev}>{change.severity}</Text>
+                            )}
+                            <Text style={styles.changeText}>
+                              {change.text}
+                              {change.ref ? `  (ref: ${change.ref})` : ''}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {!!tracker && (
+                      <Text style={styles.bidMeta}>
+                        New deadline:{' '}
+                        {tracker.new_deadline_at
+                          ? new Date(tracker.new_deadline_at).toLocaleString()
+                          : 'Not scheduled'}
+                      </Text>
+                    )}
+                    {!!tracker && (
+                      <Text style={styles.workHistory}>
+                        {answer[String(tracker.creator_response)] ||
+                          'Waiting for the creator to respond to this revision request.'}
+                      </Text>
+                    )}
+                  </View>
+                );
+              })}
               {/* A draft can't reach creators until it's published for review. */}
               {String(campaign.status) === 'draft' && (
                 <View style={styles.draftCard}>
@@ -830,6 +1256,245 @@ function BrandCampaignDetail({
                   </View>
                 </View>
               )}
+              {/* Direct booking: answer the creator's price, or send the brief once accepted. */}
+              {showBooking && (
+                <View style={styles.card}>
+                  {bookingStatus === 'pending_creator' && (
+                    <>
+                      <Text style={styles.cardTitle}>Booking sent</Text>
+                      <Text style={styles.bidProposal}>
+                        {rupees(booking.amount_paid)} is held in escrow. Waiting for the
+                        creator to accept - you're refunded in full if they decline.
+                      </Text>
+                    </>
+                  )}
+                  {bookingStatus === 'price_revision' && (() => {
+                    const booked = Number(booking.budget_max || booking.budget_min || 0);
+                    const asking = Number(booking.proposed_amount || 0);
+                    const fee = Number(booking.fee_percent);
+                    return (
+                      <>
+                        <Text style={styles.cardTitle}>The creator proposed a new price</Text>
+                        {!!booking.proposed_message && (
+                          <Text style={styles.bidProposal}>"{String(booking.proposed_message)}"</Text>
+                        )}
+                        <Text style={styles.bidMeta}>You booked at {rupees(booked)}</Text>
+                        <Text style={styles.bookingAsk}>They're asking {rupees(asking)}</Text>
+                        {Number.isFinite(fee) && fee >= 0 && (
+                          <Text style={styles.bidMeta}>
+                            {asking >= booked ? 'Extra to pay (incl. fee): ' : 'To be refunded: '}
+                            {rupees(Math.abs(Math.round((asking - booked) * (1 + fee / 100))))}
+                          </Text>
+                        )}
+                        <View style={styles.bidActions}>
+                          <TouchableOpacity
+                            style={[styles.bidBtn, styles.bidDecline]}
+                            onPress={() => answerPrice('reject')}
+                            disabled={bookingBusy}
+                            accessibilityRole="button"
+                          >
+                            <Text style={styles.bidDeclineText}>Cancel and refund</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.bidBtn, styles.bidAccept]}
+                            onPress={() => answerPrice('accept')}
+                            disabled={bookingBusy}
+                            accessibilityRole="button"
+                          >
+                            {bookingBusy ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <Text style={styles.bidAcceptText}>Accept new price</Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    );
+                  })()}
+                  {bookingStatus === 'accepted' && !booking.brief_sent && (
+                    <>
+                      <Text style={styles.cardTitle}>Send your brief to start the work</Text>
+                      <Text style={styles.bidProposal}>
+                        The creator accepted and is waiting. They can't start until the brief arrives.
+                      </Text>
+                      {!briefOpen ? (
+                        <TouchableOpacity
+                          style={[styles.bidBtn, styles.bidAccept, styles.fullBtn]}
+                          onPress={() => {
+                            setBriefText(String(booking.brief_draft?.brief_text || ''));
+                            setBriefOpen(true);
+                          }}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.bidAcceptText}>Write the brief</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <>
+                          <TextInput
+                            style={styles.scriptInput}
+                            value={briefText}
+                            onChangeText={setBriefText}
+                            placeholder="What should the creator make?"
+                            placeholderTextColor="#9498B0"
+                            multiline
+                            editable={!bookingBusy}
+                          />
+                          <Text style={styles.bidMeta}>
+                            Pre-filled from what you wrote at checkout. Contact details are not allowed.
+                          </Text>
+                          <View style={styles.bidActions}>
+                            <TouchableOpacity
+                              style={[styles.bidBtn, styles.bidDecline]}
+                              onPress={() => setBriefOpen(false)}
+                              disabled={bookingBusy}
+                              accessibilityRole="button"
+                            >
+                              <Text style={styles.bidDeclineText}>Back</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.bidBtn, styles.bidAccept]}
+                              onPress={sendBrief}
+                              disabled={bookingBusy || !briefText.trim()}
+                              accessibilityRole="button"
+                            >
+                              {bookingBusy ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <Text style={styles.bidAcceptText}>Send brief</Text>
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        </>
+                      )}
+                    </>
+                  )}
+                </View>
+              )}
+
+              {/* Ops-curated shortlist (brief posted with "Request matches"). */}
+              {!!campaign.match_status && (
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>
+                    Curated shortlist
+                    {Number(shortlist?.shortlist_request_count) > 0
+                      ? `  (request #${shortlist!.shortlist_request_count})`
+                      : ''}
+                  </Text>
+                  {campaign.match_status === 'fulfilled' ? (
+                    <Text style={styles.bidProposal}>
+                      You've invited a creator from this shortlist. Track the conversation in your chats.
+                    </Text>
+                  ) : !Array.isArray(shortlist?.candidates) || !shortlist!.candidates.length ? (
+                    <Text style={styles.bidProposal}>
+                      Our team is curating creator matches for this brief. You'll be notified as
+                      soon as your shortlist is ready.
+                      {Number(shortlist?.shortlist_request_count) > 0
+                        ? ' New shortlist requested - sit tight while we find fresh matches.'
+                        : ''}
+                    </Text>
+                  ) : (
+                    <>
+                      <Text style={styles.bidProposal}>
+                        Pick one creator to invite. Inviting sends a private offer and closes the rest of this shortlist.
+                      </Text>
+                      {shortlist!.candidates.map((cand: any) => {
+                        const c = cand.creator || {};
+                        const name = text(c.public_creator_id, 'Creator');
+                        const dismissed = cand.status === 'dismissed';
+                        const invited = cand.status === 'invited';
+                        const facts = [
+                          c.city_tier,
+                          Array.isArray(c.languages) && c.languages.length
+                            ? c.languages.slice(0, 3).join(', ')
+                            : '',
+                          typeof c.deliverables_completed === 'number'
+                            ? `${c.deliverables_completed} deliverables`
+                            : '',
+                          c.content_style,
+                        ].filter(Boolean);
+                        return (
+                          <View key={String(cand.creator_id)} style={[styles.bidRow, dismissed && styles.dismissed]}>
+                            <View style={styles.bidTop}>
+                              <Text style={styles.bidName} numberOfLines={1}>{name}</Text>
+                              {invited && <Text style={styles.invitedTag}>Invited</Text>}
+                            </View>
+                            <Text style={styles.bidMeta}>{text(c.primary_category, 'UGC Creator')}</Text>
+                            {facts.length > 0 && <Text style={styles.bidMeta}>{facts.join(' · ')}</Text>}
+                            {!!cand.ops_note && (
+                              <Text style={styles.bidProposal}>"{String(cand.ops_note)}"</Text>
+                            )}
+                            {inviting === cand.creator_id ? (
+                              <>
+                                <TextInput
+                                  style={styles.scriptInput}
+                                  value={inviteNote}
+                                  onChangeText={setInviteNote}
+                                  placeholder="Add a message to your invitation (optional)"
+                                  placeholderTextColor="#9498B0"
+                                  multiline
+                                  editable={!shortlistBusy}
+                                />
+                                <View style={styles.bidActions}>
+                                  <TouchableOpacity
+                                    style={[styles.bidBtn, styles.bidDecline]}
+                                    onPress={() => setInviting(null)}
+                                    disabled={shortlistBusy}
+                                    accessibilityRole="button"
+                                  >
+                                    <Text style={styles.bidDeclineText}>Back</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={[styles.bidBtn, styles.bidAccept]}
+                                    onPress={() => inviteFromShortlist(String(cand.creator_id), name)}
+                                    disabled={shortlistBusy}
+                                    accessibilityRole="button"
+                                  >
+                                    {shortlistBusy ? (
+                                      <ActivityIndicator size="small" color="#FFFFFF" />
+                                    ) : (
+                                      <Text style={styles.bidAcceptText}>Send invitation</Text>
+                                    )}
+                                  </TouchableOpacity>
+                                </View>
+                              </>
+                            ) : (
+                              <View style={styles.bidActions}>
+                                <TouchableOpacity
+                                  style={[styles.bidBtn, styles.bidDecline]}
+                                  onPress={() => onNavigate(`/creator/${encodeURIComponent(String(cand.creator_id))}`)}
+                                  accessibilityRole="button"
+                                >
+                                  <Text style={styles.bidDeclineText}>Profile</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[styles.bidBtn, styles.bidAccept, (dismissed || invited) && styles.btnOff]}
+                                  onPress={() => {
+                                    setInviteNote('');
+                                    setInviting(String(cand.creator_id));
+                                  }}
+                                  disabled={shortlistBusy || dismissed || invited}
+                                  accessibilityRole="button"
+                                >
+                                  <Text style={styles.bidAcceptText}>Invite</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                      <TouchableOpacity
+                        style={styles.linkBtn}
+                        onPress={askForNewShortlist}
+                        disabled={shortlistBusy}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.linkBtnText}>Not the right fit? Request a new shortlist</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              )}
+
               {hiringOpen && selectedIds.length > 0 && (
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Hiring</Text>
@@ -903,9 +1568,12 @@ function BrandCampaignDetail({
                               {text(b.proposal || b.message)}
                             </Text>
                           )}
-                          {!!(b.estimated_delivery_days || b.delivery_days) && (
+                          {bidDays(b) != null && (
+                            <Text style={styles.bidMeta}>Delivery in {bidDays(b)} days</Text>
+                          )}
+                          {b.raw_amount != null && (
                             <Text style={styles.bidMeta}>
-                              Delivery in {Number(b.estimated_delivery_days || b.delivery_days)} days
+                              Raw {rupees(b.raw_amount)} + Edited {rupees(b.edited_amount)}
                             </Text>
                           )}
                           <View style={styles.bidActions}>
@@ -957,12 +1625,12 @@ function BrandCampaignDetail({
                   }
                 >
                   <Text style={[styles.cardTitle, styles.cardHeadTitle]}>
-                    Campaign Progress
+                    Campaign Progress{hiredList.length > 1 && activeName ? ` - ${activeName}` : ''}
                   </Text>
                   <View style={styles.cardHeadRight}>
                     {!progressOpen && (
                       <Text style={styles.cardHeadHint}>
-                        {STAGES[current]?.label || ''}
+                        {STAGES[current]?.label || 'Completed'}
                       </Text>
                     )}
                     <View style={styles.cardChevron}>
@@ -1143,7 +1811,10 @@ function BrandCampaignDetail({
                     Hired creators ({hiredList.length})
                   </Text>
                   {hiredList.map(c => (
-                    <View key={c.id} style={styles.hiredCreator}>
+                    <View
+                      key={c.id}
+                      style={[styles.hiredCreator, c.id === activeId && styles.hiredCreatorOn]}
+                    >
                       <Text style={styles.hiredCreatorName}>
                         {c.name}
                       </Text>
@@ -1281,15 +1952,18 @@ function BrandCampaignDetail({
 
           {tab === 2 && (
             <>
-              {!work.length ? (
+              {creatorTabs}
+              {!workShown.length ? (
                 <View style={styles.empty}>
                   <Text style={styles.emptyTitle}>No submissions yet</Text>
                   <Text style={styles.emptyText}>
-                    Work from the creator appears here once submitted.
+                    {hiredList.length > 1 && activeName
+                      ? `Once ${activeName} submits their content, it will appear here for you to review and approve.`
+                      : 'Work from the creator appears here once submitted.'}
                   </Text>
                 </View>
               ) : (
-                work.map(item => {
+                workShown.map(item => {
                   const videoSrc = photoUrl(
                     item.preview_url ||
                       (Array.isArray(item.work_files)
@@ -1297,13 +1971,25 @@ function BrandCampaignDetail({
                         : undefined) ||
                       item.video_url,
                   );
-                  const approved = item.status === 'approved';
-                  const revisionRequested = item.status === 'revision_requested';
+                  const wsStatus = workStatusOf(item, campaign);
+                  const approved = wsStatus === 'approved';
+                  const revisionRequested = wsStatus === 'revision_requested';
+                  // With editors (or the creator cutting the edit): nothing to decide yet.
+                  const waitingOnEdit =
+                    wsStatus === 'awaiting_edit' || wsStatus === 'awaiting_edited';
                   // Before approval the brand only sees a watermark-protected
                   // preview; approval clears the flag and releases the clean file.
                   const showMark =
-                    !approved && item.watermark_protected !== false;
+                    item.status !== 'approved' && item.watermark_protected !== false;
                   const isPlaying = playingWork === item.id;
+                  const creatorKey = String(item.creator_id ?? '');
+                  const itemDeal = findCreatorDeal(deals, campaignId, creatorKey);
+                  const itemDone =
+                    approved &&
+                    (dealStateIndex(itemDeal?.current_state) >= 6 ||
+                      campaign.status === 'completed' ||
+                      !itemDeal);
+                  const rated = myReviews[creatorKey];
                   return (
                     <View key={item.id} style={styles.workCard}>
                       <TouchableOpacity
@@ -1340,23 +2026,43 @@ function BrandCampaignDetail({
                         )}
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.reviewBtn}
-                        onPress={() => { setPlayingWork(null); setPreviewUri(videoSrc); }}
+                        onPress={() => {
+                          setPlayingWork(null);
+                          if (videoSrc) {
+                            setPreview({
+                              uri: videoSrc,
+                              watermark: showMark,
+                              title: text(campaign.title) || undefined,
+                            });
+                          }
+                        }}
                         disabled={!videoSrc} accessibilityRole="button" accessibilityLabel="Open full-screen video">
                         <Text style={styles.reviewText}>View full video</Text>
                       </TouchableOpacity>
                       <View style={styles.workBody}>
                         <Text style={styles.workTitle}>
                           {text(item.creator_name, 'Creator')}
+                          {Number(item.version) > 1 ? `  ·  Revision v${item.version}` : ''}
                         </Text>
                         <Text style={styles.workMeta}>
                           Submitted{' '}
                           {formatDate(item.submitted_at || item.created_at)} ·{' '}
-                          {item.historical ? 'Previous upload' : text(item.status, 'submitted').replace(/_/g, ' ')}
+                          {item.historical
+                            ? 'Previous upload'
+                            : WORK_STATUS_LABEL[wsStatus] ||
+                              text(wsStatus, 'submitted').replace(/_/g, ' ')}
                         </Text>
                         {revisionRequested && (
                           <Text style={styles.workHistory}>
                             Revision requested - awaiting the creator's revised video.
                             This upload stays available for comparison.
+                          </Text>
+                        )}
+                        {waitingOnEdit && (
+                          <Text style={styles.workHistory}>
+                            {wsStatus === 'awaiting_edit'
+                              ? "UGC.ad's editors are working on this video. You can review it once the edited cut is ready."
+                              : 'You approved the raw video. The creator is editing it and will submit the edited cut next.'}
                           </Text>
                         )}
                         {approved ? (
@@ -1379,7 +2085,7 @@ function BrandCampaignDetail({
                               Download video
                             </Text>
                           </TouchableOpacity>
-                        ) : !revisionRequested && !item.historical ? (
+                        ) : !revisionRequested && !waitingOnEdit && !item.historical ? (
                           <View style={styles.workActions}>
                             <TouchableOpacity
                               style={[
@@ -1398,7 +2104,7 @@ function BrandCampaignDetail({
                                 />
                               ) : (
                                 <Text style={styles.workApproveText}>
-                                  Approve
+                                  {approveLabel({ ...item, edit_mode: editModeOf(campaign) })}
                                 </Text>
                               )}
                             </TouchableOpacity>
@@ -1414,17 +2120,112 @@ function BrandCampaignDetail({
                             </TouchableOpacity>
                           </View>
                         ) : null}
+                        {/* Once the deal is complete the brand can rate the creator. */}
+                        {!item.historical && itemDone && !!creatorKey && (
+                          rated ? (
+                            <Text style={styles.ratedNote}>You rated {rated} stars</Text>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.reviewBtn}
+                              onPress={() =>
+                                setRateFor({
+                                  id: creatorKey,
+                                  name: text(item.creator_name, 'this creator'),
+                                })
+                              }
+                              accessibilityRole="button"
+                              accessibilityLabel="Add a review"
+                            >
+                              <Text style={styles.reviewText}>Add a review</Text>
+                            </TouchableOpacity>
+                          )
+                        )}
                       </View>
                     </View>
                   );
                 })
               )}
+
+              {/* Deal chat: the thread the creator writes to in My Deals, with the
+                  platform's own status lines. */}
+              {!!activeDeal?.deal_id && (() => {
+                const messages: Record<string, any>[] = Array.isArray(
+                  activeDeal.chat_summary?.messages,
+                )
+                  ? activeDeal.chat_summary.messages.slice(-12)
+                  : [];
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Deal chat</Text>
+                    <Text style={styles.bidMeta}>
+                      Shared with the creator. Status updates from the platform appear here too.
+                    </Text>
+                    {messages.length ? (
+                      messages.map((m, i) => (
+                        <View
+                          key={String(m.id ?? i)}
+                          style={[
+                            styles.chatMsg,
+                            m.sender_type === 'system' && styles.chatMsgSystem,
+                            m.sender_type === 'creator' && styles.chatMsgCreator,
+                          ]}
+                        >
+                          {m.sender_type !== 'system' && (
+                            <Text style={styles.chatName}>{text(m.sender_name, 'Member')}</Text>
+                          )}
+                          <Text style={styles.chatBody}>{String(m.message || '')}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.bidProposal}>
+                        No messages yet. Say hello, or answer the creator's questions about the brief.
+                      </Text>
+                    )}
+                    <TextInput
+                      style={styles.chatInput}
+                      value={chatText}
+                      onChangeText={setChatText}
+                      placeholder="Type a message..."
+                      placeholderTextColor="#9498B0"
+                      multiline
+                      editable={!chatBusy}
+                    />
+                    <TouchableOpacity
+                      style={[styles.bidBtn, styles.bidAccept, styles.fullBtn, (!chatText.trim() || chatBusy) && styles.btnOff]}
+                      onPress={() => sendChat(String(activeDeal.deal_id))}
+                      disabled={!chatText.trim() || chatBusy}
+                      accessibilityRole="button"
+                      accessibilityLabel="Send message"
+                    >
+                      {chatBusy ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.bidAcceptText}>Send</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()}
             </>
           )}
         </ScrollView>
       </View>
 
-      <VideoPreview uri={previewUri} onClose={() => setPreviewUri(null)} />
+      <ReviewPlayer
+        uri={preview ? preview.uri : null}
+        watermark={!!preview?.watermark}
+        title={preview?.title}
+        onClose={() => setPreview(null)}
+      />
+
+      {/* Rate the creator once the deal is complete (also offered right after the
+          approval that paid them). */}
+      <RateCreatorSheet
+        visible={!!rateFor}
+        creatorName={rateFor?.name || 'this creator'}
+        onSubmit={submitReview}
+        onClose={() => setRateFor(null)}
+      />
 
       <Modal
         visible={!!revising}
@@ -1714,7 +2515,7 @@ const styles = StyleSheet.create({
   bidProposal: { marginTop: scale(5), fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#5C6079' },
   bidMeta: { marginTop: scale(4), fontSize: fontScale(11.5), color: '#9498B0' },
   bidActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(10) },
-  bidBtn: { flex: 1, height: scale(42), borderRadius: scale(11), alignItems: 'center', justifyContent: 'center' },
+  bidBtn: { flex: 1, height: scale(44), borderRadius: scale(11), alignItems: 'center', justifyContent: 'center' },
   bidDecline: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E4E5F2' },
   bidDeclineText: { fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#6E7391' },
   bidAccept: { backgroundColor: '#15163F' },
@@ -1884,7 +2685,7 @@ const styles = StyleSheet.create({
   creatorActions: { marginTop: scale(13), flexDirection: 'row', gap: scale(9) },
   ghostBtn: {
     flex: 1,
-    height: scale(42),
+    height: scale(44),
     borderRadius: scale(11),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -1901,7 +2702,7 @@ const styles = StyleSheet.create({
   },
   solidBtn: {
     flex: 1,
-    height: scale(42),
+    height: scale(44),
     borderRadius: scale(11),
     backgroundColor: '#1B2A6B',
     flexDirection: 'row',
@@ -1919,6 +2720,145 @@ const styles = StyleSheet.create({
   hiredCreator: {
     paddingVertical: scale(10),
     gap: scale(8),
+  },
+  hiredCreatorOn: {
+    backgroundColor: '#F3F4FF',
+    borderRadius: scale(10),
+    paddingHorizontal: scale(8),
+  },
+  creatorTabs: { flexGrow: 0, marginBottom: scale(10) },
+  creatorTabsInner: { gap: scale(8) },
+  creatorTab: {
+    minHeight: scale(44),
+    maxWidth: scale(180),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(22),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E4F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  creatorTabOn: { backgroundColor: '#15163F', borderColor: '#15163F' },
+  creatorTabText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6180',
+  },
+  creatorTabTextOn: { color: '#FFFFFF' },
+  retryBtn: {
+    marginTop: scale(14),
+    minHeight: scale(44),
+    paddingHorizontal: scale(26),
+    borderRadius: scale(12),
+    backgroundColor: '#15163F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryBtnText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  errorBanner: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorBannerText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  errorBannerBtn: {
+    minHeight: scale(44),
+    minWidth: scale(60),
+    paddingHorizontal: scale(12),
+    borderRadius: scale(10),
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorBannerBtnText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#B3261E',
+  },
+  changeList: { marginTop: scale(10), gap: scale(6) },
+  changeHead: {
+    fontSize: fontScale(10.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#9498B0',
+  },
+  changeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: scale(8) },
+  changeSev: {
+    fontSize: fontScale(10),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#B26B00',
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: scale(7),
+    paddingVertical: scale(2),
+    borderRadius: scale(6),
+    overflow: 'hidden',
+  },
+  changeText: { flex: 1, fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#25274C' },
+  bookingAsk: {
+    marginTop: scale(4),
+    fontSize: fontScale(15),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  fullBtn: { flex: 0, alignSelf: 'stretch', marginTop: scale(12) },
+  btnOff: { opacity: 0.45 },
+  dismissed: { opacity: 0.5 },
+  invitedTag: {
+    fontSize: fontScale(10),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#1F8A4C',
+    backgroundColor: '#EEFAF1',
+    paddingHorizontal: scale(8),
+    paddingVertical: scale(3),
+    borderRadius: scale(8),
+    overflow: 'hidden',
+  },
+  linkBtn: { marginTop: scale(12), minHeight: scale(44), justifyContent: 'center' },
+  linkBtnText: {
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+  ratedNote: { marginTop: scale(11), fontSize: fontScale(12), color: '#B26B00' },
+  chatMsg: {
+    marginTop: scale(8),
+    padding: scale(10),
+    borderRadius: scale(10),
+    backgroundColor: '#F4F5FA',
+  },
+  chatMsgSystem: { backgroundColor: '#FFF8E6' },
+  chatMsgCreator: { backgroundColor: '#EEF0FF' },
+  chatName: { fontSize: fontScale(10.5), color: '#777B96', marginBottom: scale(2) },
+  chatBody: { fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#25274C' },
+  chatInput: {
+    marginTop: scale(12),
+    minHeight: scale(44),
+    maxHeight: scale(110),
+    borderWidth: 1,
+    borderColor: '#DDDDDD',
+    borderRadius: scale(10),
+    padding: scale(10),
+    fontSize: fontScale(16),
+    color: '#15163F',
+    textAlignVertical: 'top',
   },
   hiredCreatorName: {
     fontSize: fontScale(14),
@@ -2004,7 +2944,7 @@ const styles = StyleSheet.create({
   },
   reviewBtn: {
     marginTop: scale(11),
-    height: scale(40),
+    height: scale(44),
     borderRadius: scale(11),
     backgroundColor: '#F4F5FA',
     alignItems: 'center',
@@ -2019,7 +2959,7 @@ const styles = StyleSheet.create({
   workActions: { marginTop: scale(11), gap: scale(9), flexDirection: 'row' },
   workAction: { flex: 1, marginTop: 0, minHeight: scale(44) },
   workApprove: {
-    height: scale(40),
+    height: scale(44),
     borderRadius: scale(11),
     backgroundColor: '#22A565',
     alignItems: 'center',
@@ -2063,7 +3003,7 @@ const styles = StyleSheet.create({
   },
   workDownload: {
     marginTop: scale(11),
-    height: scale(40),
+    height: scale(44),
     borderRadius: scale(11),
     backgroundColor: '#4C5BF3',
     flexDirection: 'row',

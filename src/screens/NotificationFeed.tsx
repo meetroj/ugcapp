@@ -29,6 +29,7 @@ import {
   getNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  NetworkError,
   type AppNotification,
 } from '../api';
 import { scale, fontScale } from '../theme';
@@ -107,7 +108,11 @@ function NotificationFeed({
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // '' = loaded fine; otherwise the message shown next to Retry.
+  const [failed, setFailed] = useState('');
+  // True once the open panel has shown its first list, so the live refetches
+  // that follow update it in place instead of flashing the skeleton again.
+  const shown = useRef(false);
   const slide = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
   // useWindowDimensions, not Dimensions.get: the panel is sized from the
@@ -123,10 +128,22 @@ function NotificationFeed({
   );
 
   const load = useCallback(() => {
-    setFailed(false);
+    setFailed('');
     getNotifications(token)
-      .then(setItems)
-      .catch(() => setFailed(true))
+      .then(list => {
+        shown.current = true;
+        setItems(list);
+      })
+      .catch(error =>
+        // A failed live refetch keeps the list already on screen.
+        setFailed(
+          shown.current
+            ? ''
+            : error instanceof NetworkError
+            ? "You're offline. Check your connection and try again."
+            : "Couldn't load notifications.",
+        ),
+      )
       .finally(() => {
         setLoading(false);
         setRefreshing(false);
@@ -136,9 +153,10 @@ function NotificationFeed({
   useLiveEffect(() => {
     if (!visible) {
       slide.setValue(0);
+      shown.current = false;
       return;
     }
-    setLoading(true);
+    if (!shown.current) setLoading(true);
     load();
     Animated.timing(slide, {
       toValue: 1,
@@ -156,22 +174,23 @@ function NotificationFeed({
         );
         markNotificationRead(token, item.id)
           .then(() => onUnreadChange?.())
-          .catch(() => undefined);
+          // The row un-bolded optimistically; put the server's truth back.
+          .catch(() => load());
       }
       if (item.link) {
         onClose();
         onNavigate?.(item.link);
       }
     },
-    [token, onClose, onNavigate, onUnreadChange],
+    [token, onClose, onNavigate, onUnreadChange, load],
   );
 
   const markAll = useCallback(() => {
     setItems(current => current.map(n => ({ ...n, read: true })));
     markAllNotificationsRead(token)
       .then(() => onUnreadChange?.())
-      .catch(() => undefined);
-  }, [token, onUnreadChange]);
+      .catch(() => load());
+  }, [token, onUnreadChange, load]);
 
   const unread = items.filter(n => !n.read).length;
 
@@ -265,10 +284,15 @@ function NotificationFeed({
               </View>
             ) : failed ? (
               <View style={styles.state}>
-                <Text style={styles.stateText}>
-                  Couldn&apos;t load notifications.
-                </Text>
-                <TouchableOpacity onPress={load} accessibilityRole="button">
+                <Text style={styles.stateText}>{failed}</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                  hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
+                >
                   <Text style={styles.retry}>Retry</Text>
                 </TouchableOpacity>
               </View>

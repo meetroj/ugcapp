@@ -4,10 +4,13 @@ import { useLiveEffect } from "../liveUpdates";
  *
  * Reads the ids from GET /api/saved-briefs (stored on the user document as
  * `saved_briefs`, so saves follow the account across devices) and resolves each
- * one against the campaign list to render a real card. Un-saving here calls
- * DELETE and drops the row immediately.
+ * one to a real campaign: from the campaign list when it is there, otherwise
+ * from GET /api/campaigns/{id} like the website does. An id that no longer
+ * resolves (removed brief) is dropped. A card opens the full brief, and the
+ * brief's own button carries on to the bid, so a saved brief can be bid on
+ * without going back to Browse.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -16,10 +19,20 @@ import {
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
-import Svg, { Path } from 'react-native-svg';
 import ScreenHeader from '../components/ScreenHeader';
 import { SkeletonList } from '../components/Skeleton';
-import { getCampaigns, getSavedBriefs, removeSavedBrief } from '../api';
+import { ToastBar, useToast } from '../components/Toast';
+import {
+  getCampaign,
+  getCampaigns,
+  getMyBids,
+  getSavedBriefs,
+  addSavedBrief,
+  removeSavedBrief,
+  type AuthUser,
+} from '../api';
+import { isOpenForBids, isSelectedCreator, loadErrorText, ownBidOn } from '../briefs';
+import { BriefFlow, CampaignCard } from './BrowseCampaigns';
 import { scale, fontScale } from '../theme';
 
 type Campaign = Record<string, any> & { id: string };
@@ -29,78 +42,113 @@ type Props = {
   onBack: () => void;
   /** Sends the user somewhere useful when nothing is saved yet. */
   onBrowse: () => void;
+  /** Needed to tell which briefs the creator is already hired on. */
+  session?: AuthUser;
+  /** KYC and profile gates send the creator to /kyc and /settings. */
+  onNavigate?: (path: string) => void;
 };
 
-const textOf = (value: unknown, fallback = '') =>
-  typeof value === 'string' && value.trim() ? value : fallback;
-
-const money = (value: unknown) =>
-  `₹${Number(value || 0).toLocaleString('en-IN')}`;
-
-const nameOf = (c: Campaign) =>
-  textOf(c.brand_name || c.brand?.name || c.company_name, 'Brand');
-
-const titleOf = (c: Campaign) =>
-  textOf(c.title || c.campaign_title || c.name, 'Untitled campaign');
-
-function BookmarkIcon() {
-  return (
-    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-      <Path d="M6.5 4h11v16l-5.5-4-5.5 4V4Z" fill="#4943EB" stroke="#4943EB" />
-    </Svg>
-  );
-}
-
-function SavedBriefs({ token, onBack, onBrowse }: Props) {
+function SavedBriefs({ token, onBack, onBrowse, session, onNavigate }: Props) {
   const [items, setItems] = useState<Campaign[]>([]);
+  // Ids still saved. Held apart from `items` so un-saving inside the brief view
+  // and then re-saving it keeps working.
+  const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [bids, setBids] = useState<Record<string, Record<string, any>>>({});
+  const [selected, setSelected] = useState<Campaign | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState('');
+  const toast = useToast();
+  const me = String(session?.user_id || '');
 
   const load = useCallback(async () => {
-    setFailed(false);
+    setError('');
     try {
       const ids = await getSavedBriefs(token);
+      setSavedIds(ids);
       if (!ids.length) {
         setItems([]);
         return;
       }
-      // There is no bulk "campaigns by id" endpoint, so pull the list once and
-      // match locally rather than firing one request per saved id.
+      // One list call covers most ids; the rest (closed, or a private brief)
+      // are fetched by id as the website does. A 404 drops that id.
       const list = await getCampaigns(token);
-      const byId = new Map(
-        list.map(c => [String(c.id || c.campaign_id), c as Campaign]),
-      );
-      // A saved campaign that has since been taken down resolves to nothing;
-      // keep a stub so the row still appears and can be un-saved.
-      setItems(
-        ids.map(id => {
+      const byId = new Map(list.map(c => [String(c.id || c.campaign_id), c as Campaign]));
+      const resolved = await Promise.all(
+        ids.map(async id => {
           const found = byId.get(id);
-          return found ? { ...found, id } : { id, unavailable: true };
+          if (found) return { ...found, id } as Campaign;
+          const one = await getCampaign(token, id).catch(() => null);
+          return one ? ({ ...one, id } as Campaign) : null;
         }),
       );
-    } catch {
-      setFailed(true);
+      setItems(resolved.filter((c): c is Campaign => !!c));
+    } catch (e) {
+      setError(loadErrorText(e, 'your saved campaigns'));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
+
+    // Already-bid state for the cards. Best effort.
+    Promise.resolve()
+      .then(() => getMyBids(token))
+      .then(rows => {
+        const next: Record<string, Record<string, any>> = {};
+        for (const row of rows) {
+          const id = String(row?.campaign?.id || row?.id || '');
+          if (id && row.my_bid) next[id] = { ...row.my_bid, status: row.bid_status || row.my_bid.status };
+        }
+        setBids(next);
+      })
+      .catch(() => {});
   }, [token]);
 
   useLiveEffect(() => {
     load();
   }, [load]);
 
-  const unsave = useCallback(
+  const toggleSave = useCallback(
     (id: string) => {
-      const previous = items;
-      setItems(current => current.filter(c => c.id !== id));
-      // Roll the row back if the server refuses, so the list never claims a
-      // removal that did not happen.
-      removeSavedBrief(token, id).catch(() => setItems(previous));
+      const wasSaved = savedIds.includes(id);
+      setSavedIds(current => (wasSaved ? current.filter(x => x !== id) : [...current, id]));
+      toast.show(wasSaved ? 'Removed from saved' : 'Saved to your list');
+      // Roll back if the server refuses, so the list never claims a change that did not happen.
+      (wasSaved ? removeSavedBrief : addSavedBrief)(token, id).catch(() => {
+        setSavedIds(current => (wasSaved ? [...current, id] : current.filter(x => x !== id)));
+        toast.show("Couldn't update saved briefs. Check your connection.");
+      });
     },
-    [items, token],
+    [savedIds, token, toast],
   );
+
+  const rows = useMemo(() => items.filter(c => savedIds.includes(c.id)), [items, savedIds]);
+  const closedOf = (c: Campaign) => !isOpenForBids(c) || isSelectedCreator(c, me);
+  const bidFor = (c: Campaign) => bids[c.id] || ownBidOn(c, me);
+
+  if (selected) {
+    return (
+      <>
+        <BriefFlow
+          campaign={selected}
+          token={token}
+          session={session}
+          saved={savedIds.includes(selected.id)}
+          onToggleSave={() => toggleSave(selected.id)}
+          onBack={() => setSelected(null)}
+          onNavigate={onNavigate}
+          myBid={bidFor(selected)}
+          closed={closedOf(selected)}
+          onDone={message => {
+            setSelected(null);
+            toast.show(message);
+            load();
+          }}
+        />
+        <ToastBar message={toast.message} />
+      </>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -124,16 +172,25 @@ function SavedBriefs({ token, onBack, onBrowse }: Props) {
               />
             }
           >
-            {failed ? (
+            {error ? (
               <View style={styles.card}>
                 <Text style={styles.title}>Couldn&apos;t load your saves</Text>
-                <Text style={styles.body}>
-                  Check your connection and pull down to try again.
-                </Text>
+                <Text style={styles.body}>{error}</Text>
+                <TouchableOpacity
+                  style={styles.button}
+                  onPress={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry"
+                >
+                  <Text style={styles.buttonText}>Retry</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
 
-            {!failed && !items.length ? (
+            {!error && !rows.length ? (
               <View style={styles.card}>
                 <Text style={styles.title}>Nothing saved yet</Text>
                 <Text style={styles.body}>
@@ -150,43 +207,21 @@ function SavedBriefs({ token, onBack, onBrowse }: Props) {
               </View>
             ) : null}
 
-            {items.map(item => (
-              <View key={item.id} style={styles.row}>
-                <View style={styles.rowText}>
-                  {item.unavailable ? (
-                    <>
-                      <Text style={styles.rowTitle}>
-                        Campaign no longer available
-                      </Text>
-                      <Text style={styles.rowMeta}>
-                        It may have closed or been removed.
-                      </Text>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.rowBrand}>{nameOf(item)}</Text>
-                      <Text style={styles.rowTitle} numberOfLines={2}>
-                        {titleOf(item)}
-                      </Text>
-                      <Text style={styles.rowMeta}>
-                        {money(item.budget || item.max_budget)}
-                      </Text>
-                    </>
-                  )}
-                </View>
-                <TouchableOpacity
-                  onPress={() => unsave(item.id)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Remove from saved"
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <BookmarkIcon />
-                </TouchableOpacity>
-              </View>
+            {rows.map(item => (
+              <CampaignCard
+                key={item.id}
+                campaign={item}
+                saved
+                closed={closedOf(item)}
+                bid={bidFor(item)}
+                onPress={() => setSelected(item)}
+                onToggleSave={() => toggleSave(item.id)}
+              />
             ))}
           </ScrollView>
         )}
       </View>
+      <ToastBar message={toast.message} />
     </View>
   );
 }
@@ -201,9 +236,11 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
-  content: { padding: scale(18), paddingBottom: scale(30), gap: scale(12) },
+  // The cards bring their own side margin; only the empty/error card needs the gutter.
+  content: { paddingVertical: scale(14), paddingBottom: scale(30) },
   card: {
     marginTop: scale(30),
+    marginHorizontal: scale(18),
     padding: scale(20),
     borderRadius: scale(16),
     backgroundColor: '#FFFFFF',
@@ -226,7 +263,7 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: scale(18),
-    height: scale(46),
+    minHeight: scale(46),
     paddingHorizontal: scale(22),
     borderRadius: scale(13),
     backgroundColor: '#5B5CF6',
@@ -238,37 +275,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(12),
-    padding: scale(14),
-    borderRadius: scale(16),
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECECF6',
-  },
-  rowText: { flex: 1 },
-  rowBrand: {
-    fontSize: fontScale(11),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#7E829D',
-  },
-  rowTitle: {
-    marginTop: scale(3),
-    fontSize: fontScale(13),
-    fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '800',
-    color: '#11123D',
-  },
-  rowMeta: {
-    marginTop: scale(4),
-    fontSize: fontScale(12),
-    fontFamily: 'Inter-Bold',
-    fontWeight: '700',
-    color: '#4943EB',
   },
 });
 

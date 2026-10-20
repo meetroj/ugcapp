@@ -233,16 +233,24 @@ function NotificationSettings({ token, session, onBack, onChat }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Saving defaults over preferences that failed to load would silently reset
+  // them, so a failed load shows an error + Retry instead of the switches.
+  const [loadError, setLoadError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError('');
     getNotificationPrefs(token, session.role)
       .then(saved => {
         // Saved values win, but any key the backend omits keeps its default.
         if (!cancelled) setPrefs({ ...defaults, ...saved });
       })
-      .catch(() => {
-        if (!cancelled) setStatus('Could not load your saved preferences.');
+      .catch(error => {
+        if (!cancelled) {
+          setLoadError(error?.message || 'Could not load your saved preferences.');
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -250,7 +258,7 @@ function NotificationSettings({ token, session, onBack, onChat }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [token, session.role, defaults]);
+  }, [token, session.role, defaults, reloadKey]);
 
   const toggle = useCallback((key: string) => {
     setPrefs(current => ({ ...current, [key]: !current[key] }));
@@ -275,6 +283,17 @@ function NotificationSettings({ token, session, onBack, onChat }: Props) {
       {loading ? (
         <View style={styles.loader}>
           <ActivityIndicator size="large" color="#1B2A6B" />
+        </View>
+      ) : loadError ? (
+        <View style={[styles.body, styles.bodyContent]}>
+          <Text style={styles.status}>{loadError}</Text>
+          <TouchableOpacity
+            style={styles.saveBtn}
+            onPress={() => setReloadKey(key => key + 1)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.saveText}>Retry</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <ScrollView

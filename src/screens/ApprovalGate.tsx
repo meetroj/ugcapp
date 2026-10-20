@@ -35,13 +35,73 @@ type Props = {
   review?: {
     more_info_message?: string;
     more_info_items?: string[];
+    /** Set by the review team on a rejection (reason_code + free text). */
+    reason_code?: string;
+    reason_details?: string;
   } | null;
+  /** Account details pre-filled into the support email / WhatsApp message. */
+  account?: { email?: string; id?: string; role?: string } | null;
   /** Reopens onboarding so the profile can be updated and resubmitted. */
   onUpdateProfile?: () => void;
   /** Re-checks the session against the backend; unlocks once approved. */
   onRefresh: () => Promise<void>;
   onLogout?: () => void;
 };
+
+// Same labels and contact channels as the website's RejectedGate and
+// ContactSupportBox, so a rejection reads the same on both.
+const REASON_LABELS: Record<string, string> = {
+  incomplete_profile: 'Incomplete profile',
+  unverifiable_business: 'Business details could not be verified',
+  unverifiable_socials: 'Social profiles could not be verified',
+  low_quality_portfolio: 'Portfolio did not meet our bar',
+  duplicate_account: 'Duplicate account',
+  policy_violation: 'Policy violation',
+  other: 'Other',
+};
+
+export const SUPPORT_EMAIL = 'support@ugcad.io';
+// Same number the website ships (ContactSupportBox.js); it looks like a
+// placeholder, see the report.
+export const SUPPORT_PHONE = '+919000000000';
+export const SUPPORT_PHONE_DISPLAY = '+91 90000 00000';
+
+/** 'other' carries no information beyond reason_details, so it has no label. */
+export function rejectionReasonLabel(code?: string): string | null {
+  return code && code !== 'other' ? REASON_LABELS[code] || null : null;
+}
+
+/** Email, WhatsApp and phone links pre-filled with the account, like the website. */
+export function buildSupportLinks(
+  account?: { email?: string; id?: string; role?: string } | null,
+) {
+  const who = account?.email || '';
+  const subject = `Application review appeal${who ? ` - ${who}` : ''}`;
+  const body = [
+    'Hi UGCad team,',
+    '',
+    'My application was not approved and I would like it reviewed again.',
+    '',
+    `Account email: ${who || '(fill in)'}`,
+    `Account type: ${account?.role || '(fill in)'}`,
+    account?.id ? `Account ID: ${account.id}` : '',
+    '',
+    'Why I think this should be reconsidered:',
+    '',
+  ].join('\n');
+  return {
+    mailto: `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+      subject,
+    )}&body=${encodeURIComponent(body)}`,
+    whatsapp: `https://wa.me/${SUPPORT_PHONE.replace(
+      /[^0-9]/g,
+      '',
+    )}?text=${encodeURIComponent(
+      `Hi, my UGCad application (${who || 'my account'}) was not approved. Can you review it again?`,
+    )}`,
+    tel: `tel:${SUPPORT_PHONE}`,
+  };
+}
 
 const BACKDROP = '#0A0A16';
 const CARD = '#13131D';
@@ -89,6 +149,7 @@ function ApprovalGate({
   kind,
   status,
   review,
+  account,
   onUpdateProfile,
   onRefresh,
   onLogout,
@@ -112,17 +173,22 @@ function ApprovalGate({
     }
   };
 
+  const reasonLabel = rejectionReasonLabel(review?.reason_code);
+  const reasonDetails = String(review?.reason_details || '').trim();
+  const support = buildSupportLinks(account);
+  const open = (url: string) => Linking.openURL(url).catch(() => {});
+
   const title = rejected
-    ? 'Profile Not Approved'
+    ? 'Application not approved'
     : needsInfo
     ? 'More Information Needed'
     : 'Profile Under Review';
 
   // Copy mirrors the website's gates for each role.
   const copy = rejected
-    ? `Please contact support for more information about your ${
+    ? `Your ${
         isBrand ? 'business' : 'creator'
-      } profile review.`
+      } profile was not approved, so you can't access the dashboard right now. If you think this is a mistake, contact our team and we'll take another look.`
     : needsInfo
     ? `Our team needs a few more details before approving your ${
         isBrand ? 'business' : 'creator'
@@ -143,7 +209,11 @@ function ApprovalGate({
           UGC<Text style={styles.brandDim}>ad.io</Text>
         </Text>
         {!!onLogout && (
-          <TouchableOpacity onPress={onLogout} accessibilityRole="button">
+          <TouchableOpacity
+            onPress={onLogout}
+            accessibilityRole="button"
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          >
             <Text style={styles.logout}>Log out</Text>
           </TouchableOpacity>
         )}
@@ -197,16 +267,53 @@ function ApprovalGate({
             </>
           )}
 
+          {rejected && (!!reasonLabel || !!reasonDetails) && (
+            <View style={styles.reason} testID="rejection-reason">
+              <Text style={styles.reasonLabel}>Reason from our review team</Text>
+              {!!reasonLabel && (
+                <Text style={styles.reasonCode}>{reasonLabel}</Text>
+              )}
+              {!!reasonDetails && (
+                <Text style={styles.reasonText}>{reasonDetails}</Text>
+              )}
+            </View>
+          )}
+
           {rejected ? (
-            <TouchableOpacity
-              style={styles.primary}
-              onPress={() =>
-                Linking.openURL('mailto:support@ugcad.io').catch(() => {})
-              }
-              accessibilityRole="button"
-            >
-              <Text style={styles.primaryText}>Contact Support</Text>
-            </TouchableOpacity>
+            <View style={styles.support}>
+              <Text style={styles.supportTitle}>Think this is a mistake?</Text>
+              <Text style={styles.supportSub}>
+                Our team can re-check your application. Reach out any way you
+                like.
+              </Text>
+              <TouchableOpacity
+                style={[styles.supportRow, styles.supportRowPrimary]}
+                onPress={() => open(support.mailto)}
+                accessibilityRole="button"
+                testID="support-email"
+              >
+                <Text style={styles.supportRowTitle}>Email support</Text>
+                <Text style={styles.supportRowSub}>{SUPPORT_EMAIL}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.supportRow}
+                onPress={() => open(support.whatsapp)}
+                accessibilityRole="button"
+                testID="support-whatsapp"
+              >
+                <Text style={styles.supportRowTitle}>WhatsApp</Text>
+                <Text style={styles.supportRowSub}>Chat with support</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.supportRow}
+                onPress={() => open(support.tel)}
+                accessibilityRole="button"
+                testID="support-call"
+              >
+                <Text style={styles.supportRowTitle}>Call us</Text>
+                <Text style={styles.supportRowSub}>{SUPPORT_PHONE_DISPLAY}</Text>
+              </TouchableOpacity>
+            </View>
           ) : needsInfo ? (
             <TouchableOpacity
               style={styles.primary}
@@ -348,6 +455,72 @@ const styles = StyleSheet.create({
     color: MUTED,
     textAlign: 'center',
   },
+  reason: {
+    width: '100%',
+    marginTop: scale(16),
+    padding: scale(14),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: 'rgba(255,138,138,0.25)',
+    backgroundColor: 'rgba(255,138,138,0.08)',
+  },
+  reasonLabel: {
+    marginBottom: scale(6),
+    fontSize: fontScale(10.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#FF9D9D',
+  },
+  reasonCode: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#F4F4F8',
+  },
+  reasonText: {
+    marginTop: scale(4),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(19),
+    color: '#D6D7EC',
+  },
+  support: { width: '100%', marginTop: scale(20), gap: scale(10) },
+  supportTitle: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#F4F4F8',
+    textAlign: 'center',
+  },
+  supportSub: {
+    marginBottom: scale(4),
+    fontSize: fontScale(12.5),
+    lineHeight: fontScale(18),
+    color: MUTED,
+    textAlign: 'center',
+  },
+  supportRow: {
+    minHeight: 52,
+    justifyContent: 'center',
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(8),
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  supportRowPrimary: {
+    borderColor: 'rgba(91,107,255,0.45)',
+    backgroundColor: 'rgba(91,107,255,0.14)',
+  },
+  supportRowTitle: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#F4F4F8',
+  },
+  supportRowSub: { fontSize: fontScale(12.5), color: MUTED },
   primary: {
     marginTop: scale(20),
     minWidth: scale(180),

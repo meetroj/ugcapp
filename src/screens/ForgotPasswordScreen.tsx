@@ -22,14 +22,29 @@ type Step = 'email' | 'code' | 'password';
 type Props = {
   /** Back to the login form, either on success or on "Log in" below. */
   onDone: () => void;
+  /** Email kept by the parent so it carries over from the login form. */
+  email?: string;
+  onEmailChange?: (email: string) => void;
+  /** Reset-code email link: skip asking for the email, go to the code. */
+  startAtCode?: boolean;
 };
 
 /** Mirrors the backend's own minimum, so a rejection is caught before the POST. */
 const MIN_PASSWORD = 6;
 
-function ForgotPasswordForm({ onDone }: Props) {
-  const [step, setStep] = useState<Step>('email');
-  const [email, setEmail] = useState('');
+function ForgotPasswordForm({
+  onDone,
+  email: emailProp,
+  onEmailChange,
+  startAtCode,
+}: Props) {
+  const [step, setStep] = useState<Step>(startAtCode ? 'code' : 'email');
+  const [localEmail, setLocalEmail] = useState('');
+  const email = emailProp ?? localEmail;
+  const setEmail = (value: string) => {
+    setLocalEmail(value);
+    onEmailChange?.(value);
+  };
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -173,6 +188,18 @@ function ForgotPasswordForm({ onDone }: Props) {
             onPress={save}
             loading={loading}
           />
+          {/* Same escape hatch as the website: a mistyped code is fixed here
+              instead of by starting the whole reset again. */}
+          <View style={styles.resendRow}>
+            <TouchableOpacity
+              onPress={() => setStep('code')}
+              accessibilityRole="button"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              testID="back-to-code"
+            >
+              <Text style={styles.link}>Back to code</Text>
+            </TouchableOpacity>
+          </View>
         </>
       )}
 

@@ -4,8 +4,10 @@
  * /cookie-policy). These were the last routes that dropped a user onto the
  * website, so the copy lives here as structured sections instead.
  *
- * The text is a plain-language summary of the platform rules, with a link out
- * to the full legal text on the web for the binding version.
+ * The text is the same copy the website shows in Settings (LEGAL_DOCS in
+ * ugcad-frontend/src/pages/ProfileSettings.js); keep the two in step. Only the
+ * privacy policy has a page on the website to link out to (/privacy), so the
+ * other three documents have no "read full text" button.
  */
 import React from 'react';
 import {
@@ -31,151 +33,154 @@ type Props = {
 
 type Section = { heading: string; body: string };
 
-type Doc = { title: string; intro: string; sections: Section[] };
+type Doc = {
+  title: string;
+  intro: string;
+  updated: string;
+  sections: Section[];
+};
 
-/** Canonical copy of each policy, kept short and readable on a phone. */
+/** Same copy as the website's Settings > Legal documents. */
 const DOCS: Record<LegalDocId, Doc> = {
   '/privacy-policy': {
     title: 'Privacy Policy',
-    intro:
-      'How UGCad collects, uses and protects the information you share with us.',
+    intro: 'How we collect, use and protect your data',
+    updated: 'July 2026',
     sections: [
       {
-        heading: 'What we collect',
-        body: 'Account details you provide (name, email, phone), your brand or creator profile, campaign and deal activity, messages sent through the platform, and payment records. We also collect basic device and usage data to keep the service working and secure.',
+        heading: 'Information we collect',
+        body: 'We collect the details you provide when you create an account and build your profile - name, contact details, payment information, portfolio content and the campaigns you take part in. We also collect basic usage data such as device, browser and pages visited.',
       },
       {
-        heading: 'How we use it',
-        body: 'To run campaigns and deals, match brands with creators, process payments and escrow, provide support, prevent fraud and abuse, and meet our legal obligations. We do not sell your personal information.',
+        heading: 'How we use your information',
+        body: 'Your information is used to match you with relevant brand campaigns, process payments and payouts, personalise your dashboard, keep the platform secure, and send important updates about your account and deals.',
       },
       {
-        heading: 'What others can see',
-        body: 'Brands see a creator’s public profile, portfolio and ratings. Creators see a brand’s company name and campaign details. Private information such as your username, email and KYC documents is never shared with the other party.',
+        heading: 'Sharing your information',
+        body: 'We share only what is needed to complete a deal - for example, your profile and submitted content with the brand you are working with. We never sell your personal data. Trusted service providers (payments, hosting, analytics) process data on our behalf under strict agreements.',
       },
       {
-        heading: 'Payments and KYC',
-        body: 'Identity and bank details submitted for verification are stored securely and used only for verification and payouts. KYC documents are never exposed to the other party in a deal.',
+        heading: 'Data security',
+        body: 'We use encryption, access controls and secure infrastructure to protect your data. Payments are handled by PCI-compliant partners and funds are held in escrow until work is approved.',
       },
       {
-        heading: 'Your choices',
-        body: 'You can edit your profile at any time from Account Settings, control notification preferences, and request deletion of your account. Some records are retained where the law requires it, such as payment and tax records.',
+        heading: 'Your rights',
+        body: 'You can access, update or delete your information at any time from Settings. You may deactivate or permanently delete your account, and request a copy of your data by contacting us.',
       },
       {
-        heading: 'Data retention and security',
-        body: 'We keep your data only as long as needed to provide the service and meet legal requirements. Access is restricted, and transfers are encrypted.',
+        heading: 'Contact',
+        body: 'Questions about your privacy? Email us at privacy@ugcad.io.',
       },
     ],
   },
   '/terms': {
-    title: 'Terms of Service',
-    intro: 'The agreement between you and UGCad when you use the platform.',
+    title: 'Terms and Conditions',
+    intro: 'The rules for using the UGCad.io platform',
+    updated: 'July 2026',
     sections: [
       {
+        heading: 'Acceptance of terms',
+        body: 'By creating an account or using UGCad.io you agree to these Terms. If you do not agree, please do not use the platform.',
+      },
+      {
         heading: 'Eligibility',
-        body: 'You must be at least 18 years old to use UGCad. Accounts require identity verification and involve binding contracts and payments, which a minor cannot validly enter into. We do not knowingly allow anyone under 18 to use the platform, and we close accounts found to belong to minors.',
+        body: 'You must be at least 18 years old (or the age of majority in your region) and able to enter into a binding contract to use UGCad.io.',
       },
       {
         heading: 'Your account',
-        body: 'You must give accurate information and keep your login secure. Accounts are personal to you or your organisation, and you are responsible for activity that happens under your account.',
-      },
-      {
-        heading: 'Campaigns and deals',
-        body: 'Brands post briefs; creators apply. When a brand selects a creator, the agreed amount is held in escrow. Deliverables, timelines and revision limits are set out in the brief and are binding on both sides once the deal starts.',
+        body: 'You are responsible for the accuracy of your profile, keeping your login secure, and all activity under your account. You may not operate multiple accounts to abuse the platform.',
       },
       {
         heading: 'Payments and escrow',
-        body: 'Funds are held in escrow while work is in progress and released to the creator once the brand approves the deliverables. Platform fees are shown before you commit. Refunds follow the cancellation rules for the stage the deal is in.',
+        body: 'Brand payments are held in escrow and released to creators once work is approved or auto-approved per the deal timeline. Platform commission and applicable taxes (such as TDS) are deducted as shown at checkout.',
       },
       {
-        heading: 'Content and usage rights',
-        body: 'Usage rights are defined in each brief - platforms, duration and exclusivity. Rights transfer to the brand on approval and payment, subject to those terms. Creators keep ownership of anything outside the agreed scope.',
+        heading: 'Content and licensing',
+        body: 'You retain ownership of the content you create. By delivering approved content you grant the brand the usage rights agreed in the brief. You confirm your content is original and does not infringe third-party rights.',
       },
       {
-        heading: 'Off-platform dealing',
-        body: 'Taking a deal off the platform to avoid fees is not allowed, and sharing contact details in chat is blocked for this reason. Accounts that repeatedly do so may be restricted.',
+        heading: 'Prohibited conduct',
+        body: 'No fraud, fake engagement, harassment, off-platform payment circumvention, or uploading unlawful or infringing material. Violations may lead to suspension or removal.',
       },
       {
-        heading: 'Disputes and suspension',
-        body: 'Either party can raise a dispute on an active deal. Activity is paused while our team reviews and may ask for evidence. We may suspend or restrict accounts that breach these terms or maintain chronically low ratings.',
+        heading: 'Termination',
+        body: 'You may close your account anytime. We may suspend or terminate accounts that breach these Terms, with pending payouts settled per policy.',
+      },
+      {
+        heading: 'Limitation of liability',
+        body: 'The platform is provided on an as-available basis. To the extent permitted by law, we are not liable for indirect or consequential losses arising from use of the platform.',
       },
     ],
   },
   '/community-guidelines': {
     title: 'Community Guidelines',
-    intro: 'What we expect from everyone on the platform.',
+    intro: 'Standards for creators and brands',
+    updated: 'July 2026',
     sections: [
       {
-        heading: 'Be professional',
-        body: 'Communicate clearly and respectfully. Harassment, discrimination, threats and abusive language are not tolerated from brands or creators.',
+        heading: 'Be authentic',
+        body: 'Represent yourself honestly. Use real profile details and only showcase work you actually created.',
       },
       {
-        heading: 'Be honest',
-        body: 'Represent your brand, products, audience and past work accurately. Do not use fake engagement, misleading metrics or someone else’s content as your own.',
+        heading: 'Deliver quality, on time',
+        body: 'Follow the brief, meet deadlines, and communicate early if something changes. Great delivery builds your level and reputation.',
       },
       {
-        heading: 'Deliver what you agreed',
-        body: 'Creators should meet the brief, quantity and deadline they accepted. Brands should review submissions promptly and give specific, actionable feedback rather than blanket rejections.',
+        heading: 'Respect everyone',
+        body: 'Keep messages professional. Harassment, hate speech, or discrimination of any kind is not tolerated.',
       },
       {
-        heading: 'Keep it on the platform',
-        body: 'Messages, files and payments stay on UGCad. This protects both sides - escrow, dispute resolution and evidence all depend on it.',
+        heading: 'No spam or fraud',
+        body: 'No fake reviews, bots, inflated metrics, or attempts to move deals and payments off-platform.',
       },
       {
-        heading: 'Content standards',
-        body: 'No content that is illegal, sexually explicit, hateful, or that endangers anyone. Follow advertising disclosure rules in your country when posting sponsored content.',
+        heading: 'Keep it safe and legal',
+        body: 'Do not post content that is unlawful, infringing, sexually explicit, or harmful. Follow all applicable advertising and disclosure rules.',
       },
       {
         heading: 'Reporting',
-        body: 'If something breaches these guidelines, raise a dispute on the deal or contact support. We review every report and act on what we find.',
+        body: 'See something that breaks these guidelines? Report it in-app or email trust@ugcad.io. We review every report.',
       },
     ],
   },
   '/cookie-policy': {
     title: 'Cookie Policy',
-    intro: 'How we use cookies and similar technologies.',
+    intro: 'How cookies and tracking are used',
+    updated: 'July 2026',
     sections: [
       {
+        heading: 'What are cookies',
+        body: 'Cookies are small text files stored on your device that help websites work and remember your preferences.',
+      },
+      {
         heading: 'Essential cookies',
-        body: 'Required to sign you in, keep your session active and protect against fraud. The service cannot work without these, so they cannot be turned off.',
+        body: 'Required for the platform to function - keeping you signed in, securing your session and enabling core features. These cannot be turned off.',
       },
       {
         heading: 'Preference cookies',
-        body: 'Remember choices such as your language and interface settings so you do not have to set them again on every visit.',
+        body: 'Remember choices like your language and dashboard settings to personalise your experience.',
       },
       {
-        heading: 'Analytics',
-        body: 'Help us understand which features are used and where people run into problems, so we can improve the product. This data is aggregated.',
-      },
-      {
-        heading: 'In the mobile app',
-        body: 'The app stores your login token on the device so you stay signed in between sessions. Clearing app data or logging out removes it.',
+        heading: 'Analytics cookies',
+        body: 'Help us understand how the platform is used so we can improve performance and features. This data is aggregated.',
       },
       {
         heading: 'Managing cookies',
-        body: 'You can clear or block cookies in your browser settings. Blocking essential cookies will stop you from signing in on the web.',
+        body: 'You can control or delete cookies through your browser settings. Blocking essential cookies may affect how UGCad.io works.',
       },
     ],
   },
 };
 
-/** The full legal text remains authoritative and lives on the website. */
-const WEB_ORIGIN = 'https://www.ugcad.io';
-
 /**
- * Web path for each document.
- *
- * The site is a React SPA whose server falls back to index.html for any path it
- * does not recognise, so a bare /privacy-policy renders the app shell rather
- * than the policy. The privacy policy is instead published as a real static
- * file at public/privacy/index.html, which the host serves for /privacy before
- * applying that fallback. The other three still resolve through the SPA and
- * keep their existing paths.
+ * The only legal page the website actually serves: public/privacy/index.html,
+ * published at /privacy. The site is a React SPA with no /terms,
+ * /community-guidelines or /cookie-policy route (they would just render the
+ * app shell), so those documents link nowhere.
  */
-const WEB_PATHS: Record<LegalDocId, string> = {
+const WEB_ORIGIN = 'https://www.ugcad.io';
+const WEB_PAGES: Partial<Record<LegalDocId, string>> = {
   '/privacy-policy': '/privacy',
-  '/terms': '/terms',
-  '/community-guidelines': '/community-guidelines',
-  '/cookie-policy': '/cookie-policy',
 };
 
 function Icon({
@@ -234,6 +239,7 @@ function LegalDocument({ docId, onBack }: Props) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.intro}>{doc.intro}</Text>
+        <Text style={styles.updated}>Last updated {doc.updated}</Text>
 
         {doc.sections.map(section => (
           <View key={section.heading} style={styles.card}>
@@ -242,21 +248,26 @@ function LegalDocument({ docId, onBack }: Props) {
           </View>
         ))}
 
-        <TouchableOpacity
-          style={styles.linkBtn}
-          onPress={() =>
-            Linking.openURL(`${WEB_ORIGIN}${WEB_PATHS[docId]}`).catch(() => {})
-          }
-          accessibilityRole="button"
-        >
-          <Text style={styles.linkText}>Read the full legal text</Text>
-          <Icon name="external" color="#4C5BF3" size={15} />
-        </TouchableOpacity>
+        {!!WEB_PAGES[docId] && (
+          <>
+            <TouchableOpacity
+              style={styles.linkBtn}
+              onPress={() =>
+                Linking.openURL(`${WEB_ORIGIN}${WEB_PAGES[docId]}`).catch(
+                  () => {},
+                )
+              }
+              accessibilityRole="button"
+            >
+              <Text style={styles.linkText}>Read the full privacy policy</Text>
+              <Icon name="external" color="#4C5BF3" size={15} />
+            </TouchableOpacity>
 
-        <Text style={styles.footer}>
-          This summary is provided for convenience. The full text on ugcad.io is
-          the binding version.
-        </Text>
+            <Text style={styles.footer}>
+              The full text on ugcad.io is the binding version.
+            </Text>
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -290,7 +301,12 @@ const styles = StyleSheet.create({
     fontSize: fontScale(13),
     lineHeight: fontScale(19),
     color: '#5C6180',
+  },
+  updated: {
+    marginTop: scale(4),
     marginBottom: scale(14),
+    fontSize: fontScale(11.5),
+    color: '#9498B0',
   },
 
   card: {

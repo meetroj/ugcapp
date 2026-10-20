@@ -22,6 +22,7 @@ import { SignUpForm } from './SignUpScreen';
 import ForgotPasswordForm from './ForgotPasswordScreen';
 import AuthLayout from '../components/AuthLayout';
 import type { Role } from '../components/RoleSelector';
+import type { DeepLink } from '../deepLink';
 import {
   appleAuth,
   googleAuth,
@@ -54,12 +55,26 @@ if (
 type Props = {
   /** Called once the user finishes (or skips past) authentication. */
   onAuthenticated: (session: AuthUser) => void;
+  /**
+   * A link from an email or the website (/auth?view=reset&email=...,
+   * /auth?mode=signup&role=...). Read once, when the screen first appears.
+   */
+  initialLink?: Extract<DeepLink, { kind: 'auth' }>;
 };
 
 type Mode = 'signup' | 'login' | 'forgot';
 
-function AuthFlow({ onAuthenticated }: Props) {
-  const [mode, setMode] = useState<Mode>('login');
+function AuthFlow({ onAuthenticated, initialLink }: Props) {
+  const [mode, setMode] = useState<Mode>(
+    initialLink?.view === 'reset'
+      ? 'forgot'
+      : initialLink?.mode === 'signup'
+      ? 'signup'
+      : 'login',
+  );
+  // The email typed on any of the three forms, shared like the website does, so
+  // "Forgot password?" opens with the address already filled in.
+  const [email, setEmail] = useState(initialLink?.email || '');
   /**
    * The sign-in to repeat once the user types their 2FA code. Email, Google and
    * Apple all answer {requires_2fa:true} first, and each retries by resending
@@ -94,10 +109,19 @@ function AuthFlow({ onAuthenticated }: Props) {
     email: string;
     password: string;
     phone: string;
+    dialCode: string;
   }) => {
     try {
       onAuthenticated(
-        await signUp(values.role, values.email, values.password, values.phone),
+        await signUp(
+          values.role,
+          values.email,
+          values.password,
+          values.phone,
+          undefined,
+          undefined,
+          values.dialCode,
+        ),
       );
     } catch (error) {
       Alert.alert(
@@ -223,15 +247,26 @@ function AuthFlow({ onAuthenticated }: Props) {
         >
           {mode === 'signup' ? (
             <SignUpForm
+              email={email}
+              onEmailChange={setEmail}
+              initialRole={initialLink?.role === 'business' ? 'brand' : 'creator'}
               onGoToLogin={() => switchTo('login')}
               onSubmit={handleSignUp}
               onGoogle={googleSignInAvailable() ? handleGoogle : undefined}
               onApple={appleSignInAvailable() ? handleApple : undefined}
             />
           ) : mode === 'forgot' ? (
-            <ForgotPasswordForm onDone={() => switchTo('login')} />
+            <ForgotPasswordForm
+              email={email}
+              onEmailChange={setEmail}
+              // The reset email lands on "enter the code" with the address known.
+              startAtCode={initialLink?.view === 'reset' && !!initialLink.email}
+              onDone={() => switchTo('login')}
+            />
           ) : (
             <LoginForm
+              email={email}
+              onEmailChange={setEmail}
               onGoToSignUp={() => switchTo('signup')}
               onSubmit={handleLogin}
               onGoogle={googleSignInAvailable() ? () => handleGoogle() : undefined}

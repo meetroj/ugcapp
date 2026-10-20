@@ -44,6 +44,7 @@ import {
   type AuthUser,
 } from '../api';
 import { scale, fontScale } from '../theme';
+import { IMAGE_TOO_LARGE_MESSAGE, imageTooLarge } from '../profileImage';
 import { CONTENT_STYLES, NICHE_CATEGORIES } from './CreatorProfileSetup';
 
 type Opt = { value: string; label: string };
@@ -384,7 +385,18 @@ function CreatorSettings({ token, onBack }: Props) {
     category: string;
     price: string;
     delivery: string;
+    /** Carried through an edit so it does not reset to 'Untitled' / empty. */
+    title?: string;
+    description?: string;
   } | null>(null);
+  // Profile photo and banner, uploaded in place like the Profile tab does.
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [bannerUrl, setBannerUrl] = useState('');
+  const [imageBusy, setImageBusy] = useState<'photo' | 'banner' | null>(null);
+  // Set when /auth/me fails: the form must not render, because saving an
+  // empty form would replace the stored profile with blanks.
+  const [loadFailed, setLoadFailed] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState<string | null>('Basic Information');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -412,11 +424,17 @@ function CreatorSettings({ token, onBack }: Props) {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadFailed('');
     (async () => {
       try {
         const me = await getMe(token);
         if (!active) return;
         const profile = (me?.profile || {}) as Form;
+        setPhotoUrl(
+          String(me?.profile_photo || me?.profile_picture || profile.profile_picture || ''),
+        );
+        setBannerUrl(String(me?.banner || profile.banner || ''));
         const social = (profile.social_links || {}) as Form;
         const rate = (profile.rate_card || {}) as Form;
         setLoaded(profile);
@@ -472,8 +490,12 @@ function CreatorSettings({ token, onBack }: Props) {
         });
         const items = (me as Form)?.portfolio;
         setWork(Array.isArray(items) ? items : []);
-      } catch {
-        if (active) setError('Could not load your profile.');
+      } catch (e) {
+        if (active) {
+          setLoadFailed(
+            e instanceof Error && e.message ? e.message : 'Could not load your profile.',
+          );
+        }
       } finally {
         if (active) setLoading(false);
       }
@@ -481,7 +503,42 @@ function CreatorSettings({ token, onBack }: Props) {
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [token, reloadKey]);
+
+  /** Picks an image and uploads it as the profile photo or banner (5 MB max, as on the web). */
+  const changeImage = useCallback(
+    async (kind: 'photo' | 'banner') => {
+      if (imageBusy) return;
+      const picked = await launchImageLibrary({
+        mediaType: 'photo',
+        selectionLimit: 1,
+        quality: 0.8,
+      });
+      const file = picked.assets?.[0];
+      if (!file?.uri) return;
+      const title = kind === 'banner' ? 'Banner not updated' : 'Photo not updated';
+      if (imageTooLarge(file.fileSize)) {
+        Alert.alert(title, IMAGE_TOO_LARGE_MESSAGE);
+        return;
+      }
+      setImageBusy(kind);
+      try {
+        // Both endpoints store the file AND write the field, so no save follows.
+        const url = await uploadMedia(token, { ...file, uri: file.uri }, kind);
+        if (kind === 'photo') setPhotoUrl(url);
+        else setBannerUrl(url);
+      } catch (e) {
+        // The server OCR-scans images and rejects ones carrying contact info.
+        Alert.alert(
+          title,
+          e instanceof Error && e.message ? e.message : 'Please try again.',
+        );
+      } finally {
+        setImageBusy(null);
+      }
+    },
+    [imageBusy, token],
+  );
 
   /** Cities depend on the chosen state, mirroring the web's cascading select. */
   const cityHint = form.state
@@ -540,6 +597,8 @@ function CreatorSettings({ token, onBack }: Props) {
         category: String(meta.category || ''),
         price: String(meta.price || ''),
         delivery: String(meta.delivery || ''),
+        title: String(meta.title || ''),
+        description: String(meta.description || meta.desc || ''),
       });
     },
     [work],
@@ -551,15 +610,23 @@ function CreatorSettings({ token, onBack }: Props) {
    */
   const saveDraft = useCallback(async () => {
     if (!draft) return;
+    // Start from the stored entry so fields this form has no input for (items
+    // added on the website's Portfolio page: project_cost, extra urls...) survive
+    // an edit. Title falls back to 'Untitled' only for a brand-new clip, as on
+    // the web.
+    const existing = draft.index == null ? null : work[draft.index];
+    const base: WorkItem = existing && typeof existing !== 'string' ? existing : {};
     const item: WorkItem = {
-      title: 'Untitled',
-      description: '',
+      ...base,
+      title: draft.title || 'Untitled',
+      description: draft.description || '',
       brand: draft.brand.trim(),
       category: draft.category.trim(),
       price: draft.price.trim(),
       delivery: draft.delivery.trim(),
       videoUrl: draft.url,
-      urls: [draft.url],
+      urls:
+        Array.isArray(base.urls) && base.urls.length > 1 ? base.urls : [draft.url],
     };
     const next =
       draft.index == null
@@ -619,6 +686,9 @@ function CreatorSettings({ token, onBack }: Props) {
         else delete social[key];
       });
       const skills = Array.isArray(form.skills) ? form.skills : [];
+      // 'Per Video' is the only option the web offers; a stored value is kept as is.
+      const payoutPeriod =
+        loaded.rate_card?.payout_period || loaded.payoutPeriod || 'Per Video';
       // Spread `loaded` first: this endpoint replaces the profile wholesale.
       await saveCreatorProfile(token, {
         ...loaded,
@@ -663,14 +733,14 @@ function CreatorSettings({ token, onBack }: Props) {
           flexible: !!form.flexible,
         },
         expectedPayout: form.expectedPayout,
-        payoutPeriod: 'Per Video',
+        payoutPeriod: payoutPeriod,
         delivery_days: Number(form.deliveryDays),
         rate_card: {
           ...((loaded.rate_card || {}) as Form),
           expected_payout: form.expectedPayout,
           raw_payout: form.expectedPayout,
           editing_payout: form.editingPayout || 0,
-          payout_period: 'Per Video',
+          payout_period: payoutPeriod,
           delivery_days: Number(form.deliveryDays),
         },
       });
@@ -696,17 +766,64 @@ function CreatorSettings({ token, onBack }: Props) {
           <View style={styles.content}>
             <SkeletonForm rows={6} />
           </View>
+        ) : loadFailed ? (
+          <View style={styles.content}>
+            <Text style={styles.error}>{loadFailed}</Text>
+            <TouchableOpacity
+              style={styles.save}
+              onPress={() => setReloadKey(key => key + 1)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.saveText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           <ScrollView
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
+            {/* ---- Photo and banner ---- */}
+            <View style={styles.imageRow}>
+              {([
+                ['photo', 'Profile photo', photoUrl],
+                ['banner', 'Banner', bannerUrl],
+              ] as const).map(([kind, label, url]) => (
+                <TouchableOpacity
+                  key={kind}
+                  style={styles.imageCard}
+                  onPress={() => changeImage(kind)}
+                  disabled={imageBusy !== null}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Change ${label.toLowerCase()}`}
+                  accessibilityState={{ disabled: imageBusy !== null }}
+                >
+                  {url ? (
+                    <Image
+                      source={{ uri: absolute(url) }}
+                      style={kind === 'photo' ? styles.imageThumbRound : styles.imageThumb}
+                    />
+                  ) : (
+                    <View
+                      style={kind === 'photo' ? styles.imageThumbRound : styles.imageThumb}
+                    />
+                  )}
+                  <Text style={styles.imageLabel}>{label}</Text>
+                  {imageBusy === kind ? (
+                    <ActivityIndicator size="small" color="#5B5CF6" />
+                  ) : (
+                    <Text style={styles.imageChange}>Change (max 5MB)</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+
             {/* ---- My Work ---- */}
             <View style={styles.workHead}>
               <Text style={styles.blockTitle}>My Work</Text>
               <TouchableOpacity
                 onPress={addWork}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 disabled={uploading}
                 accessibilityRole="button"
                 accessibilityLabel="Add work"
@@ -751,6 +868,7 @@ function CreatorSettings({ token, onBack }: Props) {
                     <TouchableOpacity
                       style={styles.tileBadge}
                       onPress={() => removeWork(index)}
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       accessibilityRole="button"
                       accessibilityLabel={`Remove work ${index + 1}`}
                     >
@@ -997,7 +1115,9 @@ function CreatorSettings({ token, onBack }: Props) {
               <View style={styles.group}>
                 <Text style={styles.label}>Payout Period</Text>
                 <View style={[styles.input, styles.readonly]}>
-                  <Text style={styles.readonlyText}>Per Video</Text>
+                  <Text style={styles.readonlyText}>
+                    {loaded.rate_card?.payout_period || loaded.payoutPeriod || 'Per Video'}
+                  </Text>
                 </View>
               </View>
               <Field
@@ -1028,10 +1148,6 @@ function CreatorSettings({ token, onBack }: Props) {
                 <Text style={styles.saveText}>Save changes</Text>
               )}
             </TouchableOpacity>
-
-            <Text style={styles.note}>
-              Profile photo and banner are still changed on ugcad.io.
-            </Text>
           </ScrollView>
         )}
       </KeyboardAvoidingView>
@@ -1067,15 +1183,16 @@ function CreatorSettings({ token, onBack }: Props) {
                 }
                 placeholder="Who was this made for?"
               />
-              <Field
+              {/* The web offers the niche list as a select, not free text. */}
+              <Choice
                 label="Category"
                 value={draft?.category || ''}
+                options={NICHE_CATEGORIES.map(o => o.label)}
                 onChange={next =>
                   setDraft(current =>
                     current ? { ...current, category: next } : current,
                   )
                 }
-                placeholder="e.g. Beauty"
               />
               <Field
                 label="Price / video (₹)"
@@ -1150,6 +1267,38 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   detailsTitle: { marginTop: scale(20), marginBottom: scale(10) },
+
+  imageRow: { flexDirection: 'row', gap: scale(10), marginBottom: scale(18) },
+  imageCard: {
+    flex: 1,
+    minHeight: scale(44),
+    alignItems: 'center',
+    padding: scale(12),
+    borderRadius: scale(14),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EDEEF6',
+  },
+  imageThumb: {
+    width: '100%',
+    height: scale(54),
+    borderRadius: scale(10),
+    backgroundColor: '#E7E8F3',
+  },
+  imageThumbRound: {
+    width: scale(54),
+    height: scale(54),
+    borderRadius: scale(27),
+    backgroundColor: '#E7E8F3',
+  },
+  imageLabel: {
+    marginTop: scale(8),
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#15163F',
+  },
+  imageChange: { marginTop: scale(2), fontSize: fontScale(11), color: '#5B5CF6' },
 
   workHead: {
     flexDirection: 'row',

@@ -8,7 +8,7 @@
  * full agreement" reveals the rest, and Agree stays disabled until the reader
  * has scrolled to the end.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
@@ -71,6 +71,9 @@ export default function AgreementGate({
   const [atBottom, setAtBottom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  // Measured sizes of the scroll area, to spot an agreement short enough that
+  // there is nothing to scroll (the scroll event would then never fire).
+  const sizes = useRef({ content: 0, view: 0 });
 
   useEffect(() => {
     let live = true;
@@ -97,6 +100,18 @@ export default function AgreementGate({
   );
 
   const viewAll = useCallback(() => setExpanded(true), []);
+
+  // Everything already visible: the end has been reached without scrolling, so
+  // enable Agree (the website does the same after expanding).
+  const checkFits = useCallback(() => {
+    const { content, view } = sizes.current;
+    if (expanded && content > 0 && view > 0 && content <= view + 24) {
+      setAtBottom(true);
+    }
+  }, [expanded]);
+  useEffect(() => {
+    checkFits();
+  }, [checkFits]);
 
   const agree = useCallback(async () => {
     setSubmitting(true);
@@ -140,6 +155,14 @@ export default function AgreementGate({
           style={styles.body}
           contentContainerStyle={styles.bodyContent}
           onScroll={onScroll}
+          onLayout={e => {
+            sizes.current.view = e.nativeEvent.layout.height;
+            checkFits();
+          }}
+          onContentSizeChange={(_w, h) => {
+            sizes.current.content = h;
+            checkFits();
+          }}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator
         >

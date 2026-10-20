@@ -7,9 +7,11 @@ import { Alert } from '../components/AppAlert';
  *
  * Adding funds creates an order and opens payment checkout inside the app.
  */
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -20,7 +22,7 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonWallet } from '../components/Skeleton';
-import { getWallet, rechargeWallet, type WalletPaymentOrder } from '../api';
+import { getWallet, rechargeWallet, NetworkError, type WalletPaymentOrder } from '../api';
 import WalletCheckout from './WalletCheckout';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -29,6 +31,10 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Settings > Billing links here with ?view=history|recharge: scroll to that section. */
+  initialView?: 'history' | 'recharge';
+  /** Razorpay checkout prefill, same fields the website sends. */
+  prefill?: { name?: string; email?: string; contact?: string };
 };
 
 type Tier = { amount?: number; bonus_percent?: number; label?: string };
@@ -43,8 +49,33 @@ type Wallet = {
   transactions?: Record<string, any>[];
 };
 
-/** Mirrors the backend's WALLET_MIN_RECHARGE. */
-const MIN_RECHARGE = 2500;
+/** Fallback only: the website reads the minimum from wallet.minimum_chat_balance too. */
+const DEFAULT_MIN_RECHARGE = 2500;
+/** Same fixed quick amounts as the website's walletPresetAmounts. */
+const PRESETS = [10000, 25000, 50000];
+/** The website lists 8 history rows; the app pages by the same amount. */
+const PAGE_SIZE = 8;
+
+type HistoryFilter = 'all' | 'credits' | 'debits';
+const FILTERS: HistoryFilter[] = ['all', 'credits', 'debits'];
+
+/** Same test the website uses before offering "View campaign" on a reference. */
+export const looksLikeCampaignId = (ref: unknown) =>
+  /^[0-9a-f-]{8,}$/i.test(String(ref ?? ''));
+
+/** History rows for the chosen filter, as on the website (direction decides). */
+export function filterTransactions(
+  rows: Record<string, any>[],
+  filter: HistoryFilter,
+) {
+  if (filter === 'credits') return rows.filter(row => row.direction === 'credit');
+  if (filter === 'debits') return rows.filter(row => row.direction === 'debit');
+  return rows;
+}
+
+/** Lowest amount the wallet accepts: the setting the website reads, else 2,500. */
+export const minRecharge = (wallet: { minimum_chat_balance?: number }) =>
+  Number(wallet.minimum_chat_balance) || DEFAULT_MIN_RECHARGE;
 
 const rupees = (value: unknown) =>
   `Rs. ${(Number(value) || 0).toLocaleString('en-IN', {
@@ -112,6 +143,9 @@ function Icon({
       )}
       {name === 'caretDown' && <Path d="m6.5 9.5 5.5 5.5 5.5-5.5" {...line} />}
       {name === 'caretUp' && <Path d="m6.5 14.5 5.5-5.5 5.5 5.5" {...line} />}
+      {name === 'alert' && (
+        <Path d="M12 8v5M12 16.5h.01M12 3.5 21 19.5H3z" {...line} />
+      )}
       {name === 'lock' && (
         <Path
           d="M6 10.5h12V20H6zM8.6 10.5V7.8a3.4 3.4 0 0 1 6.8 0v2.7"
@@ -124,21 +158,40 @@ function Icon({
 
 function BrandWallet({
   token,
+  onNavigate,
   onNotifications,
   onMessages,
+  initialView,
+  prefill,
 }: Props) {
   const [wallet, setWallet] = useState<Wallet>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const [shown, setShown] = useState(PAGE_SIZE);
+  const [filter, setFilter] = useState<HistoryFilter>('all');
+  const [detail, setDetail] = useState<Record<string, any> | null>(null);
   const [amount, setAmount] = useState('');
+  // A failed load must not read as "Rs. 0, no history" (money looks missing).
+  const [loadError, setLoadError] = useState('');
+  const loaded = useRef(false);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const sectionY = useRef({ history: 0, recharge: 0 });
+  const scrolledTo = useRef(false);
 
   const load = useCallback(async () => {
     try {
       setWallet(await getWallet(token));
-    } catch {
-      // Offline or the API is unreachable — keep whatever is on screen;
-      // pull-to-refresh retries the real request.
+      loaded.current = true;
+      setLoadError('');
+    } catch (error) {
+      // Keep whatever was already on screen and say the load failed.
+      setLoadError(
+        error instanceof NetworkError
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message
+          ? error.message
+          : 'Could not load your wallet. Your balance is safe, please try again.',
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -149,6 +202,16 @@ function BrandWallet({
     load();
   }, [load]);
 
+  // ?view=history|recharge: once the panels have laid out, scroll to the section.
+  useEffect(() => {
+    if (!initialView || loading || scrolledTo.current || !loaded.current) return;
+    scrolledTo.current = true;
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, sectionY.current[initialView] - 8), animated: true });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [initialView, loading]);
+
   const all = wallet.transactions || [];
   // Newest first — the backend merges several sources, so order isn't given.
   // It sends `date`; `created_at` is tolerated in case the shape changes.
@@ -157,25 +220,26 @@ function BrandWallet({
     const right = new Date(String(b.date || b.created_at || '')).getTime() || 0;
     return right - left;
   });
-  const visible = showAll ? sorted : sorted.slice(0, 3);
+  const filtered = filterTransactions(sorted, filter);
+  const visible = filtered.slice(0, shown);
 
   // Drop malformed tiers rather than rendering "₹0 +0% bonus".
   const tiers = (wallet.bonus_tiers || []).filter(
     tier => Number(tier?.amount) > 0 && Number(tier?.bonus_percent) > 0,
   );
-  // Presets follow the bonus tiers so the chips always land on a bonus.
-  const presets = tiers.length
-    ? tiers.map(tier => Number(tier.amount))
-    : [10000, 25000, 50000];
-
+  const minimum = minRecharge(wallet);
   const typed = Number(amount) || 0;
-  const canAdd = typed >= MIN_RECHARGE;
+  const canAdd = typed >= minimum;
 
   const [paymentOrder, setPaymentOrder] = useState<WalletPaymentOrder | null>(null);
   const [startingPayment, setStartingPayment] = useState(false);
   const paymentPending = useRef(false);
   const addFunds = async () => {
-    if (!canAdd || !Number.isFinite(typed) || paymentPending.current) return;
+    if (paymentPending.current) return;
+    if (!typed || typed < minimum) {
+      Alert.alert('Amount too low', `Minimum recharge amount is ${rupees(minimum)}`);
+      return;
+    }
     paymentPending.current = true;
     setStartingPayment(true);
     try {
@@ -198,6 +262,7 @@ function BrandWallet({
         <WalletCheckout
           token={token}
           order={paymentOrder}
+          prefill={prefill}
           onClose={() => setPaymentOrder(null)}
           onSuccess={() => {
             setPaymentOrder(null);
@@ -219,12 +284,32 @@ function BrandWallet({
           <View style={styles.content}>
             <SkeletonWallet />
           </View>
+        ) : loadError && !loaded.current ? (
+          // First load failed: say so with a Retry, never a silent Rs. 0.
+          <View style={styles.content}>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Couldn't load your wallet</Text>
+              <Text style={styles.cardSub}>{loadError}</Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => {
+                  setLoading(true);
+                  load();
+                }}
+                accessibilityRole="button"
+                testID="wallet-retry"
+              >
+                <Text style={styles.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         ) : (
           <KeyboardAvoidingView
             style={styles.flexOne}
             behavior="padding"
           >
           <ScrollView
+            ref={scrollRef}
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -238,6 +323,25 @@ function BrandWallet({
               />
             }
           >
+            {/* A refresh failed after a good load: keep the numbers, flag them stale. */}
+            {!!loadError && (
+              <View style={styles.staleBanner} testID="wallet-stale">
+                <Text style={styles.staleText}>
+                  {loadError} Showing the last balance we loaded.
+                </Text>
+                <TouchableOpacity
+                  style={styles.staleBtn}
+                  onPress={() => {
+                    setRefreshing(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* ---- Hero balance ---- */}
             <View style={styles.hero}>
               <Text style={styles.heroLabel}>Available Balance</Text>
@@ -268,14 +372,41 @@ function BrandWallet({
                   >
                     {wallet.chat_unlocked
                       ? 'Chat unlocked'
-                      : `Add ${rupees(wallet.minimum_chat_balance)} to unlock`}
+                      : `Add ${rupees(minimum)} to unlock`}
                   </Text>
                 </View>
               </View>
             </View>
 
+            {/* ---- Low-balance banner (website: wallet-warning) ---- */}
+            {!wallet.chat_unlocked && (
+              <View style={styles.warning} testID="wallet-low-balance">
+                <Icon name="alert" color="#B45309" size={18} />
+                <View style={styles.warningCopy}>
+                  <Text style={styles.warningTitle}>
+                    {rupees(minimum)} minimum recharge required to unlock platform chat.
+                  </Text>
+                  <Text style={styles.warningText}>
+                    Wallet credits are non-refundable. Add funds to activate messaging with creators.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.warningBtn}
+                  onPress={() => setAmount(String(minimum))}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.warningBtnText}>Add Funds</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* ---- Quick recharge ---- */}
-            <View style={styles.card}>
+            <View
+              style={styles.card}
+              onLayout={event => {
+                sectionY.current.recharge = event.nativeEvent.layout.y;
+              }}
+            >
               <Text style={styles.cardTitle}>Quick Recharge</Text>
               <Text style={styles.fieldLabel}>ENTER AMOUNT</Text>
 
@@ -283,19 +414,25 @@ function BrandWallet({
                 <Text style={styles.inputPrefix}>₹</Text>
                 <TextInput
                   style={styles.input}
+                  testID="wallet-amount"
                   value={amount}
+                  // Digits and one decimal point (the website's field is a number input).
                   onChangeText={value =>
-                    setAmount(value.replace(/[^0-9]/g, ''))
+                    setAmount(
+                      value
+                        .replace(/[^0-9.]/g, '')
+                        .replace(/^(\d*\.?\d{0,2}).*$/, '$1'),
+                    )
                   }
                   placeholder="Enter amount"
                   placeholderTextColor="#9AA0C8"
-                  keyboardType="number-pad"
+                  keyboardType="decimal-pad"
                   returnKeyType="done"
                 />
               </View>
 
               <View style={styles.presetRow}>
-                {presets.map(preset => (
+                {PRESETS.map(preset => (
                   <TouchableOpacity
                     key={preset}
                     style={[
@@ -320,16 +457,16 @@ function BrandWallet({
               <TouchableOpacity
                 style={[styles.addBtn, !canAdd && styles.addBtnOff]}
                 onPress={addFunds}
-                disabled={!canAdd || startingPayment || !!paymentOrder}
+                disabled={startingPayment || !!paymentOrder}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: !canAdd }}
+                testID="wallet-add-funds"
               >
                 <Icon name="bolt" color="#FFFFFF" size={16} />
                 <Text style={styles.addBtnText}>{startingPayment ? 'Opening payment…' : 'Add Funds'}</Text>
               </TouchableOpacity>
 
               <Text style={styles.hint}>
-                Minimum {rupees(MIN_RECHARGE)} • Instant credit after payment
+                Minimum {rupees(minimum)} • Instant credit after payment
                 verification
               </Text>
             </View>
@@ -382,15 +519,49 @@ function BrandWallet({
               </View>
             )}
 
-            {/* ---- Recent activity ---- */}
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Recent Activity</Text>
+            {/* ---- Transaction history ---- */}
+            <View
+              style={styles.card}
+              onLayout={event => {
+                sectionY.current.history = event.nativeEvent.layout.y;
+              }}
+            >
+              <Text style={styles.cardTitle}>Transaction History</Text>
+              <Text style={styles.cardSub}>
+                All wallet activity across recharges, escrow, and fees.
+              </Text>
 
-              {!sorted.length ? (
+              <View style={styles.filterRow}>
+                {FILTERS.map(key => (
+                  <TouchableOpacity
+                    key={key}
+                    style={[styles.filterChip, filter === key && styles.filterChipActive]}
+                    onPress={() => {
+                      setFilter(key);
+                      setShown(PAGE_SIZE);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: filter === key }}
+                    testID={`wallet-filter-${key}`}
+                  >
+                    <Text
+                      style={[styles.filterText, filter === key && styles.filterTextActive]}
+                    >
+                      {key.charAt(0).toUpperCase() + key.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {!filtered.length ? (
                 <View style={styles.empty}>
-                  <Text style={styles.emptyTitle}>No transactions yet</Text>
+                  <Text style={styles.emptyTitle}>
+                    {sorted.length ? 'Nothing in this filter' : 'No transactions yet'}
+                  </Text>
                   <Text style={styles.emptyText}>
-                    Recharges, escrow locks and refunds will appear here.
+                    {sorted.length
+                      ? 'Switch to All to see every wallet entry.'
+                      : 'Recharges, escrow locks and refunds will appear here.'}
                   </Text>
                 </View>
               ) : (
@@ -403,7 +574,14 @@ function BrandWallet({
                   const done =
                     key === 'success' || key === 'paid' || key === 'completed';
                   return (
-                    <View key={String(row.id ?? index)} style={styles.txRow}>
+                    <TouchableOpacity
+                      key={String(row.id ?? index)}
+                      style={styles.txRow}
+                      onPress={() => setDetail(row)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${text(row.type, 'Transaction')}, view details`}
+                      testID={`wallet-tx-${index}`}
+                    >
                       <View
                         style={[
                           styles.txIcon,
@@ -464,22 +642,29 @@ function BrandWallet({
                           </View>
                         )}
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })
               )}
 
-              {sorted.length > 3 && (
+              {filtered.length > PAGE_SIZE && (
                 <TouchableOpacity
                   style={styles.viewAll}
-                  onPress={() => setShowAll(value => !value)}
+                  onPress={() =>
+                    setShown(count =>
+                      count >= filtered.length ? PAGE_SIZE : count + PAGE_SIZE,
+                    )
+                  }
                   accessibilityRole="button"
+                  testID="wallet-show-more"
                 >
                   <Text style={styles.viewAllText}>
-                    {showAll ? 'Show Less' : `View All (${sorted.length - 3})`}
+                    {shown >= filtered.length
+                      ? 'Show Less'
+                      : `Show more (${filtered.length - shown})`}
                   </Text>
                   <Icon
-                    name={showAll ? 'caretUp' : 'caretDown'}
+                    name={shown >= filtered.length ? 'caretUp' : 'caretDown'}
                     color="#4C5BF3"
                     size={14}
                   />
@@ -490,6 +675,71 @@ function BrandWallet({
           </KeyboardAvoidingView>
         )}
       </View>
+
+      {/* ---- Transaction detail (website: txn-modal) ---- */}
+      <Modal
+        visible={!!detail}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDetail(null)}
+      >
+        <Pressable style={styles.sheetBackdrop} onPress={() => setDetail(null)} />
+        {detail && (
+          <View style={styles.sheetCard} testID="wallet-detail">
+            <Text
+              style={[
+                styles.detailAmount,
+                detail.direction === 'debit' ? styles.txAmountDebit : styles.txAmountCredit,
+              ]}
+            >
+              {detail.direction === 'debit' ? '-' : '+'}
+              {rupees(detail.amount)}
+            </Text>
+            <Text style={styles.detailType}>{text(detail.type, 'Transaction')}</Text>
+            <Text style={styles.detailStatus}>{text(detail.status, 'success')}</Text>
+            <DetailRow
+              label="Direction"
+              value={detail.direction === 'debit' ? 'Debit (out)' : 'Credit (in)'}
+            />
+            <DetailRow label="Date" value={formatStamp(detail.date || detail.created_at) || '-'} />
+            {!!detail.reference && (
+              <DetailRow label="Campaign / Ref" value={String(detail.reference)} />
+            )}
+            <DetailRow label="Transaction ID" value={String(detail.id ?? '-')} />
+            {looksLikeCampaignId(detail.reference) && (
+              <TouchableOpacity
+                style={styles.detailBtn}
+                onPress={() => {
+                  const ref = String(detail.reference);
+                  setDetail(null);
+                  onNavigate(`/campaigns/${ref}`);
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.addBtnText}>View campaign</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.detailClose}
+              onPress={() => setDetail(null)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.viewAllText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </Modal>
+    </View>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue} selectable>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -612,7 +862,7 @@ const styles = StyleSheet.create({
   presetRow: { marginTop: scale(9), flexDirection: 'row', gap: scale(8) },
   preset: {
     flex: 1,
-    height: scale(40),
+    height: scale(44),
     borderRadius: scale(10),
     backgroundColor: '#F0F1FC',
     alignItems: 'center',
@@ -690,7 +940,7 @@ const styles = StyleSheet.create({
   // Full-width footer toggle under the list, replacing the old header link.
   viewAll: {
     marginTop: scale(14),
-    height: scale(40),
+    height: scale(44),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -708,6 +958,7 @@ const styles = StyleSheet.create({
   },
   txRow: {
     marginTop: scale(11),
+    minHeight: scale(44),
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(10),
@@ -745,6 +996,154 @@ const styles = StyleSheet.create({
   badgeSuccessText: { color: '#16A34A' },
   badgeNeutral: { backgroundColor: '#F0F1F6' },
   badgeNeutralText: { color: '#7C819C' },
+
+  retryBtn: {
+    marginTop: scale(14),
+    height: scale(44),
+    borderRadius: scale(12),
+    backgroundColor: '#141A4F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  staleBanner: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FEF3C7',
+    gap: scale(8),
+  },
+  staleText: { fontSize: fontScale(12), color: '#92400E' },
+  staleBtn: {
+    alignSelf: 'flex-start',
+    minHeight: scale(44),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(10),
+    backgroundColor: '#141A4F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // ---- Low-balance banner ----
+  warning: {
+    marginTop: scale(12),
+    padding: scale(14),
+    borderRadius: scale(14),
+    backgroundColor: '#FFF7E6',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    gap: scale(10),
+  },
+  warningCopy: { flex: 1, minWidth: scale(180) },
+  warningTitle: {
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  warningText: { marginTop: scale(3), fontSize: fontScale(11.5), color: '#92400E' },
+  warningBtn: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(10),
+    backgroundColor: '#141A4F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  warningBtnText: {
+    fontSize: fontScale(12.5),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+
+  // ---- History filter + detail sheet ----
+  filterRow: { marginTop: scale(12), flexDirection: 'row', gap: scale(8) },
+  filterChip: {
+    flex: 1,
+    minHeight: scale(44),
+    borderRadius: scale(10),
+    backgroundColor: '#F0F1FC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterChipActive: { backgroundColor: '#4C5BF3' },
+  filterText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
+  filterTextActive: { color: '#FFFFFF' },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(14,19,48,0.5)' },
+  sheetCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: scale(22),
+    borderTopRightRadius: scale(22),
+    padding: scale(20),
+    paddingBottom: scale(28),
+  },
+  detailAmount: {
+    fontSize: fontScale(26),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '900',
+  },
+  detailType: {
+    marginTop: scale(2),
+    fontSize: fontScale(15),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  detailStatus: {
+    marginTop: scale(2),
+    marginBottom: scale(10),
+    fontSize: fontScale(12),
+    color: '#7C819C',
+    textTransform: 'capitalize',
+  },
+  detailRow: {
+    paddingVertical: scale(9),
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: scale(12),
+    borderTopWidth: 1,
+    borderTopColor: '#EEF0F8',
+  },
+  detailLabel: { fontSize: fontScale(12), color: '#7C819C' },
+  detailValue: {
+    flexShrink: 1,
+    textAlign: 'right',
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#15163F',
+  },
+  detailBtn: {
+    marginTop: scale(14),
+    height: scale(46),
+    borderRadius: scale(12),
+    backgroundColor: '#141A4F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailClose: {
+    marginTop: scale(10),
+    height: scale(44),
+    borderRadius: scale(11),
+    borderWidth: 1,
+    borderColor: '#E3E5F3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   empty: {
     marginTop: scale(14),

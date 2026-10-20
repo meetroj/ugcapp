@@ -132,12 +132,13 @@ export async function signUp(
   phone: string,
   name?: string,
   website?: string,
+  dialCode: string = SIGNUP_DIAL_CODE,
 ) {
   const session = await authRequest('/auth/signup', {
     email: email.trim(),
     password,
     phone: phone.trim(),
-    dial_code: SIGNUP_DIAL_CODE,
+    dial_code: dialCode,
     role: role === 'brand' ? 'business' : 'creator',
     // Sent so the account is created with the real name (brand name for a
     // business), not an auto-generated handle.
@@ -431,6 +432,13 @@ export type Conversation = {
   last_message?: { message?: string; timestamp?: string };
   unread_count: number;
   associated_deal_status?: string | null;
+  /** Campaign id of the deal on this thread (what a review of the brand needs). */
+  associated_campaign_id?: string | null;
+  role?: string;
+  full_name?: string | null;
+  business_name?: string | null;
+  profile?: Record<string, any>;
+  last_item_snippet?: string;
   counterparty_active?: boolean;
 };
 
@@ -444,6 +452,10 @@ export type ChatMessage = {
   created_at?: string;
   timestamp?: string;
   attachment_urls?: string[];
+  /** Delivery state of a message: 'delivered' or 'read'. */
+  status?: string;
+  read_at?: string | null;
+  read_by?: string[];
   /* Action-card fields — present when item_type === 'action_card'. */
   type?: ActionCardType;
   fields?: Record<string, unknown>;
@@ -488,12 +500,19 @@ export async function sendActionCard(
   recipientId: string,
   type: ActionCardType,
   fields: Record<string, unknown>,
+  dealId?: string | null,
 ): Promise<void> {
   await json(
     await request(`${BACKEND_URL}/api/chat/action-cards`, {
       method: 'POST',
       headers: auth(token),
-      body: JSON.stringify({ recipient_id: recipientId, type, fields }),
+      body: JSON.stringify({
+        recipient_id: recipientId,
+        type,
+        fields,
+        // Only a counter to an existing offer names a deal; omitted otherwise.
+        ...(dealId ? { deal_id: dealId } : {}),
+      }),
     }),
   );
 }
@@ -548,8 +567,8 @@ export async function sendMessage(
   recipientId: string,
   message: string,
   attachmentUrls: string[] = [],
-): Promise<void> {
-  await json(
+): Promise<{ filtered?: boolean; warning_count?: number }> {
+  const data = await json(
     await request(`${BACKEND_URL}/api/chat/send`, {
       method: 'POST',
       headers: auth(token),
@@ -560,6 +579,27 @@ export async function sendMessage(
       }),
     }),
   );
+  return data as { filtered?: boolean; warning_count?: number };
+}
+
+/** POST /api/chat/:id/typing - tells the other side we are typing (expires in 6 s). */
+export async function sendChatTyping(token: string, otherId: string) {
+  await json(
+    await request(`${BACKEND_URL}/api/chat/${encodeURIComponent(otherId)}/typing`, {
+      method: 'POST',
+      headers: auth(token),
+    }),
+  );
+}
+
+/** GET /api/chat/:id/typing - is the other person typing right now? */
+export async function getChatTyping(token: string, otherId: string): Promise<boolean> {
+  const data = await json(
+    await request(`${BACKEND_URL}/api/chat/${encodeURIComponent(otherId)}/typing`, {
+      headers: auth(token),
+    }),
+  );
+  return Boolean(data?.typing);
 }
 
 /**
@@ -714,7 +754,9 @@ export async function savePortfolio(
     await request(`${BACKEND_URL}/api/profile/portfolio`, {
       method: 'PATCH',
       headers: auth(token),
-      body: JSON.stringify({ portfolio: items }),
+      // The endpoint declares `portfolio: List[Any]`, a BARE JSON array body
+      // (server.py). Wrapping it in {portfolio: [...]} is a 422.
+      body: JSON.stringify(items),
     }),
   );
 }
@@ -727,52 +769,23 @@ export async function savePortfolio(
  */
 export async function requestWithdrawal(
   token: string,
-  amount: number,
-): Promise<void> {
-  // The live API validates the body strictly: `payment_method` and
-  // `account_details` are required, and it rejects an all-blank
-  // `account_details` with "Bank / payout account details are required".
-  // Sending only `amount` failed schema validation with a raw Pydantic error
-  // before any of that ran, so the creator never saw the real reason.
-  //
-  // The payout account is stored on the user, so it is read back here rather
-  // than asked for again on the withdrawal form.
-  let bank: Record<string, unknown> = {};
-  let upi = '';
-  try {
-    const payout = await getPayoutOverview(token);
-    bank = (payout?.bank_details as Record<string, unknown>) || {};
-    upi = String(payout?.upi_id || '');
-  } catch {
-    // Fall through with empty details: the backend answers with the
-    // "payout account details are required" message, which is the right
-    // thing to show.
-  }
-
-  const details: Record<string, string> = {};
-  for (const [key, value] of Object.entries(bank)) {
-    if (value != null && String(value).trim()) {
-      details[key] = String(value);
-    }
-  }
-  if (upi.trim()) {
-    details.upi_id = upi;
-  }
-
-  await json(
+  payload: {
+    amount: number;
+    payment_method: 'upi' | 'bank';
+    account_details: Record<string, string>;
+  },
+): Promise<string> {
+  // Same body the website sends (PayoutWithLayout.js). The payout account is
+  // typed or confirmed on the form, so nothing is silently read from the
+  // profile here any more.
+  const data = await json(
     await request(`${BACKEND_URL}/api/withdrawal/request`, {
       method: 'POST',
       headers: auth(token),
-      body: JSON.stringify({
-        amount,
-        // Prefer a bank transfer when an account is on file; UPI otherwise.
-        payment_method: Object.keys(details).some(k => k !== 'upi_id')
-          ? 'bank_transfer'
-          : 'upi',
-        account_details: details,
-      }),
+      body: JSON.stringify(payload),
     }),
   );
+  return typeof data?.message === 'string' ? data.message : '';
 }
 
 /** A file chosen from the device, as react-native-image-picker reports it. */
@@ -1212,6 +1225,21 @@ export async function updateCampaign(
 }
 
 /**
+ * Deletes a draft or rejected brief. The backend refuses anything else (400):
+ * a live brief holds escrow and must be cancelled, not deleted.
+ */
+export async function deleteCampaign(
+  token: string,
+  campaignId: string,
+): Promise<void> {
+  await send(
+    token,
+    'DELETE',
+    `/api/campaigns/${encodeURIComponent(campaignId)}`,
+  );
+}
+
+/**
  * Creator places a bid on a brief.
  *
  * The live API validates the body strictly and requires all four of
@@ -1248,18 +1276,76 @@ export async function placeBid(
   );
 }
 
+/**
+ * Can this creator bid right now? `missing` lists the profile items still to
+ * fill in (drives the "complete your profile" sheet) and `commission_percent`
+ * is the live platform fee shown before the bid form. The server enforces the
+ * same rule on POST /campaigns/{id}/bid; this is the friendly front door.
+ */
+export type BidReadiness = {
+  can_bid: boolean;
+  missing: string[];
+  commission_percent?: number;
+};
+
+export async function getBidReadiness(token: string): Promise<BidReadiness> {
+  const data = await get<Record<string, unknown>>(
+    token,
+    '/api/creator/bid-readiness',
+  );
+  return {
+    can_bid: data?.can_bid !== false,
+    missing: Array.isArray(data?.missing) ? data.missing.map(String) : [],
+    commission_percent:
+      data?.commission_percent == null
+        ? undefined
+        : Number(data.commission_percent),
+  };
+}
+
 /** Brand picks a creator from the bids on a brief (hires + funds escrow). */
 export async function selectCreator(
   token: string,
   campaignId: string,
   creatorId: string,
-): Promise<void> {
+): Promise<Record<string, any>> {
   // The backend takes creator_id as a QUERY param, not a body field — sending
   // it in the body left it missing, so every "Accept" 422'd as "request failed".
-  await send(
+  // Returns the hire summary (amount, slots_left, fully_staffed) the UI words its
+  // confirmation from.
+  const data = await send<Record<string, any>>(
     token,
     'POST',
     `/api/campaigns/${encodeURIComponent(campaignId)}/select-creator?creator_id=${encodeURIComponent(creatorId)}`,
+  );
+  return data || {};
+}
+
+/** Brand answers a creator's counter-offer on a direct booking (accept or reject). */
+export async function decideBookingPrice(
+  token: string,
+  campaignId: string,
+  action: 'accept' | 'reject',
+): Promise<Record<string, any>> {
+  return send(
+    token,
+    'POST',
+    `/api/bookings/${encodeURIComponent(campaignId)}/price`,
+    { action },
+  );
+}
+
+/** Brand sends the brief once the creator accepted a direct booking; this starts the work. */
+export async function sendBookingBrief(
+  token: string,
+  campaignId: string,
+  briefText: string,
+): Promise<Record<string, any>> {
+  return send(
+    token,
+    'POST',
+    `/api/bookings/${encodeURIComponent(campaignId)}/brief`,
+    { brief_text: briefText },
   );
 }
 
@@ -1337,6 +1423,23 @@ export async function getCampaignWork(
     if (obj.id) return [obj as WorkSubmission];
   }
   return [];
+}
+
+/**
+ * A presigned "save as" link for an approved delivery (GET /work/{id}/download?as_link=1).
+ * `asset` picks 'raw' or 'edited' when both exist. The server refuses with a reason
+ * ("Download unlocks after you approve the work") that arrives on the thrown error.
+ */
+export async function getWorkDownloadLink(
+  token: string,
+  workId: string,
+  asset?: string,
+): Promise<{ url: string; forced?: boolean; filename?: string }> {
+  const query = `?as_link=1${asset ? `&asset=${encodeURIComponent(asset)}` : ''}`;
+  return get(
+    token,
+    `/api/work/${encodeURIComponent(workId)}/download${query}`,
+  );
 }
 
 export async function approveWork(token: string, workId: string) {
@@ -1538,6 +1641,37 @@ export async function saveBusinessProfile(
   return send(token, 'PUT', '/api/business/settings/profile', profile);
 }
 
+/**
+ * Uploads the brand logo (POST /business/settings/logo, multipart `file`).
+ * The server only takes jpeg/png/webp and answers {logo_url}.
+ */
+export async function uploadBusinessLogo(
+  token: string,
+  file: { uri: string; fileName?: string | null; type?: string | null },
+): Promise<string> {
+  const form = new FormData();
+  form.append('file', {
+    uri: file.uri,
+    name: file.fileName || `logo_${Date.now()}.jpg`,
+    type: file.type || 'image/jpeg',
+  } as unknown as Blob);
+  const data = await json(
+    await request(`${BACKEND_URL}/api/business/settings/logo`, {
+      method: 'POST',
+      // No Content-Type: fetch has to set the multipart boundary itself.
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    }),
+  );
+  const url = String(data?.logo_url || '');
+  if (!url) throw new Error('The server did not return the uploaded logo URL.');
+  return url;
+}
+
+export async function removeBusinessLogo(token: string) {
+  return send(token, 'DELETE', '/api/business/settings/logo');
+}
+
 export async function getBusinessCompany(token: string) {
   return get<Record<string, unknown>>(token, '/api/business/settings/company');
 }
@@ -1697,9 +1831,10 @@ export async function updateShipment(
 ) {
   return send(token, 'POST', '/api/shipment/update', {
     shipment_checklist: {
-      package_sealed: true,
+      // Same keys the website writes and reads (ShipmentTracking.js).
+      sealed: true,
       correct_item: true,
-      working_condition: true,
+      working: true,
     },
     ...payload,
   });
@@ -1742,6 +1877,16 @@ export async function createShipLabel(
     `/api/deals/${encodeURIComponent(dealId)}/ship-label`,
     payload,
   ) as Promise<{ tracking_number?: string; label_url?: string; courier_name?: string; status?: string }>;
+}
+
+/**
+ * The brand's own saved address in shipping-form shape, used to pre-fill the
+ * pickup address (the website's ShipmentTracking calls the same endpoint).
+ */
+export async function getShippingAccountAddress(
+  token: string,
+): Promise<{ address?: Record<string, unknown> | null; missing?: string[] }> {
+  return get(token, '/api/shipping/account-address');
 }
 
 /* ============================ Misc lookups ============================= */
@@ -1953,6 +2098,94 @@ export async function archiveDeal(token: string, dealId: string) {
   return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/archive`);
 }
 
+/**
+ * Creator's answer to a direct booking (components/BookingCard.js on the site):
+ * accept, decline (optional reason in `message`), or `revise` with a counter
+ * price in `amount`. The campaign id is the deal's `campaign.id`.
+ */
+export async function respondToBooking(
+  token: string,
+  campaignId: string,
+  body: { action: 'accept' | 'decline' | 'revise'; amount?: number; message?: string },
+) {
+  return send(token, 'POST', `/api/bookings/${encodeURIComponent(campaignId)}/respond`, body);
+}
+
+/** One shipping address, in the shape POST /shipping/address stores. */
+export type ShippingAddress = {
+  full_name: string;
+  phone: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  country?: string;
+};
+
+/**
+ * The caller's saved address plus, for a deal, whether each side has confirmed
+ * (never the other party's address). Accepts the campaign id or DEAL-xxxx.
+ */
+export type ShippingStatus = {
+  address: ShippingAddress | null;
+  account_address: ShippingAddress | null;
+  account_missing: string[];
+  my_role: string | null;
+  brand_confirmed: boolean;
+  creator_confirmed: boolean;
+  both_ready: boolean;
+  shipment_status: string | null;
+  requires_shipment: boolean;
+};
+
+export async function getShippingAddress(
+  token: string,
+  campaignId: string,
+): Promise<ShippingStatus> {
+  return get<ShippingStatus>(
+    token,
+    `/api/shipping/address?campaign_id=${encodeURIComponent(campaignId)}`,
+  );
+}
+
+export async function saveShippingAddress(
+  token: string,
+  campaignId: string,
+  address: ShippingAddress,
+): Promise<{ both_ready?: boolean }> {
+  return send(token, 'POST', '/api/shipping/address', {
+    ...address,
+    country: address.country || 'India',
+    campaign_id: campaignId,
+  });
+}
+
+/** Adds photo/video evidence to an open damage report (web "Add Evidence"). */
+export async function addDealEvidence(
+  token: string,
+  dealId: string,
+  attachmentUrls: string[],
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/action-card`, {
+    type: 'damage_report',
+    message: 'Add Evidence',
+    attachment_urls: attachmentUrls,
+  });
+}
+
+/** Posts into the deal's own chat (POST /deals/{id}/chat); the brand sees it in the Deal Room. */
+export async function sendDealMessage(
+  token: string,
+  dealId: string,
+  message: string,
+) {
+  return send(token, 'POST', `/api/deals/${encodeURIComponent(dealId)}/chat`, {
+    message,
+    attachment_urls: [],
+  });
+}
+
 /** The brand's side of the deal list. */
 export async function getBusinessDeals(
   token: string,
@@ -1997,17 +2230,25 @@ export async function respondToDispute(
 // change their password, turn on 2FA or close their account from the app.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Password params ride in the query string, which is what the API expects. */
+/**
+ * Passwords go in the JSON body: URLs end up in access logs. The backend still
+ * accepts the old query params, but this app no longer sends them. The server
+ * requires at least 8 characters (see MIN_PASSWORD in AccountSecurity).
+ */
 export async function changePassword(
   token: string,
   oldPassword: string,
   newPassword: string,
 ) {
-  const query = new URLSearchParams({
+  return send(token, 'POST', '/api/profile/change-password', {
     old_password: oldPassword,
     new_password: newPassword,
   });
-  return send(token, 'POST', `/api/profile/change-password?${query}`);
+}
+
+/** Permanently deletes the signed-in account (DELETE /api/profile). */
+export async function deleteAccount(token: string) {
+  return send(token, 'DELETE', '/api/profile');
 }
 
 export async function getTwoFactorStatus(
@@ -2129,6 +2370,20 @@ export async function removeTeamMember(token: string, memberId: string) {
   );
 }
 
+/** The whole team payload ({members, seat_limit, seats_used}), not just the list. */
+export async function getTeamPayload(
+  token: string,
+): Promise<Record<string, any>> {
+  return get(token, '/api/business/settings/team');
+}
+
+/** Plan, wallet balance and member count shown on the Billing tab. */
+export async function getBusinessSummary(
+  token: string,
+): Promise<Record<string, any>> {
+  return get(token, '/api/business/settings/summary');
+}
+
 export async function getBilling(
   token: string,
 ): Promise<Record<string, unknown>> {
@@ -2190,18 +2445,18 @@ export async function submitCampaign(
   ) as Promise<{ message?: string; status?: string }>;
 }
 
-/** Admin-curated creator shortlist for a campaign. */
+/**
+ * Admin-curated creator shortlist for a campaign. The backend answers with
+ * { match_status, shortlist_request_count, candidates: [{ creator_id, ops_note,
+ * status, creator }] }, so the whole object is returned, not just a list.
+ */
 export async function getShortlist(
   token: string,
   campaignId: string,
-): Promise<Record<string, unknown>[]> {
-  return toList(
-    await get(
-      token,
-      `/api/campaigns/${encodeURIComponent(campaignId)}/shortlist`,
-    ),
-    'shortlist',
-    'creators',
+): Promise<Record<string, any>> {
+  return get(
+    token,
+    `/api/campaigns/${encodeURIComponent(campaignId)}/shortlist`,
   );
 }
 
@@ -2209,6 +2464,8 @@ export async function inviteShortlistedCreator(
   token: string,
   campaignId: string,
   creatorId: string,
+  /** The body is a required model server-side (every field optional), so {} is the minimum. */
+  payload: { message?: string } = {},
 ) {
   return send(
     token,
@@ -2216,6 +2473,7 @@ export async function inviteShortlistedCreator(
     `/api/campaigns/${encodeURIComponent(
       campaignId,
     )}/shortlist/${encodeURIComponent(creatorId)}/invite`,
+    payload,
   );
 }
 
@@ -2257,7 +2515,12 @@ export async function getBusinessReviews(
 /** Flags a user to the moderation team. */
 export async function reportUser(
   token: string,
-  payload: { reported_user_id: string; reason: string; details?: string },
+  payload: {
+    reported_user_id: string;
+    reason: string;
+    details?: string;
+    deal_id?: string | null;
+  },
 ) {
   return send(token, 'POST', '/api/report-user', payload);
 }
@@ -2295,12 +2558,24 @@ export async function savePaymentInfo(
 export type PrivacyPrefs = {
   public_profile?: boolean;
   show_earnings?: boolean;
+  /** The key the website writes (CREATOR_PRIVACY_ROWS), so both clients share one value. */
+  allow_messages?: boolean;
+  /** Old app builds wrote this key; read as a fallback only, never written. */
   allow_direct_messages?: boolean;
 };
 
 export async function getPrivacyPrefs(token: string): Promise<PrivacyPrefs> {
   const me = (await get<Record<string, unknown>>(token, '/api/auth/me')) || {};
-  return ((me as any).privacy || {}) as PrivacyPrefs;
+  return normalizePrivacy((me as any).privacy);
+}
+
+/** Moves the legacy `allow_direct_messages` onto `allow_messages` and drops it. */
+export function normalizePrivacy(raw: unknown): PrivacyPrefs {
+  const { allow_direct_messages, ...rest } = (raw || {}) as PrivacyPrefs;
+  if (rest.allow_messages === undefined && allow_direct_messages !== undefined) {
+    rest.allow_messages = allow_direct_messages;
+  }
+  return rest;
 }
 
 export async function savePrivacyPrefs(

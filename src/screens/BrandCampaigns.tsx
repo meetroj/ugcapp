@@ -2,8 +2,9 @@ import { useLiveEffect } from "../liveUpdates";
 /**
  * Brand campaigns — the native replacement for the web
  * /dashboard/business/all-campaigns page. Lists the brand's campaigns from
- * GET /api/campaigns with status tabs. Read-only: opening a campaign or
- * posting a brief hands off to the existing web flow.
+ * GET /api/campaigns with the website's eight status tabs and counts. Opening
+ * a campaign goes to its detail page; opening a draft resumes it in the brief
+ * wizard; drafts and rejected briefs can be deleted (DELETE /api/campaigns/{id}).
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
@@ -16,10 +17,11 @@ import {
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
+import { Alert } from '../components/AppAlert';
 import Svg, { Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonCampaignList } from '../components/Skeleton';
-import { getCampaigns } from '../api';
+import { deleteCampaign, getCampaigns } from '../api';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -39,29 +41,27 @@ type Tab = {
 };
 
 /**
- * Tabs map to the campaign statuses the backend stores. Each carries the
+ * The website's eight tabs (BrandCampaigns.js TABS), same order and status
+ * mapping, so a paused / rejected brief is never invisible. Each carries the
  * colour of its status dot so the filter row reads as a legend too.
+ * `awaiting_brand_confirmation` (script written, the brand must confirm) is on
+ * no website tab and only shows under All there; here it sits under Pending
+ * because the brief is still pre-approval and the brand has to act on it.
  */
-const TABS: Tab[] = [
+export const TABS: Tab[] = [
+  { key: 'all', label: 'All Campaigns', statuses: [], dot: '#12143A' },
   {
-    key: 'active',
-    label: 'Active',
-    statuses: ['active', 'in_progress'],
-    dot: '#22C55E',
+    key: 'pending',
+    label: 'Pending',
+    statuses: ['pending_approval', 'awaiting_brand_confirmation'],
+    dot: '#8B5CF6',
   },
-  {
-    key: 'review',
-    label: 'In Review',
-    statuses: ['pending_approval', 'awaiting_brand_confirmation', 'work_submitted'],
-    dot: '#F5A623',
-  },
-  {
-    key: 'completed',
-    label: 'Complete',
-    statuses: ['completed'],
-    dot: '#3B82F6',
-  },
-  { key: 'draft', label: 'Draft', statuses: ['draft'], dot: '#9BA0B8' },
+  { key: 'live', label: 'Live', statuses: ['active', 'in_progress'], dot: '#22C55E' },
+  { key: 'review', label: 'In Review', statuses: ['work_submitted'], dot: '#F5A623' },
+  { key: 'completed', label: 'Completed', statuses: ['completed'], dot: '#3B82F6' },
+  { key: 'hold', label: 'On Hold', statuses: ['paused'], dot: '#F97316' },
+  { key: 'rejected', label: 'Rejected', statuses: ['rejected'], dot: '#E11D48' },
+  { key: 'drafts', label: 'Drafts', statuses: ['draft'], dot: '#9BA0B8' },
 ];
 
 /** Colour per status chip, so state is readable at a glance. */
@@ -69,11 +69,16 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> =
   {
     active: { bg: '#DCFCE7', fg: '#15803D', label: 'ACTIVE' },
     in_progress: { bg: '#DCFCE7', fg: '#15803D', label: 'ACTIVE' },
-    pending_approval: { bg: '#EDE9FE', fg: '#6D28D9', label: 'IN REVIEW' },
+    pending_approval: { bg: '#EDE9FE', fg: '#6D28D9', label: 'PENDING' },
+    // The website list shows "Live" here, which hides that the brand must act.
     awaiting_brand_confirmation: { bg: '#FEF3C7', fg: '#B45309', label: 'CONFIRM SCRIPT' },
     work_submitted: { bg: '#EDE9FE', fg: '#6D28D9', label: 'IN REVIEW' },
     completed: { bg: '#DBEAFE', fg: '#1D4ED8', label: 'COMPLETED' },
     draft: { bg: '#EEEFF4', fg: '#6E7391', label: 'DRAFT' },
+    rejected: { bg: '#FFE4E6', fg: '#BE123C', label: 'REJECTED' },
+    // Admin moderation: an on-hold or removed brief must never read as live.
+    paused: { bg: '#FFEDD5', fg: '#C2410C', label: 'ON HOLD' },
+    banned: { bg: '#EEEFF4', fg: '#6E7391', label: 'REMOVED' },
     cancelled: { bg: '#FFE4E6', fg: '#BE123C', label: 'CANCELLED' },
   };
 
@@ -119,6 +124,8 @@ function budgetPair(campaign: Campaign): { spent: string; total: string } {
     Number(campaign.budget_min) ||
     0;
   const spent =
+    // The website's first choice; GET /campaigns does not send it yet.
+    Number(campaign.escrow_amount) ||
     Number(campaign.spent) ||
     Number(campaign.amount_spent) ||
     Number(campaign.per_video_budget) ||
@@ -128,20 +135,25 @@ function budgetPair(campaign: Campaign): { spent: string; total: string } {
 }
 
 /**
- * How many creators the campaign involves. Prefers the accepted creators, then
- * the headcount asked for, then the bids received — whichever the document has.
+ * How many creators the campaign involves, the website's rule: the hired
+ * creators once anyone is hired, otherwise how many have bid. The headcount the
+ * brand asked for (creators_wanted) is not a count of creators on the brief.
  */
-function creatorCount(campaign: Campaign): number {
+export function creatorCount(campaign: Campaign): number {
   if (Array.isArray(campaign.selected_creators) && campaign.selected_creators.length) {
     return campaign.selected_creators.length;
   }
   if (campaign.selected_creator) return 1;
-  // creators_wanted is the field the backend stores; creators_needed is a legacy alias.
-  const wanted = Number(campaign.creators_wanted) || Number(campaign.creators_needed);
-  if (wanted) return wanted;
   if (Array.isArray(campaign.bids)) return campaign.bids.length;
-  return Number(campaign.applications) || 0;
+  return 0;
 }
+
+/** Newest first, like the website; the backend returns insertion order. */
+const createdAtMs = (campaign: Campaign) =>
+  new Date(String(campaign.createdAt || campaign.created_at || 0)).getTime() || 0;
+
+/** True when a failure is the phone being offline rather than the API refusing. */
+const isOffline = (err: unknown) => (err as { name?: string })?.name === 'NetworkError';
 
 /**
  * The deliverable line, e.g. "Reel (9:16, 15-30s)". The backend usually stores
@@ -227,6 +239,9 @@ function Icon({
       {name === 'arrow' && (
         <Path d="M4.5 12h14M13 6.5l5.5 5.5L13 17.5" {...line} />
       )}
+      {name === 'trash' && (
+        <Path d="M5 7h14M10 7V5h4v2m-7 0 .8 12h6.4L17 7" {...line} />
+      )}
       {name === 'dots' && (
         <Path d="M6 12h.01M12 12h.01M18 12h.01" {...line} strokeWidth={2.4} />
       )}
@@ -241,24 +256,32 @@ function BrandCampaigns({
   onMessages,
 }: Props) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  // Active is the default view: it's the list a brand needs most often.
-  const [tab, setTab] = useState<string>('active');
+  // All is the website's default tab; paused / rejected briefs only show there
+  // or under their own tab, so starting on a narrower one would hide them.
+  const [tab, setTab] = useState<string>('all');
   const listRef = useRef<FlatList<Campaign>>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Separates "no campaigns yet" from "the list could not be loaded".
-  const [failed, setFailed] = useState(false);
+  // Non-empty when the last load FAILED, so a broken request never passes for
+  // an empty account.
+  const [loadError, setLoadError] = useState('');
+  // Id of the draft being deleted: shows a busy card and ignores repeat taps.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deleting = useRef(false);
 
   const load = useCallback(async () => {
     try {
       // The backend scopes this to the signed-in brand's own briefs and
       // returns every status, which is what the tabs below filter on.
       setCampaigns(await getCampaigns(token));
-      setFailed(false);
-    } catch {
-      // Offline or the API is down. Keep whatever was already loaded rather
-      // than blanking the list; pull-to-refresh retries the real request.
-      setFailed(true);
+      setLoadError('');
+    } catch (err) {
+      // Keep whatever was already loaded rather than blanking the list.
+      setLoadError(
+        isOffline(err)
+          ? "You're offline. Check your connection and try again."
+          : (err as Error)?.message || 'Could not load your campaigns.',
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -269,18 +292,76 @@ function BrandCampaigns({
     load();
   }, [load]);
 
-  const groups = useMemo(() => Object.fromEntries(TABS.map(item => [
-    item.key,
-    item.statuses.length
-      ? campaigns.filter(campaign => item.statuses.includes(String(campaign.status)))
-      : campaigns,
-  ])), [campaigns]);
+  const retry = useCallback(() => {
+    setLoading(true);
+    load();
+  }, [load]);
+
+  const groups = useMemo(() => {
+    const newestFirst = [...campaigns].sort((a, b) => createdAtMs(b) - createdAtMs(a));
+    return Object.fromEntries(TABS.map(item => [
+      item.key,
+      item.statuses.length
+        ? newestFirst.filter(campaign => item.statuses.includes(String(campaign.status)))
+        : newestFirst,
+    ]));
+  }, [campaigns]);
   const visible = groups[tab] || campaigns;
+  const tabLabel = TABS.find(item => item.key === tab)?.label || '';
 
   const selectTab = useCallback((key: string) => {
     setTab(key);
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
+
+  // A draft is not a real campaign yet (the detail page would show it half
+  // empty and read-only), so it reopens in the brief wizard to be finished.
+  const openCampaign = useCallback((campaign: Campaign) => {
+    if (campaign.status === 'draft') {
+      onNavigate(`/dashboard/business/post-brief?draft=${encodeURIComponent(campaign.id)}`);
+      return;
+    }
+    onNavigate(`/campaigns/${campaign.id}`);
+  }, [onNavigate]);
+
+  // Only drafts / rejected briefs: nothing was ever held in escrow or shown to
+  // creators, so the backend allows a hard delete. Ask first, then do it.
+  const askDelete = useCallback((campaign: Campaign) => {
+    if (deleting.current) return;
+    const name = text(campaign.title, 'Untitled campaign');
+    Alert.alert(
+      'Delete this draft?',
+      `"${name}" will be deleted permanently. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete draft',
+          style: 'destructive',
+          onPress: async () => {
+            if (deleting.current) return;
+            deleting.current = true;
+            setDeletingId(campaign.id);
+            try {
+              await deleteCampaign(token, campaign.id);
+              // Drop it now so the card disappears, then resync with the server.
+              setCampaigns(current => current.filter(item => item.id !== campaign.id));
+              load();
+            } catch (err) {
+              Alert.alert(
+                'Could not delete the draft',
+                isOffline(err)
+                  ? "You're offline. Check your connection and try again."
+                  : (err as Error)?.message || 'Please try again.',
+              );
+            } finally {
+              deleting.current = false;
+              setDeletingId(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [load, token]);
 
   return (
     <View style={styles.screen}>
@@ -302,6 +383,7 @@ function BrandCampaigns({
             >
               {TABS.map(item => {
                 const active = tab === item.key;
+                const count = (groups[item.key] || []).length;
                 return (
                   <Pressable
                     key={item.key}
@@ -309,12 +391,13 @@ function BrandCampaigns({
                     onPress={() => selectTab(item.key)}
                     accessibilityRole="tab"
                     accessibilityLabel={`Filter: ${item.label}`}
+                    accessibilityValue={{ text: `${count} campaigns` }}
                     accessibilityState={{ selected: active }}
                   >
                     <Text
                       style={[styles.tabText, active && styles.tabTextActive]}
                     >
-                      {item.label}
+                      {item.label} ({count})
                     </Text>
                     <View
                       style={[styles.tabDot, { backgroundColor: item.dot }]}
@@ -328,7 +411,7 @@ function BrandCampaigns({
           ref={listRef}
           data={loading ? [] : visible}
           keyExtractor={campaign => campaign.id}
-          extraData={tab}
+          extraData={`${tab}|${deletingId}`}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[styles.page, styles.content]}
@@ -341,18 +424,60 @@ function BrandCampaigns({
               load();
             }} />
           }
+          // A refresh that failed while an older list is on screen: say so
+          // instead of quietly showing stale rows.
+          ListHeaderComponent={!loading && !!loadError && campaigns.length > 0 ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorBannerText}>
+                {loadError} Showing the last list we loaded.
+              </Text>
+              <TouchableOpacity
+                onPress={retry}
+                style={styles.retryLink}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading campaigns"
+              >
+                <Text style={styles.retryLinkText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : undefined}
           ListEmptyComponent={loading ? <SkeletonCampaignList count={4} /> : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>
-                {failed ? "Couldn't load campaigns" : 'Nothing here yet'}
+                {loadError
+                  ? "Couldn't load your campaigns"
+                  : tab === 'all'
+                  ? 'No campaigns yet'
+                  : `Nothing in "${tabLabel}"`}
               </Text>
               <Text style={styles.emptyText}>
-                {failed
-                  ? 'Check your connection and pull down to try again.'
+                {loadError
+                  ? loadError
                   : tab === 'all'
-                  ? 'Post your first brief to start receiving applications.'
-                  : 'No campaigns in this state right now.'}
+                  ? 'Launch your first campaign to start collaborating with creators and getting authentic content.'
+                  : 'Campaigns will appear here once they reach this stage.'}
               </Text>
+              {(!!loadError || tab === 'all' || campaigns.length > 0) && (
+                <TouchableOpacity
+                  style={styles.emptyBtn}
+                  onPress={
+                    loadError
+                      ? retry
+                      : tab === 'all'
+                      ? () => onNavigate('/dashboard/business/post-brief')
+                      : () => selectTab('all')
+                  }
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.emptyBtnText}>
+                    {loadError
+                      ? 'Try again'
+                      : tab === 'all'
+                      ? 'Post your first campaign'
+                      : 'Show all campaigns'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
           renderItem={({ item: campaign }) => {
@@ -368,13 +493,17 @@ function BrandCampaigns({
                 const count = creatorCount(campaign);
                 const budget = budgetPair(campaign);
                 const when = dateInfo(campaign);
+                const isDraft = status === 'draft';
+                const deletable = isDraft || status === 'rejected';
+                const busyDelete = deletingId === campaign.id;
                 return (
-                  // The whole card opens the campaign, so the title row no
-                  // longer needs its own "more" affordance.
+                  // The whole card opens the campaign (a draft reopens in the
+                  // wizard), so the title row needs no "more" affordance.
                   <TouchableOpacity
                     key={campaign.id}
-                    style={styles.card}
-                    onPress={() => onNavigate(`/campaigns/${campaign.id}`)}
+                    style={[styles.card, busyDelete && styles.cardBusy]}
+                    onPress={() => openCampaign(campaign)}
+                    disabled={busyDelete}
                     accessibilityRole="button"
                     accessibilityLabel={`${title}, ${chip.label}`}
                     activeOpacity={0.85}
@@ -402,6 +531,18 @@ function BrandCampaigns({
                           {chip.label}
                         </Text>
                       </View>
+                      {deletable && (
+                        <TouchableOpacity
+                          style={styles.trashBtn}
+                          onPress={() => askDelete(campaign)}
+                          disabled={busyDelete}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${isDraft ? 'draft' : 'rejected brief'} ${title}`}
+                        >
+                          <Icon name="trash" color="#BE123C" size={18} />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     {/* Format on its own line, as before. */}
@@ -428,7 +569,9 @@ function BrandCampaigns({
                         </Text>
                       </Text>
                       <View style={styles.detailBtn}>
-                        <Text style={styles.detailBtnText}>View Details</Text>
+                        <Text style={styles.detailBtnText}>
+                          {isDraft ? 'Edit Draft' : 'View Details'}
+                        </Text>
                         <Icon name="arrow" color="#3D4FD8" size={13} />
                       </View>
                     </View>
@@ -492,6 +635,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#EDEEF6',
+  },
+  cardBusy: { opacity: 0.5 },
+  // 36 + hitSlop 4 each side = the 44 point touch target.
+  trashBtn: {
+    width: scale(36),
+    height: scale(36),
+    borderRadius: scale(10),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF1F2',
   },
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: scale(10) },
   avatar: {
@@ -592,6 +745,43 @@ const styles = StyleSheet.create({
     fontSize: fontScale(12),
     color: '#858AA3',
     textAlign: 'center',
+  },
+  emptyBtn: {
+    marginTop: scale(16),
+    minHeight: scale(44),
+    paddingHorizontal: scale(20),
+    borderRadius: scale(13),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1B2A6B',
+  },
+  emptyBtnText: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  errorBanner: {
+    marginBottom: scale(10),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FFE6E7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+  },
+  errorBannerText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  retryLink: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(8),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryLinkText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#C4373B',
   },
 });
 

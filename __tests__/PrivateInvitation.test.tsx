@@ -2,18 +2,33 @@ import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
 import { TouchableOpacity } from 'react-native';
 import BrandChatThread from '../src/screens/BrandChatThread';
-import { getMessages, getConversations, sendActionCard } from '../src/api';
+import {
+  getMessages,
+  getConversations,
+  sendActionCard,
+  getChatWarnings,
+  getChatTyping,
+} from '../src/api';
 
 jest.mock('../src/api', () => ({
   getMessages: jest.fn(),
   getConversations: jest.fn(),
   sendActionCard: jest.fn(),
+  getChatWarnings: jest.fn(),
+  getChatTyping: jest.fn(),
+  sendChatTyping: jest.fn(),
+  sendMessage: jest.fn(),
+  reportUser: jest.fn(),
+  respondToActionCard: jest.fn(),
+  uploadMedia: jest.fn(),
 }));
 
 beforeEach(() => {
   jest.clearAllMocks();
   (getMessages as jest.Mock).mockResolvedValue([]);
   (getConversations as jest.Mock).mockResolvedValue([]);
+  (getChatWarnings as jest.Mock).mockResolvedValue({});
+  (getChatTyping as jest.Mock).mockResolvedValue(false);
 });
 
 const content = (node: any): string =>

@@ -28,17 +28,40 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
 import UploadProgressBar from '../components/UploadProgressBar';
 import {
+  addDealEvidence,
   archiveDeal,
+  getBusinessReviews,
+  getCampaign,
   getMyDeals,
   BACKEND_URL,
-  confirmDealReceipt,
   escalateDeal,
-  raiseDealDispute,
   reportDealDamage,
   respondToRevision,
-  submitWork,
   uploadMedia,
 } from '../api';
+import {
+  canEscalate,
+  canMarkReceived,
+  canReportDamage,
+  dealSteps,
+  dealSubs,
+  disputeOpen as isDisputeOpen,
+  fullBriefRows,
+  hasShipping,
+  isState,
+  needsRevision,
+  parseChange,
+  primaryAction,
+  REVISION_RESPONSE_LABEL,
+  stepIndexFor,
+  toChangeItems,
+} from '../dealRoom';
+import DealBooking from './DealBooking';
+import DealChat from './DealChat';
+import DeliveryAddress from './DeliveryAddress';
+import DeliveryReceipt from './DeliveryReceipt';
+import { HelpSheet, RateBrandSheet } from './DealSheets';
+import WorkSubmitSheet from './WorkSubmitSheet';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 /** Loose shape: the backend returns a wide payload and fields vary by state. */
@@ -61,9 +84,17 @@ type Props = {
   onChanged?: () => void;
   /** Leaves the detail view — used after archiving, which removes the deal. */
   onArchived?: () => void;
+  /** Opens on this tab (e.g. Deliverables from Active Work's "See what they asked for"). */
+  initialTab?: Tab;
 };
 
-type Tab = 'Overview' | 'Brief' | 'Deliverables' | 'Timeline' | 'Payments';
+export type Tab = 'Overview' | 'Brief' | 'Deliverables' | 'Timeline' | 'Payments';
+
+/**
+ * campaignId -> whether this creator already rated the brand, kept for the
+ * session so reopening a paid deal does not ask again or re-fetch.
+ */
+const RATE_STATE = new Map<string, 'todo' | 'done'>();
 
 const TABS: Tab[] = [
   'Overview',
@@ -72,40 +103,6 @@ const TABS: Tab[] = [
   'Timeline',
   'Payments',
 ];
-
-/**
- * The rail in the design. compute_deal_state() on the backend returns a
- * sentence, not an index, so each state is mapped onto one of these steps.
- */
-const STEPS = [
-  'Accepted',
-  'In Progress',
-  'Submitted',
-  'In Review',
-  'Approved',
-  'Paid',
-];
-
-const STEP_HINTS = [
-  'Deal accepted',
-  'Working on it',
-  'Waiting for you',
-  'Waiting for review',
-  'Waiting for approval',
-  'Waiting for payout',
-];
-
-/** Maps a backend state sentence to its index on the rail above. */
-function stepIndexFor(state: string): number {
-  const value = String(state || '').toLowerCase();
-  if (value.includes('paid')) return 5;
-  if (value.includes('approved')) return 4;
-  if (value.includes('submitted') || value.includes('awaiting review'))
-    return 3;
-  if (value.includes('revision')) return 2;
-  if (value.includes('content in progress')) return 1;
-  return 0;
-}
 
 const money = (value: unknown) =>
   `Rs. ${Number(value || 0).toLocaleString('en-IN', {
@@ -364,6 +361,7 @@ function DealDetails({
   unread = 0,
   onChanged,
   onArchived,
+  initialTab,
 }: Props) {
   const [deal, setDeal] = useState(initialDeal);
   const [refreshing, setRefreshing] = useState(false);
@@ -396,15 +394,16 @@ function DealDetails({
     });
     return () => { mounted.current = false; clearInterval(interval); subscription.remove(); };
   }, [refreshDeal]);
-  const [tab, setTab] = useState<Tab>('Overview');
+  const [tab, setTab] = useState<Tab>(initialTab || 'Overview');
+  // pickAndUpload() (damage / evidence photos) drives these two.
   const [submitting, setSubmitting] = useState(false);
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   /** Which deal action is in flight, so only that row shows a spinner. */
   const [busyAction, setBusyAction] = useState<string>('');
   /**
    * Open text prompt. Alert.prompt is iOS-only, so actions that need a
-   * sentence from the creator (dispute, escalation) render their own sheet
-   * rather than silently doing nothing on Android.
+   * sentence from the creator (escalation) render their own sheet rather than
+   * silently doing nothing on Android.
    */
   const [prompt, setPrompt] = useState<{
     title: string;
@@ -412,6 +411,22 @@ function DealDetails({
     onSubmit: (value: string) => void;
   } | null>(null);
   const [promptText, setPromptText] = useState('');
+  // Sheets opened from the deal: submit work, mark received, deal chat, help, rate.
+  const [workOpen, setWorkOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatPrefill, setChatPrefill] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [rateOpen, setRateOpen] = useState(false);
+  const [addressSignal, setAddressSignal] = useState(0);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const addressY = useRef(0);
+  // "View full brief": the deal only carries a few short sections, the site
+  // fetches the whole campaign once on demand.
+  const [briefOpen, setBriefOpen] = useState(false);
+  const [fullBrief, setFullBrief] = useState<Record<string, any> | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefError, setBriefError] = useState('');
 
   const campaign = deal.campaign || {};
   const brand = deal.brand || {};
@@ -421,7 +436,10 @@ function DealDetails({
   const revisions = deal.revision_tracker || {};
 
   const state = String(deal.current_state || '');
-  const step = stepIndexFor(state);
+  const ships = hasShipping(deal);
+  const steps = dealSteps(ships);
+  const hints = dealSubs(ships);
+  const step = stepIndexFor(state, ships);
   const reference = String(deal.deal_id || campaign.id || '')
     .toUpperCase()
     .slice(0, 14);
@@ -433,9 +451,13 @@ function DealDetails({
   const doneCount = versions.filter(
     version => String(version.status).toLowerCase() === 'approved',
   ).length;
+  // The payload's required_assets is an object of flags; the count is separate.
+  const requiredCount = Number(submission.required_count);
   const totalAssets = Math.max(
     1,
-    Array.isArray(submission.required_assets)
+    Number.isFinite(requiredCount) && requiredCount > 0
+      ? requiredCount
+      : Array.isArray(submission.required_assets)
       ? submission.required_assets.length
       : 1,
   );
@@ -461,9 +483,9 @@ function DealDetails({
 
   const campaignId = String(campaign.id || deal.campaign_id || '');
 
-  // Raw → edited flow (brief wants an edited cut): one file per stage. The raw video
-  // goes first; once the brand approves it the creator uploads the edited video
-  // (creator edits) or UGC.ad's editors take over (nothing more to upload).
+  // Raw → edited flow (brief wants an edited cut): the raw video goes first;
+  // once the brand approves it the creator uploads the edited video (creator
+  // edits) or UGC.ad's editors take over (nothing more to upload).
   const editFlow = deal.edit_flow || null;
   const stage: 'raw' | 'edited' | null =
     editFlow?.stage === 'raw' || editFlow?.stage === 'edited' ? editFlow.stage : null;
@@ -471,12 +493,6 @@ function DealDetails({
     stage === 'raw' ? 'raw video' : stage === 'edited' ? 'edited video' : 'work';
   const stageDue = stage === 'raw' ? editFlow?.raw_due : stage === 'edited' ? editFlow?.edited_due : null;
 
-  /**
-   * The built-in submit flow: pick a video, push it through the generic
-   * uploader, then POST /api/work/submit against this deal's campaign. A
-   * parent-supplied onSubmitWork still wins so a future dedicated screen can
-   * replace this without touching the button.
-   */
   /** Pick one file and push it through the generic uploader. Null when the picker
    *  was dismissed, which is a cancel and not an error. */
   const pickAndUpload = async (): Promise<string | null> => {
@@ -503,7 +519,12 @@ function DealDetails({
     return url;
   };
 
-  const handleSubmitWork = async () => {
+  /**
+   * Opens the submit-work sheet (several files, description, raw/edited zones;
+   * WorkSubmitSheet.tsx). A parent-supplied onSubmitWork still wins so a
+   * dedicated screen can replace it without touching the buttons.
+   */
+  const handleSubmitWork = () => {
     if (onSubmitWork) {
       onSubmitWork();
       return;
@@ -511,37 +532,7 @@ function DealDetails({
     if (!token || !campaignId) {
       return;
     }
-    try {
-      const url = await pickAndUpload();
-      if (!url) {
-        return;
-      }
-      await submitWork(token, campaignId, {
-        work_files: [url],
-        ...(stage === 'raw' ? { raw_files: [url] } : {}),
-        ...(stage === 'edited' ? { edited_files: [url] } : {}),
-      });
-      // Refresh the deal so the submitted version card appears immediately,
-      // instead of asking the creator to pull-to-refresh.
-      await refreshDeal();
-      onChanged?.();
-      Alert.alert(
-        stage === 'raw' ? 'Raw video submitted' : stage === 'edited' ? 'Edited video submitted' : 'Work submitted',
-        stage === 'raw'
-          ? 'Your raw video was sent to the brand. Once they approve it, ' +
-              (editFlow?.mode === 'ugc' ? "you're paid and UGC.ad edits it." : 'you can upload the edited video.')
-          : 'Your work was sent to the brand for review - it now shows under Deliverables.',
-      );
-    } catch (error) {
-      Alert.alert(
-        'Could not submit',
-        error instanceof Error && error.message
-          ? error.message
-          : 'Please try again.',
-      );
-    } finally {
-      setSubmitting(false);
-    }
+    setWorkOpen(true);
   };
 
   // The submit button only renders when tapping it can actually do something.
@@ -570,19 +561,20 @@ function DealDetails({
 
   const dealId = String(deal.deal_id || campaignId || '');
 
-  /** Runs one action with a spinner, an error alert and a refresh. */
+  /** Runs one action with a spinner, an error alert and a refresh. True when it worked. */
   const runAction = async (
     key: string,
     work: () => Promise<unknown>,
     done?: string,
-  ) => {
-    if (!token || !dealId || busyAction) return;
+  ): Promise<boolean> => {
+    if (!token || !dealId || busyAction) return false;
     setBusyAction(key);
     try {
       await work();
       if (done) Alert.alert('Done', done);
       await refreshDeal();
       onChanged?.();
+      return true;
     } catch (error) {
       Alert.alert(
         'Could not complete',
@@ -590,12 +582,12 @@ function DealDetails({
           ? error.message
           : 'Please try again.',
       );
+      return false;
     } finally {
       setBusyAction('');
       // pickAndUpload() raises `submitting` when it starts an upload and only
-      // the submit-work flow lowers it again. Actions that upload first
-      // (receipt, damage report) would otherwise leave the Submit button
-      // disabled for the rest of the screen's life.
+      // this clears it. Actions that upload first (damage report, evidence)
+      // would otherwise leave it set for the rest of the screen's life.
       setSubmitting(false);
     }
   };
@@ -609,30 +601,20 @@ function DealDetails({
     setPrompt({ title, message, onSubmit });
   };
 
-  const handleConfirmReceipt = () =>
-    Alert.alert(
-      'Confirm receipt',
-      // The unboxing clip is not optional: POST /deals/{id}/receipt rejects a
-      // receipt without one, because it is the evidence the right item turned
-      // up undamaged. So the picker opens as part of confirming, rather than
-      // the confirm failing afterwards with a validation error.
-      'Pick your unboxing video to confirm the product arrived. The delivery clock starts from here.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Choose video',
-          onPress: async () => {
-            const url = await pickAndUpload();
-            if (!url) return;
-            runAction(
-              'receipt',
-              () => confirmDealReceipt(token!, dealId, url),
-              'Receipt confirmed.',
-            );
-          },
-        },
-      ],
-    );
+  /** Refetch the deal and tell the parent, after a sheet changed something. */
+  const refreshAll = async () => {
+    await refreshDeal();
+    onChanged?.();
+  };
+
+  const openChat = (prefill = '') => {
+    setChatPrefill(prefill);
+    setChatOpen(true);
+  };
+
+  // Mark received opens DeliveryReceipt.tsx: unboxing video (required) plus
+  // the "damaged or wrong items" report, then POST /deals/{id}/receipt.
+  const handleConfirmReceipt = () => setReceiptOpen(true);
 
   const handleReportDamage = () =>
     Alert.alert(
@@ -664,57 +646,73 @@ function DealDetails({
       ],
     );
 
-  const handleRevisionResponse = () =>
+  // Open damage report: more proof can be added (the site's "Add Evidence").
+  const handleAddEvidence = () =>
+    Alert.alert('Add evidence', 'Add a photo or video of the problem.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Choose file',
+        onPress: async () => {
+          const url = await pickAndUpload();
+          if (!url) return;
+          runAction(
+            'evidence',
+            () => addDealEvidence(token!, dealId, [url]),
+            'Evidence added.',
+          );
+        },
+      },
+    ]);
+
+  // Revision answers (the site's RevisionTracker). Accepting is all-or-nothing:
+  // it agrees to the whole list; partial disagreement goes through chat or
+  // "beyond the brief".
+  const changeItems = useMemo(() => toChangeItems(revisions), [revisions]);
+
+  const acceptRevision = () =>
+    runAction(
+      'revision',
+      () => respondToRevision(token!, dealId, 'accepted', changeItems),
+      'Revision response submitted. Submit the updated cut under Deliverables.',
+    );
+
+  const flagRevision = () =>
     Alert.alert(
-      'Revision request',
-      revisions.latest_feedback
-        ? String(revisions.latest_feedback)
-        : 'The brand has asked for changes.',
+      'These changes go beyond the brief?',
+      'The brand is told. Talk it through in the deal chat. If you cannot agree you can escalate to admin.',
       [
-        { text: 'Close', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Flag as out of scope',
+          text: 'Yes, flag it',
           style: 'destructive',
           onPress: () =>
             runAction(
               'revision',
               () => respondToRevision(token!, dealId, 'flagged'),
-              'Flagged. Our team will look at whether this is inside the brief.',
-            ),
-        },
-        {
-          text: 'Accept',
-          onPress: () =>
-            runAction(
-              'revision',
-              () => respondToRevision(token!, dealId, 'accepted'),
-              'Accepted. Submit the updated cut under Deliverables.',
+              'Flagged. Work it out with the brand in the deal chat.',
             ),
         },
       ],
     );
 
-  const handleDispute = () =>
-    askForText(
-      'Raise a dispute',
-      'Describe what went wrong. Our team reviews every dispute before any money moves.',
-      value =>
-        runAction(
-          'dispute',
-          () => raiseDealDispute(token!, dealId, value),
-          'Dispute opened. The review team will be in touch.',
-        ),
+  // Talk first: opens the deal chat with a ready-to-send scope question.
+  const discussRevision = () =>
+    openChat(
+      'Hi! Before I start on these revisions, could we confirm exactly how many changes are included in this request so we are on the same page?',
     );
 
+  // Creators cannot raise a dispute (POST /deals/{id}/dispute answers 403).
+  // The only path is to escalate, and only after flagging a revision or
+  // reporting a damaged product (POST /deals/{id}/escalate answers 400 else).
   const handleEscalate = () =>
     askForText(
-      'Escalate to the review team',
-      'Add anything new since the dispute was opened.',
+      'Escalate to admin',
+      'Tell the review team what you could not resolve with the brand.',
       value =>
         runAction(
           'escalate',
           () => escalateDeal(token!, dealId, value),
-          'Escalated.',
+          'Escalated to admin. The review team will be in touch.',
         ),
     );
 
@@ -728,26 +726,209 @@ function DealDetails({
           text: 'Archive',
           style: 'destructive',
           onPress: async () => {
-            await runAction('archive', () => archiveDeal(token!, dealId));
-            onArchived?.();
+            // Only leave the screen when the server really archived it;
+            // otherwise the 10 s refresh would bring the deal straight back.
+            const ok = await runAction('archive', () => archiveDeal(token!, dealId));
+            if (ok) onArchived?.();
           },
         },
       ],
     );
 
-  // Which actions apply right now. The backend already returns the flags it
-  // knows about; the rest is read off the deal's own state so a button never
-  // appears for something the API would refuse.
+  // Which actions apply right now. The payload already carries the flags the
+  // backend knows about (can_mark_received, can_report_damage, ...); a button
+  // never appears for something the API would refuse.
   const shipment = (deal.shipment || {}) as Record<string, any>;
-  const canConfirmReceipt =
-    !!deal.requires_shipment &&
-    !deal.receipt?.received_at &&
-    (shipment.status === 'delivered' || !!shipment.tracking_number);
-  const revisionPending =
-    state.toLowerCase().includes('revision') &&
-    !revisions.latest_response;
-  const disputeOpen = !!deal.dispute?.status && deal.dispute.status !== 'closed';
-  const dealClosed = /complete|closed|paid/i.test(state);
+  const canConfirmReceipt = canMarkReceived(deal);
+  const damageAllowed = canReportDamage(deal);
+  const revisionPending = needsRevision(deal) && !revisions.creator_response;
+  const hasDispute = isDisputeOpen(deal);
+  const showEscalate = canEscalate(deal);
+  const isPaid = isState(deal, 'Paid - Complete');
+  const primary = primaryAction(deal);
+
+  // Rate the brand once the deal is paid (POST /reviews). Asked once per deal
+  // per session; stays silent if the reviews lookup fails.
+  const businessId = String(campaign.business_id || brand.id || '');
+  const [rated, setRated] = useState<'unknown' | 'todo' | 'done'>(
+    RATE_STATE.get(campaignId) || 'unknown',
+  );
+  useEffect(() => {
+    if (!isPaid || !token || !campaignId || !businessId || RATE_STATE.has(campaignId)) return;
+    getBusinessReviews(token, businessId)
+      .then(list => {
+        const done = list.some(
+          review => review.campaign_id === campaignId && review.reviewer_id === creator.id,
+        );
+        RATE_STATE.set(campaignId, done ? 'done' : 'todo');
+        if (!mounted.current) return;
+        setRated(done ? 'done' : 'todo');
+        if (!done) setRateOpen(true);
+      })
+      .catch(() => {});
+  }, [isPaid, token, campaignId, businessId, creator.id]);
+
+  const toggleFullBrief = async () => {
+    const next = !briefOpen;
+    setBriefOpen(next);
+    if (next && !fullBrief && token && campaignId) {
+      setBriefLoading(true);
+      setBriefError('');
+      try {
+        setFullBrief((await getCampaign(token, campaignId)) as Record<string, any>);
+      } catch (error) {
+        setBriefError(
+          error instanceof Error && error.message
+            ? error.message
+            : 'Could not load the full brief.',
+        );
+      } finally {
+        setBriefLoading(false);
+      }
+    }
+  };
+
+  /** The one "what do I do next" button (MyDealsPage getPrimaryActionConfig). */
+  const onPrimary = () => {
+    if (primary.disabled) return;
+    switch (primary.type) {
+      case 'receipt':
+        handleConfirmReceipt();
+        break;
+      case 'content':
+        handleSubmitWork();
+        break;
+      case 'add_evidence':
+        handleAddEvidence();
+        break;
+      case 'archive':
+        handleArchive();
+        break;
+      case 'ship_address':
+        // The address card lives on Overview: go there, open the form, scroll to it.
+        setTab('Overview');
+        setAddressSignal(n => n + 1);
+        setTimeout(() => scrollRef.current?.scrollTo({ y: addressY.current, animated: true }), 120);
+        break;
+      case 'track_shipment':
+        if (shipment.courier_tracking_url) {
+          Linking.openURL(String(shipment.courier_tracking_url)).catch(() => {});
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  /** Revision card: the brand's checklist plus how the creator answers it. */
+  const renderRevision = (withUpload = true) => {
+    if (!needsRevision(deal)) return null;
+    const response = revisions.creator_response as string | undefined;
+    const pushedBack = response === 'scope_creep' || response === 'partial_dispute';
+    const accepted = new Set(
+      (Array.isArray(revisions.accepted_changes) ? revisions.accepted_changes : []).map(
+        (item: unknown) => String(item).toLowerCase(),
+      ),
+    );
+    return (
+      <View style={styles.card} testID="revision-panel">
+        <Text style={styles.sectionTitle}>Revision requested</Text>
+        <Text style={styles.bodyText}>
+          {revisions.revision_limit != null
+            ? `Revision ${revisions.revision_count_used || 0} of ${revisions.revision_limit} used`
+            : `Revisions used: ${revisions.revision_count_used || 0}`}
+          {revisions.new_deadline_at ? ` · New deadline ${longDate(revisions.new_deadline_at)}` : ''}
+        </Text>
+        <Text style={styles.groupTitle}>
+          {`Requested changes${changeItems.length ? ` · ${changeItems.length}` : ''}`}
+        </Text>
+        {changeItems.length ? (
+          changeItems.map((line, index) => {
+            const change = parseChange(line);
+            return (
+              <View key={`${line}-${index}`} style={styles.changeRow}>
+                <Text style={styles.changeTick}>
+                  {response && accepted.has(line.toLowerCase()) ? '✓' : '•'}
+                </Text>
+                <Text style={styles.changeText}>
+                  {!!change.timestamp && <Text style={styles.changeChip}>{`${change.timestamp} `}</Text>}
+                  {!!change.severity && (
+                    <Text style={[styles.changeChip, change.severity === 'must-fix' && styles.changeMust]}>
+                      {change.severity === 'must-fix' ? 'Must-fix ' : 'Preference '}
+                    </Text>
+                  )}
+                  {change.text}
+                </Text>
+              </View>
+            );
+          })
+        ) : (
+          <Text style={styles.bodyText}>
+            The brand has asked for changes. Message them if you are unsure what to change.
+          </Text>
+        )}
+
+        {response ? (
+          <>
+            <Text style={[styles.bodyText, styles.mt12]}>
+              {REVISION_RESPONSE_LABEL[response] || `Response recorded: ${response}`}
+            </Text>
+            {pushedBack && !!token && (
+              <View style={styles.revisionButtons}>
+                <TouchableOpacity style={styles.ghostBtn} onPress={() => openChat()} accessibilityRole="button">
+                  <Text style={styles.ghostBtnText}>Chat with brand</Text>
+                </TouchableOpacity>
+                {showEscalate && (
+                  <TouchableOpacity
+                    style={styles.ghostBtn}
+                    onPress={handleEscalate}
+                    disabled={busyAction === 'escalate'}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[styles.ghostBtnText, styles.actionWarn]}>Escalate to admin</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </>
+        ) : (
+          !!token && (
+            <View style={styles.revisionButtons}>
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={acceptRevision}
+                disabled={!revisionPending || busyAction === 'revision'}
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryBtnText}>Accept &amp; revise</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.ghostBtn} onPress={discussRevision} accessibilityRole="button">
+                <Text style={styles.ghostBtnText}>Chat with brand about changes</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.ghostBtn}
+                onPress={flagRevision}
+                disabled={busyAction === 'revision'}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.ghostBtnText, styles.actionWarn]}>These changes go beyond the brief</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        )}
+
+        {withUpload && deal.can_submit_content && canSubmitWork && (
+          <TouchableOpacity
+            style={[styles.primaryBtn, styles.mt12]}
+            onPress={handleSubmitWork}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Upload revised video</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
 
   const renderVersionCards = () => (versions.map((version, index) => (
                 <View key={`${version.stage || ''}${version.version ?? index}`} style={styles.card}>
@@ -798,6 +979,13 @@ function DealDetails({
                           style={styles.thumb}
                           resizeMode="cover"
                         />
+                        {/* Until the brand approves, the website shows the creator's own
+                            upload under a UGC watermark; same cue here. */}
+                        {String(version.status).toLowerCase() !== 'approved' && (
+                          <View style={styles.watermark} pointerEvents="none">
+                            <Text style={styles.watermarkText}>UGC.ad{'\n'}preview</Text>
+                          </View>
+                        )}
                         <View style={styles.thumbPlay}>
                           <Glyph name="play" color="#FFFFFF" />
                         </View>
@@ -899,6 +1087,7 @@ function DealDetails({
       </View>
 
       <ScrollView
+        ref={scrollRef}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => {
           setRefreshing(true);
           refreshDeal();
@@ -978,7 +1167,7 @@ function DealDetails({
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.railScroll}
           >
-            {STEPS.map((label, index) => {
+            {steps.map((label, index) => {
               const done = index < step;
               const active = index === step;
               return (
@@ -1021,7 +1210,7 @@ function DealDetails({
                         </Text>
                       )}
                     </View>
-                    {index < STEPS.length - 1 && (
+                    {index < steps.length - 1 && (
                       <View
                         style={[
                           styles.railLine,
@@ -1038,13 +1227,39 @@ function DealDetails({
                   >
                     {label}
                   </Text>
-                  <Text style={styles.railHint}>{STEP_HINTS[index]}</Text>
+                  <Text style={styles.railHint}>{hints[index]}</Text>
                 </View>
               );
             })}
           </ScrollView>
       <VideoPreview uri={previewUri} onClose={() => setPreviewUri(null)} />
         </View>
+
+        {/* A direct booking is not real work until the creator answers it. */}
+        {!!token && <DealBooking deal={deal} token={token} onDone={refreshAll} />}
+
+        {/* The one thing to do next (the site's primary action button). */}
+        {!!token && primary.type !== 'passive' && !primary.disabled && (
+          <TouchableOpacity
+            style={[styles.primaryBtn, styles.nextBtn]}
+            onPress={onPrimary}
+            disabled={!!busyAction}
+            accessibilityRole="button"
+            accessibilityLabel={primary.label}
+            testID="next-action"
+          >
+            <Text style={styles.primaryBtnText}>{primary.label}</Text>
+          </TouchableOpacity>
+        )}
+        {!!token && primary.disabled && (primary.type === 'ship_address_done' || primary.type === 'track_shipment') && (
+          <View style={styles.card}>
+            <Text style={styles.bodyText}>
+              {primary.type === 'track_shipment'
+                ? `${primary.label}. The brand has not added a tracking link yet.`
+                : primary.label}
+            </Text>
+          </View>
+        )}
 
         {/* --- tabs --- */}
         <ScrollView
@@ -1072,6 +1287,44 @@ function DealDetails({
         </ScrollView>
 
         {/* ---------------- OVERVIEW ---------------- */}
+        {tab === 'Overview' && ships && !!token && !!campaignId && (
+          <View onLayout={event => { addressY.current = event.nativeEvent.layout.y; }}>
+            <DeliveryAddress
+              token={token}
+              campaignId={campaignId}
+              openSignal={addressSignal}
+              onSaved={refreshAll}
+            />
+            <View style={[styles.card, styles.shipCard]}>
+              <Text style={styles.sectionTitle}>Shipment Tracking</Text>
+              <KeyValue label="Courier Partner" value={String(shipment.courier_name || shipment.courier_partner || 'Not assigned')} />
+              <KeyValue label="Tracking ID" value={String(shipment.tracking_id || 'Pending')} />
+              <KeyValue label="Status" value={String(shipment.courier_status || 'Pending')} />
+              <KeyValue
+                label="Expected Delivery"
+                value={
+                  shipment.expected_delivery_at
+                    ? shortDate(shipment.expected_delivery_at)
+                    : deal.receipt?.received_at
+                    ? 'Delivered'
+                    : 'Awaiting courier update'
+                }
+              />
+              {!!deal.receipt?.received_at && (
+                <KeyValue label="Date Received" value={shortDate(deal.receipt.received_at)} />
+              )}
+              {!!shipment.courier_tracking_url && (
+                <TouchableOpacity
+                  style={[styles.ghostBtn, styles.mt12]}
+                  onPress={() => Linking.openURL(String(shipment.courier_tracking_url)).catch(() => {})}
+                  accessibilityRole="link"
+                >
+                  <Text style={styles.ghostBtnText}>Track Package</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
         {tab === 'Overview' && (
           <View style={styles.card}>
             <Accordion
@@ -1130,19 +1383,7 @@ function DealDetails({
               )}
             </Accordion>
 
-            {state.toLowerCase().includes('revision') && (
-              <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Revision requested</Text>
-                <Text style={styles.bodyText}>{String(revisions.latest_feedback || 'Review the requested changes and upload a revised video. Your previous upload stays below.')}</Text>
-                {deal.can_submit_content && canSubmitWork && (
-                  <TouchableOpacity style={[styles.primaryBtn, styles.mt12]} onPress={handleSubmitWork}
-                    disabled={submitting} accessibilityRole="button">
-                    <Text style={styles.primaryBtnText}>{submitting ? 'Uploading…' : 'Upload revised video'}</Text>
-                  </TouchableOpacity>
-                )}
-                <UploadProgressBar percent={submitting ? uploadPercent : null} />
-              </View>
-            )}
+            {renderRevision()}
             {versions.length > 0 && renderVersionCards()}
             <Accordion
               icon="pulse"
@@ -1165,19 +1406,27 @@ function DealDetails({
             </Accordion>
 
             {/* Everything the deal can do from here. Each row only appears
-                when the backend would actually accept it, so the card is
-                empty rather than misleading on a deal with nothing to do. */}
+                when the backend would actually accept it. Creators have no
+                "Raise a dispute" row: POST /deals/{id}/dispute answers 403
+                for them, so the path is flag -> chat -> escalate. */}
             {!!token && !!dealId && (
               <>
+                {hasDispute && (
+                  <View style={styles.notice}>
+                    <Text style={styles.noticeText}>
+                      A dispute is open on this deal. The review team is handling it and will contact you. Watch your notifications for updates.
+                    </Text>
+                  </View>
+                )}
                 {canConfirmReceipt && (
                   <ActionRow
-                    label="Confirm receipt"
-                    caption="The product arrived and matches the brief"
+                    label="Mark received"
+                    caption="Upload your unboxing video. Report damage here too"
                     busy={busyAction === 'receipt'}
                     onPress={handleConfirmReceipt}
                   />
                 )}
-                {canConfirmReceipt && (
+                {damageAllowed && (
                   <ActionRow
                     label="Report damaged or wrong product"
                     caption="Sends photo evidence to the brand and our team"
@@ -1186,33 +1435,32 @@ function DealDetails({
                     onPress={handleReportDamage}
                   />
                 )}
-                {revisionPending && (
+                {showEscalate && (
                   <ActionRow
-                    label="Respond to revision request"
-                    caption="Accept the changes, or flag them as out of scope"
-                    busy={busyAction === 'revision'}
-                    onPress={handleRevisionResponse}
-                  />
-                )}
-                {!disputeOpen && !dealClosed && (
-                  <ActionRow
-                    label="Raise a dispute"
-                    caption="Escrow is held until the review team rules"
-                    tone="warn"
-                    busy={busyAction === 'dispute'}
-                    onPress={handleDispute}
-                  />
-                )}
-                {disputeOpen && (
-                  <ActionRow
-                    label="Escalate to the review team"
-                    caption="Add new information to the open dispute"
+                    label="Escalate to admin"
+                    caption="Raise it with the brand first. Escalate if you cannot resolve it together"
                     tone="warn"
                     busy={busyAction === 'escalate'}
                     onPress={handleEscalate}
                   />
                 )}
-                {dealClosed && (
+                <ActionRow
+                  label="Open deal chat"
+                  caption={
+                    Number(deal.unread_count) > 0
+                      ? `${deal.unread_count} unread from the brand`
+                      : 'Message the brand about this deal'
+                  }
+                  onPress={() => openChat()}
+                />
+                {isPaid && rated !== 'done' && (
+                  <ActionRow
+                    label="Rate the brand"
+                    caption="Tell other creators how the collaboration went"
+                    onPress={() => setRateOpen(true)}
+                  />
+                )}
+                {isPaid && (
                   <ActionRow
                     label="Archive this deal"
                     caption="Hide it from your active list"
@@ -1222,6 +1470,11 @@ function DealDetails({
                 )}
               </>
             )}
+            <ActionRow
+              label="Get help"
+              caption="Email, call or WhatsApp our team"
+              onPress={() => setHelpOpen(true)}
+            />
           </View>
         )}
 
@@ -1262,6 +1515,42 @@ function DealDetails({
                   <Text style={styles.bodyText}>{section.content}</Text>
                 </View>
               ))}
+
+            {!!campaignId && !!token && (
+              <TouchableOpacity
+                style={[styles.ghostBtn, styles.mt12]}
+                onPress={toggleFullBrief}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: briefOpen }}
+              >
+                <Text style={styles.ghostBtnText}>{briefOpen ? 'Show less' : 'View full brief'}</Text>
+              </TouchableOpacity>
+            )}
+            {briefOpen && briefLoading && <ActivityIndicator style={styles.mt12} color="#3D4FD8" />}
+            {briefOpen && !!briefError && (
+              <View style={styles.mt12}>
+                <Text style={styles.errorText}>{briefError}</Text>
+                <TouchableOpacity
+                  style={[styles.ghostBtn, styles.mt12]}
+                  onPress={() => { setBriefOpen(false); setTimeout(toggleFullBrief, 0); }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.ghostBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {briefOpen && !!fullBrief && (
+              fullBriefRows(fullBrief).length ? (
+                fullBriefRows(fullBrief).map(row => (
+                  <View key={row.label} style={styles.briefSection}>
+                    <Text style={styles.groupTitle}>{row.label}</Text>
+                    <Text style={styles.bodyText}>{row.value}</Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={[styles.bodyText, styles.mt12]}>No additional brief details available.</Text>
+              )
+            )}
           </View>
         )}
 
@@ -1317,12 +1606,7 @@ function DealDetails({
               </View>
             )}
 
-            {state.toLowerCase().includes('revision') && (
-              <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Revision requested</Text>
-                <Text style={styles.bodyText}>{String(revisions.latest_feedback || 'Upload a revised version below. Previous uploads remain available above.')}</Text>
-              </View>
-            )}
+            {renderRevision(false)}
             {deal.can_submit_content && canSubmitWork && !!stageDue && (
               <Text style={styles.bodyText}>
                 {stage === 'raw' ? 'Raw video' : 'Edited video'} due by {longDate(stageDue)}
@@ -1474,7 +1758,7 @@ function DealDetails({
 
             <TouchableOpacity
               style={styles.helpCard}
-              onPress={onChat}
+              onPress={() => setHelpOpen(true)}
               activeOpacity={0.85}
               accessibilityRole="button"
             >
@@ -1483,7 +1767,7 @@ function DealDetails({
               </View>
               <View style={styles.flex}>
                 <Text style={styles.txTitle}>Need Help?</Text>
-                <Text style={styles.txDate}>Contact Support</Text>
+                <Text style={styles.txDate}>Email, call or WhatsApp our team</Text>
               </View>
               <Glyph name="chevron" color="#8A8FA8" />
             </TouchableOpacity>
@@ -1546,6 +1830,46 @@ function DealDetails({
           </View>
         </View>
       </Modal>
+
+      {!!token && (
+        <>
+          <WorkSubmitSheet
+            visible={workOpen}
+            token={token}
+            deal={deal}
+            onClose={() => setWorkOpen(false)}
+            onSubmitted={refreshAll}
+          />
+          <DeliveryReceipt
+            visible={receiptOpen}
+            token={token}
+            dealId={dealId}
+            canMark={canConfirmReceipt}
+            onClose={() => setReceiptOpen(false)}
+            onDone={refreshAll}
+          />
+          <DealChat
+            visible={chatOpen}
+            token={token}
+            dealId={dealId}
+            title={`${brand.name || 'Brand'} \u00B7 ${campaign.title || 'Deal chat'}`}
+            messages={Array.isArray(deal.chat_summary?.messages) ? deal.chat_summary.messages : []}
+            prefill={chatPrefill}
+            onClose={() => { setChatOpen(false); setChatPrefill(''); }}
+            onSent={refreshDeal}
+          />
+          <RateBrandSheet
+            visible={rateOpen}
+            token={token}
+            campaignId={campaignId}
+            businessId={businessId}
+            brandName={String(brand.name || '')}
+            onClose={() => setRateOpen(false)}
+            onDone={() => { RATE_STATE.set(campaignId, 'done'); setRated('done'); }}
+          />
+        </>
+      )}
+      <HelpSheet visible={helpOpen} onClose={() => setHelpOpen(false)} />
     </View>
   );
 }
@@ -1896,7 +2220,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: scale(7),
-    height: scale(42),
+    minHeight: scale(44),
+    paddingHorizontal: scale(10),
     borderRadius: scale(10),
     borderWidth: 1,
     borderColor: '#D9DCF3',
@@ -2098,6 +2423,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#ECEDF6',
+  },
+
+  nextBtn: { marginBottom: scale(12) },
+  shipCard: { marginTop: scale(12) },
+  errorText: { fontSize: fontScale(12), color: '#C0392B' },
+  notice: {
+    marginTop: scale(10),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FFF4E0',
+  },
+  noticeText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#8A5A00' },
+  revisionButtons: { marginTop: scale(12), gap: scale(8) },
+  changeRow: { flexDirection: 'row', marginTop: scale(6) },
+  changeTick: { width: scale(18), fontSize: fontScale(13), color: '#12854A' },
+  changeText: { flex: 1, fontSize: fontScale(13), lineHeight: fontScale(19), color: '#25274C' },
+  changeChip: { fontSize: fontScale(11), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#6B7094' },
+  changeMust: { color: '#C0392B' },
+  watermark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  watermarkText: {
+    textAlign: 'center',
+    fontSize: fontScale(22),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.35)',
+    transform: [{ rotate: '-24deg' }],
   },
 });
 

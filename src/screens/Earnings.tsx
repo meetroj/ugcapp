@@ -2,41 +2,52 @@ import { useLiveEffect } from "../liveUpdates";
 /**
  * Creator earnings screen. Replaces the WebView's /withdrawal route.
  *
- * There is no single creator-earnings endpoint on the backend, so the figures
- * are assembled client-side from three existing sources:
- *   - /api/auth/me            -> available balance (users.balance)
- *   - /api/deals/my           -> per-deal escrow: held (pending) vs released
- *   - /api/withdrawal/history -> withdrawal totals and the Withdrawals tab
+ * Same three sources as the website's Earnings page (PayoutWithLayout.js), so
+ * the figures cannot disagree between the two:
+ *   - /api/payout/overview    -> balance, pending release (net of fees),
+ *                                paid this month, all-time earnings
+ *   - /api/payouts/receipts   -> "Money In" rows with the fee / TDS / penalty
+ *                                breakdown (type "earning")
+ *   - /api/withdrawal/history -> the Withdrawals tab (searchable, filterable)
  *
- * "Money In" rows are the released escrows; "Withdrawals" are the payout
- * requests. Both lists are sorted newest first and share one row component.
+ * Money In and Withdrawals are both sorted newest first.
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Text } from '../components/Text';
+import { Text, TextInput } from '../components/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import {
-  BACKEND_URL,
-  getMe,
-  getMyDeals,
+  getPayoutOverview,
+  getPayoutReceipts,
   getWithdrawalHistory,
   type AuthUser,
 } from '../api';
 import AppHeader from '../components/AppHeader';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import {
+  MIN_WITHDRAWAL_AMOUNT,
+  WITHDRAWAL_FILTERS,
+  errorMessage,
+  filterWithdrawals,
+  inr as money,
+  receiptBreakdown,
+  withdrawalCode,
+  withdrawalMethodLabel,
+  withdrawalStatusLabel,
+} from '../payoutRules';
 
 type Props = {
   token: string;
-  session: AuthUser;
-  /** Opens the site's withdrawal form in the WebView. */
+  /** Kept for the caller; balances now come from /api/payout/overview. */
+  session?: AuthUser;
+  /** Opens the native withdrawal form. */
   onRequestWithdrawal: () => void;
   /** Opens the Messages page from the header chat button. */
   onMessages?: () => void;
@@ -46,18 +57,16 @@ type Props = {
   unread?: number;
 };
 
-type Deal = {
-  deal_id?: string;
-  current_state?: string;
-  brand?: { name?: string; logo_url?: string };
-  escrow?: {
-    status?: 'held' | 'released' | 'on_hold';
-    held_amount?: number;
-    net_payable?: number;
-    estimated_payout_at?: string;
-  };
-  campaign?: { title?: string; completed_at?: string; updated_at?: string };
+type Overview = {
+  balance?: number;
+  pending_release?: number;
+  paid_this_month?: number;
+  all_time_earnings?: number;
+  deals_paid?: number;
+  deals_paid_this_month?: number;
 };
+
+type Receipt = Record<string, any> & { id?: string; type?: string };
 
 type Withdrawal = {
   id?: string;
@@ -67,7 +76,7 @@ type Withdrawal = {
   payment_method?: string;
 };
 
-/** One row in either transaction list, normalised from a deal or a withdrawal. */
+/** One row in either transaction list, normalised from a receipt or a withdrawal. */
 type Entry = {
   key: string;
   title: string;
@@ -75,25 +84,15 @@ type Entry = {
   amount: number;
   /** Money in is credited (+), withdrawals are debited (-). */
   credit: boolean;
+  /** Label shown in the badge (Paid, Processing, Pending, Disputed). */
   status: string;
   /** ISO string kept for sorting; formatted only at render time. */
   timestamp: string;
-  logo?: string | null;
+  /** Tap-to-expand lines (fee, TDS, penalty) for Money In rows. */
+  details?: Array<[string, string]>;
 };
-
-const money = (value: unknown) =>
-  `₹${Number(value || 0).toLocaleString('en-IN', {
-    maximumFractionDigits: 0,
-  })}`;
 
 const toNumber = (value: unknown) => Number(value || 0) || 0;
-
-const photoUrl = (path: unknown) => {
-  if (typeof path !== 'string' || !path) {
-    return null;
-  }
-  return /^https?:\/\//i.test(path) ? path : `${BACKEND_URL}${path}`;
-};
 
 const parseDate = (value: unknown) => {
   if (typeof value !== 'string' || !value) {
@@ -124,19 +123,11 @@ const byNewest = (a: Entry, b: Entry) => {
 };
 
 const STATUS_TINT: Record<string, { bg: string; fg: string }> = {
-  completed: { bg: '#E7F7EE', fg: '#12854A' },
-  released: { bg: '#E7F7EE', fg: '#12854A' },
-  approved: { bg: '#E7F7EE', fg: '#12854A' },
-  paid: { bg: '#E7F7EE', fg: '#12854A' },
-  pending: { bg: '#FFF4E0', fg: '#A96A05' },
-  processing: { bg: '#FFF4E0', fg: '#A96A05' },
-  held: { bg: '#FFF4E0', fg: '#A96A05' },
-  rejected: { bg: '#FDECEC', fg: '#C33A3A' },
-  failed: { bg: '#FDECEC', fg: '#C33A3A' },
+  Paid: { bg: '#E7F7EE', fg: '#12854A' },
+  Pending: { bg: '#FFF4E0', fg: '#A96A05' },
+  Processing: { bg: '#E8F0FE', fg: '#2C5BC4' },
+  Disputed: { bg: '#FDECEC', fg: '#C33A3A' },
 };
-
-/** Statuses that mean the money actually left escrow and reached the creator. */
-const SETTLED = ['approved', 'completed', 'paid'];
 
 function WalletIcon() {
   return (
@@ -199,83 +190,114 @@ function StatTile({
 }
 
 function TransactionRow({ entry }: { entry: Entry }) {
-  const tint = STATUS_TINT[entry.status.toLowerCase()] || {
+  const [open, setOpen] = useState(false);
+  const tint = STATUS_TINT[entry.status] || {
     bg: '#EEF0F6',
     fg: '#5A6072',
   };
-  const uri = photoUrl(entry.logo);
   const date = formatDate(entry.timestamp);
+  const expandable = !!entry.details;
 
   return (
-    <View style={styles.txRow}>
-      <View style={styles.txLogo}>
-        {uri ? (
-          <Image source={{ uri }} style={styles.txLogoImage} />
-        ) : (
+    <View style={styles.txItem}>
+      <TouchableOpacity
+        style={styles.txRow}
+        onPress={() => setOpen(value => !value)}
+        disabled={!expandable}
+        activeOpacity={0.8}
+        accessibilityRole={expandable ? 'button' : undefined}
+        accessibilityState={expandable ? { expanded: open } : undefined}
+        accessibilityLabel={
+          expandable ? `${entry.title}, ${entry.subtitle}. Show breakdown` : undefined
+        }
+      >
+        <View style={styles.txLogo}>
           <Text style={styles.txLogoText}>
             {entry.title.charAt(0).toUpperCase()}
           </Text>
-        )}
-      </View>
-
-      <View style={styles.txCopy}>
-        <Text style={styles.txTitle} numberOfLines={1}>
-          {entry.title}
-        </Text>
-        <Text style={styles.txSubtitle} numberOfLines={1}>
-          {entry.subtitle}
-        </Text>
-        {!!date && <Text style={styles.txDate}>{date}</Text>}
-      </View>
-
-      <View style={styles.txRight}>
-        <Text style={[styles.txAmount, !entry.credit && styles.txAmountDebit]}>
-          {entry.credit ? '+' : '-'}
-          {money(entry.amount)}
-        </Text>
-        <View style={[styles.txBadge, { backgroundColor: tint.bg }]}>
-          <Text style={[styles.txBadgeText, { color: tint.fg }]}>
-            {entry.status}
-          </Text>
         </View>
-      </View>
+
+        <View style={styles.txCopy}>
+          <Text style={styles.txTitle} numberOfLines={1}>
+            {entry.title}
+          </Text>
+          <Text style={styles.txSubtitle} numberOfLines={1}>
+            {entry.subtitle}
+          </Text>
+          {!!date && <Text style={styles.txDate}>{date}</Text>}
+        </View>
+
+        <View style={styles.txRight}>
+          <Text style={[styles.txAmount, !entry.credit && styles.txAmountDebit]}>
+            {entry.credit ? '+' : '-'}
+            {money(entry.amount)}
+          </Text>
+          <View style={[styles.txBadge, { backgroundColor: tint.bg }]}>
+            <Text style={[styles.txBadgeText, { color: tint.fg }]}>
+              {entry.status}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {open && entry.details ? (
+        <View style={styles.txDetails}>
+          {entry.details.map(([label, value]) => (
+            <View key={label} style={styles.txDetailRow}>
+              <Text style={styles.txDetailLabel}>{label}</Text>
+              <Text style={styles.txDetailValue}>{value}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 function Earnings({
   token,
-  session,
   onRequestWithdrawal,
   onMessages,
   onNotifications,
   unread = 0,
 }: Props) {
-  const [profile, setProfile] = useState<AuthUser>(session);
-  const [deals, setDeals] = useState<Deal[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [tab, setTab] = useState<'in' | 'out'>('in');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Set when any source failed, so a missing figure is never shown as 0.
+  const [loadError, setLoadError] = useState('');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
 
   const load = useCallback(async () => {
-    // Settled, not raced: a missing withdrawal history must still leave the
-    // balance and the deal list on screen.
+    // Settled, not raced: one failing source must not blank the other two.
     const results = await Promise.allSettled([
-      getMe(token),
-      getMyDeals(token),
+      getPayoutOverview(token),
+      getPayoutReceipts(token),
       getWithdrawalHistory(token),
     ]);
 
     if (results[0].status === 'fulfilled') {
-      setProfile(results[0].value as AuthUser);
+      setOverview(results[0].value as Overview);
     }
     if (results[1].status === 'fulfilled') {
-      setDeals(results[1].value as Deal[]);
+      // Receipts cover both directions; Money In only wants earnings.
+      setReceipts(
+        (results[1].value as Receipt[]).filter(r => r.type === 'earning'),
+      );
     }
     if (results[2].status === 'fulfilled') {
-      setWithdrawals(results[2].value as Withdrawal[]);
+      setWithdrawals(results[2].value as unknown as Withdrawal[]);
     }
+    const failed = results.find(r => r.status === 'rejected') as
+      | PromiseRejectedResult
+      | undefined;
+    setLoadError(
+      failed ? errorMessage(failed.reason, 'Could not load your earnings.') : '',
+    );
   }, [token]);
 
   useLiveEffect(() => {
@@ -295,73 +317,54 @@ function Earnings({
     load().finally(() => setRefreshing(false));
   }, [load]);
 
-  // Released escrows are money the creator has earned; held ones are still
-  // locked against an in-flight deal.
-  const released = useMemo(
-    () => deals.filter(deal => deal.escrow?.status === 'released'),
-    [deals],
-  );
-
-  const pendingRelease = useMemo(
-    () =>
-      deals
-        .filter(deal => deal.escrow?.status === 'held')
-        .reduce((sum, deal) => sum + toNumber(deal.escrow?.held_amount), 0),
-    [deals],
-  );
+  const onRetry = useCallback(() => {
+    setLoading(true);
+    load().finally(() => setLoading(false));
+  }, [load]);
 
   const moneyIn = useMemo<Entry[]>(
     () =>
-      released
-        .map((deal, index) => ({
-          key: deal.deal_id || `deal-${index}`,
-          title: deal.campaign?.title || deal.brand?.name || 'Campaign',
-          subtitle: deal.current_state || 'Payment released',
-          amount: toNumber(
-            deal.escrow?.net_payable ?? deal.escrow?.held_amount,
-          ),
+      receipts
+        .map((r, index) => ({
+          key: r.id || `receipt-${index}`,
+          title: r.brand_name || 'Brand',
+          subtitle: r.campaign_title || 'Campaign',
+          amount: toNumber(r.net_amount),
           credit: true,
-          status: 'Completed',
-          timestamp:
-            deal.escrow?.estimated_payout_at ||
-            deal.campaign?.completed_at ||
-            deal.campaign?.updated_at ||
-            '',
-          logo: deal.brand?.logo_url,
+          status: 'Paid',
+          timestamp: r.created_at || '',
+          details: receiptBreakdown(r),
         }))
         .sort(byNewest),
-    [released],
+    [receipts],
+  );
+
+  const visibleWithdrawals = useMemo(
+    () => filterWithdrawals(withdrawals, statusFilter, search),
+    [withdrawals, statusFilter, search],
   );
 
   const moneyOut = useMemo<Entry[]>(
     () =>
-      withdrawals
+      visibleWithdrawals
         .map((item, index) => ({
           key: item.id || `wd-${index}`,
-          title: 'Withdrawal',
-          subtitle: item.payment_method
-            ? String(item.payment_method).toUpperCase()
-            : 'Payout request',
+          title: `Withdrawal ${withdrawalCode(item.id)}`,
+          subtitle: withdrawalMethodLabel(item.payment_method),
           amount: toNumber(item.amount),
           credit: false,
-          status: item.status ? String(item.status) : 'pending',
+          status: withdrawalStatusLabel(item.status),
           timestamp: item.requested_at || '',
-          logo: null,
         }))
         .sort(byNewest),
-    [withdrawals],
-  );
-
-  const allTime = useMemo(
-    () => moneyIn.reduce((sum, entry) => sum + entry.amount, 0),
-    [moneyIn],
+    [visibleWithdrawals],
   );
 
   // Only settled payouts count as withdrawn; pending ones are still in flight.
   const paidWithdrawals = useMemo(
     () =>
-      withdrawals.filter(item =>
-        SETTLED.includes(String(item.status || '').toLowerCase()),
+      withdrawals.filter(
+        item => withdrawalStatusLabel(item.status) === 'Paid',
       ),
     [withdrawals],
   );
@@ -371,25 +374,11 @@ function Earnings({
     [paidWithdrawals],
   );
 
-  // Calendar month to date, matching how the web dashboard reports it.
-  const thisMonth = useMemo(() => {
-    const now = new Date();
-    const rows = moneyIn.filter(entry => {
-      const date = parseDate(entry.timestamp);
-      return (
-        !!date &&
-        date.getMonth() === now.getMonth() &&
-        date.getFullYear() === now.getFullYear()
-      );
-    });
-    return {
-      total: rows.reduce((sum, entry) => sum + entry.amount, 0),
-      count: rows.length,
-    };
-  }, [moneyIn]);
-
-  const balance = toNumber(profile.balance);
   const entries = tab === 'in' ? moneyIn : moneyOut;
+  // No overview means the figures are unknown, which is not the same as 0.
+  const fig = (value: unknown) => (overview ? money(value) : '-');
+  const paidThisMonthDeals = toNumber(overview?.deals_paid_this_month);
+  const filtering = tab === 'out' && (!!search.trim() || statusFilter !== 'All');
 
   return (
     <View style={styles.screen}>
@@ -408,15 +397,31 @@ function Earnings({
         style={styles.body}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
+        {loadError && !loading ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{loadError}</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={onRetry}
+              accessibilityRole="button"
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         <View style={styles.balanceCard}>
           <View style={styles.balanceTop}>
             <View style={styles.flex}>
               <Text style={styles.balanceLabel}>Available Balance</Text>
-              <Text style={styles.balanceValue}>{money(balance)}</Text>
+              <Text style={styles.balanceValue}>
+                {fig(overview?.balance)}
+              </Text>
               <Text style={styles.balanceHint}>Ready to withdraw</Text>
             </View>
             <View style={styles.walletBadge}>
@@ -437,10 +442,20 @@ function Earnings({
 
             <View style={styles.pendingBlock}>
               <Text style={styles.pendingLabel}>Pending Release</Text>
-              <Text style={styles.pendingValue}>{money(pendingRelease)}</Text>
+              <Text style={styles.pendingValue}>
+                {fig(overview?.pending_release)}
+              </Text>
               <Text style={styles.pendingHint}>In escrow</Text>
             </View>
           </View>
+        </View>
+
+        <View style={styles.feeNote}>
+          <Text style={styles.feeNoteText}>
+            UGC.ad charges a <Text style={styles.feeNoteBold}>20% platform fee</Text>{' '}
+            on every campaign/brief. Withdrawals start at{' '}
+            {money(MIN_WITHDRAWAL_AMOUNT)}.
+          </Text>
         </View>
 
         <View style={styles.statRow}>
@@ -448,16 +463,16 @@ function Earnings({
             tint="#EDEBFF"
             glyph={<Text style={styles.statRupee}>{'₹'}</Text>}
             label="Paid This Month"
-            value={money(thisMonth.total)}
-            caption={`${thisMonth.count} deal${
-              thisMonth.count === 1 ? '' : 's'
+            value={fig(overview?.paid_this_month)}
+            caption={`${paidThisMonthDeals} deal${
+              paidThisMonthDeals === 1 ? '' : 's'
             } paid`}
           />
           <StatTile
             tint="#E6F7EE"
             glyph={<Text style={styles.statTrend}>{'↗'}</Text>}
             label="All-Time Earnings"
-            value={money(allTime)}
+            value={fig(overview?.all_time_earnings)}
             caption="Lifetime"
           />
           <StatTile
@@ -491,6 +506,46 @@ function Earnings({
           })}
         </View>
 
+        {tab === 'out' ? (
+          <View style={styles.filters}>
+            <TextInput
+              style={styles.search}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search withdrawal ID"
+              placeholderTextColor="#9CA3AF"
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Search withdrawal ID"
+            />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChips}
+              keyboardShouldPersistTaps="handled"
+            >
+              {WITHDRAWAL_FILTERS.map(option => {
+                const on = statusFilter === option;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    style={[styles.filterChip, on && styles.filterChipOn]}
+                    onPress={() => setStatusFilter(option)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text
+                      style={[styles.filterText, on && styles.filterTextOn]}
+                    >
+                      {option === 'All' ? 'All Status' : option}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
+
         <View style={styles.listHeader}>
           <Text style={styles.listTitle}>Recent Transactions</Text>
         </View>
@@ -500,13 +555,31 @@ function Earnings({
         ) : entries.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>
-              {tab === 'in' ? 'No earnings yet' : 'No withdrawals yet'}
+              {tab === 'in'
+                ? 'No payments yet'
+                : filtering
+                ? 'No matching withdrawals'
+                : 'No withdrawals yet'}
             </Text>
             <Text style={styles.emptyBody}>
               {tab === 'in'
-                ? 'Completed deals show up here once payment is released.'
-                : 'Your payout requests will appear here.'}
+                ? "When a brand's payment for a completed deal is released, it shows up here with who paid and how much."
+                : filtering
+                ? 'Try a different ID or status.'
+                : 'Money you move to your bank or UPI will appear here.'}
             </Text>
+            {filtering ? (
+              <TouchableOpacity
+                style={styles.emptyAction}
+                onPress={() => {
+                  setSearch('');
+                  setStatusFilter('All');
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.retryText}>Clear filters</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : (
           <View style={styles.txList}>
@@ -608,7 +681,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(8),
-    height: scale(42),
+    height: scale(44),
     paddingHorizontal: scale(16),
     borderRadius: scale(10),
     backgroundColor: '#FFFFFF',
@@ -686,7 +759,7 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
-    height: scale(36),
+    height: scale(44),
     borderRadius: scale(9),
     alignItems: 'center',
     justifyContent: 'center',
@@ -718,7 +791,71 @@ const styles = StyleSheet.create({
     color: '#11123D',
   },
 
-  loading: { marginTop: scale(40) },
+  errorBox: {
+    marginBottom: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+  },
+  errorText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#B3261E',
+  },
+  retryBtn: {
+    marginTop: scale(4),
+    minHeight: scale(44),
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+  },
+  retryText: {
+    fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4C5BF3',
+  },
+  feeNote: {
+    marginTop: scale(12),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#F3F3FF',
+    borderWidth: 1,
+    borderColor: '#E9EBEF',
+  },
+  feeNoteText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#4A5568' },
+  feeNoteBold: { fontFamily: 'Inter-Bold', fontWeight: '700', color: '#07074E' },
+  filters: { marginTop: scale(12) },
+  search: {
+    height: scale(46),
+    paddingHorizontal: scale(13),
+    borderRadius: scale(12),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7E8F4',
+    fontSize: fontScale(14),
+    color: '#181943',
+  },
+  filterChips: { gap: scale(8), paddingTop: scale(10) },
+  filterChip: {
+    minHeight: scale(44),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7E8F4',
+  },
+  filterChipOn: { backgroundColor: '#EEF0FE', borderColor: '#3D4FD8' },
+  filterText: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#8B8FA6',
+  },
+  filterTextOn: { color: '#3D4FD8', fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
+  emptyAction: { marginTop: scale(6), minHeight: scale(44), justifyContent: 'center' },
   empty: {
     marginTop: scale(12),
     padding: scale(26),
@@ -749,13 +886,32 @@ const styles = StyleSheet.create({
     borderColor: '#ECEDF6',
     overflow: 'hidden',
   },
+  txItem: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFF6',
+  },
   txRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: scale(12),
     paddingVertical: scale(13),
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#EFEFF6',
+  },
+  txDetails: {
+    paddingHorizontal: scale(14),
+    paddingBottom: scale(12),
+    backgroundColor: '#FAFAFF',
+  },
+  txDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: scale(8),
+  },
+  txDetailLabel: { fontSize: fontScale(11), color: '#8B8FA6' },
+  txDetailValue: {
+    fontSize: fontScale(12),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#181943',
   },
   txLogo: {
     width: scale(40),
@@ -766,7 +922,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  txLogoImage: { width: '100%', height: '100%' },
   txLogoText: {
     fontSize: fontScale(16),
     fontFamily: 'ReadexPro-SemiBold',
