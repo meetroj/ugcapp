@@ -39,6 +39,7 @@ import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, NetworkError, getCreatorDirectory, getSavedCreators, saveCreator, unsaveCreator } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
 import { playableVideoUrl, previewOf } from '../mediaPreview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
@@ -110,7 +111,8 @@ const ROW_PADDING = scale(16);
 // Tile geometry. Roughly 42% of the screen puts two full tiles plus a sliver
 // of the third on screen, which reads as a scrollable row rather than a grid.
 const GRID_GAP = scale(12);
-const TILE_WIDTH = Math.round(Dimensions.get('window').width * 0.42);
+// Short edge, so an app opened in landscape does not get 350pt-wide, 620pt-tall tiles.
+const TILE_WIDTH = Math.round(Math.min(Dimensions.get('window').width, Dimensions.get('window').height) * 0.42);
 // 9:16, matching the reel format the tiles play.
 const TILE_HEIGHT = Math.round((TILE_WIDTH * 16) / 9);
 // Name + category/rate lines under each tile.
@@ -422,7 +424,7 @@ const ReelTile = React.memo(function ReelTileContent({
         {video && !(showClip && ready) && (
           <TouchableOpacity style={styles.reelPlay}
             accessibilityRole="button" accessibilityLabel={`Play ${name}'s preview`}
-            hitSlop={scale(8)}
+            hitSlop={scale(10)}
             onPress={event => { event.stopPropagation(); setVideoFailed(false); onRequestPlay(index); }}>
             <Icon name="play" color="#FFFFFF" size={14} />
           </TouchableOpacity>
@@ -597,6 +599,7 @@ function CreatorPeekSheet({
   const [watching, setWatching] = useState<string | null>(null);
   const [watchFailed, setWatchFailed] = useState(false);
   useEffect(() => { setWatching(null); setWatchFailed(false); }, [creator]);
+  const insets = useSafeAreaInsets();
 
   if (!creator) return null;
 
@@ -663,6 +666,7 @@ function CreatorPeekSheet({
           <TouchableOpacity
             style={styles.peekClose}
             onPress={onClose}
+            hitSlop={scale(6)}
             accessibilityRole="button"
             accessibilityLabel="Close"
           >
@@ -814,8 +818,9 @@ function CreatorPeekSheet({
               />
             )}
             <TouchableOpacity
-              style={styles.playerClose}
+              style={[styles.playerClose, { top: Math.max(insets.top, scale(24)) + scale(8) }]}
               onPress={() => setWatching(null)}
+              hitSlop={scale(4)}
               accessibilityRole="button"
               accessibilityLabel="Close video"
             >
@@ -1047,6 +1052,8 @@ function BrandCreators({
             placeholderTextColor="#A9ADC2"
             autoCapitalize="none"
             autoCorrect={false}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
           />
         </View>
           <TouchableOpacity testID="creator-filter-button" style={[styles.filterBtn, category !== 'all' && styles.filterBtnActive]}
@@ -1185,6 +1192,17 @@ function BrandCreators({
                     ? 'Try a different search term.'
                     : 'The directory is empty right now.'}
                 </Text>
+                {/* Next action for a filtered-out list; the approved collection has its own Back link. */}
+                {(category !== 'all' || savedOnly || !!query) && (
+                  <TouchableOpacity
+                    style={[styles.retryBtn, styles.clearBtn]}
+                    onPress={() => { setCategory('all'); setSavedOnly(false); setQuery(''); }}
+                    accessibilityRole="button"
+                    testID="creators-clear-filters"
+                  >
+                    <Text style={styles.retryText}>Clear filters</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ) : (
               <View style={styles.rows}>
@@ -1312,7 +1330,9 @@ const styles = StyleSheet.create({
   },
   search: {
     flex: 1,
-    fontSize: fontScale(14),
+    minWidth: 0,
+    // 16 stops iOS zooming the page when the field is focused.
+    fontSize: 16,
     color: '#15163F',
     // Android's default vertical padding makes the row taller than 44.
     paddingVertical: 0,
@@ -1530,6 +1550,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  clearBtn: { alignSelf: 'center' },
   retryText: {
     fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
@@ -1768,7 +1789,8 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    marginBottom: scale(12),
+    fontSize: fontScale(13),
     color: '#858AA3',
     textAlign: 'center',
   },

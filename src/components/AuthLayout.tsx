@@ -69,6 +69,9 @@ const MIN_SPACER = scale(72);
 /** Gap between the card and the left/right screen edges. */
 const CARD_INSET = scale(16);
 
+/** Widest the form card gets: on a tablet it stays a phone-sized column. */
+const CARD_MAX_WIDTH = scale(480);
+
 type Props = {
   title: string;
   subtitle: string;
@@ -169,6 +172,9 @@ function AuthLayout({ title, subtitle, children, compact = false }: Props) {
             style={[
               styles.card,
               compact && styles.cardCompact,
+              // Centred and capped so tablets (768+) and landscape do not stretch
+              // the fields edge to edge. A phone is narrower than the cap.
+              { width: Math.min(width - 2 * CARD_INSET, CARD_MAX_WIDTH) },
               // A plain gap: SafeAreaView above already reserves the real
               // bottom inset, so adding it again double-counted the nav bar and
               // pushed the card's lower half off screen.
@@ -203,7 +209,7 @@ const styles = StyleSheet.create({
     // Deliberately NOT flexGrow: growing to fill the leftover space would push
     // the card's rounded bottom edge past the scroll padding and under the
     // system nav bar. It sizes to its content instead.
-    marginHorizontal: CARD_INSET,
+    alignSelf: 'center',
     backgroundColor: colors.card,
     borderRadius: radius.card,
     paddingHorizontal: scale(20),
@@ -227,11 +233,11 @@ const styles = StyleSheet.create({
   titleCompact: { fontSize: fontScale(22) },
   subtitle: {
     marginTop: scale(6),
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     color: colors.brand,
     textAlign: 'center',
   },
-  subtitleCompact: { marginTop: scale(4), fontSize: fontScale(12) },
+  subtitleCompact: { marginTop: scale(4), fontSize: fontScale(13) },
 });
 
 export default AuthLayout;

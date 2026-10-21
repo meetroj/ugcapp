@@ -41,6 +41,6 @@ export function ToastBar({ message }: { message: string }) {
 const styles = StyleSheet.create({
   // Sits above the floating bottom nav so it is never hidden behind it.
   wrap: { position: 'absolute', left: 0, right: 0, bottom: NAV_CLEARANCE + scale(8), alignItems: 'center', paddingHorizontal: scale(20) },
-  bar: { maxWidth: '100%', paddingHorizontal: scale(16), paddingVertical: scale(11), borderRadius: scale(12), backgroundColor: '#15163F' },
-  text: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFFFFF', textAlign: 'center' },
+  bar: { maxWidth: scale(480), paddingHorizontal: scale(16), paddingVertical: scale(11), borderRadius: scale(12), backgroundColor: '#15163F' },
+  text: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFFFFF', textAlign: 'center' },
 });

@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';import { Text } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 export type LegalDocId =
   | '/privacy-policy'
@@ -219,7 +219,7 @@ function LegalDocument({ docId, onBack }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, CONTENT_COLUMN]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -235,7 +235,7 @@ function LegalDocument({ docId, onBack }: Props) {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.intro}>{doc.intro}</Text>
@@ -283,8 +283,8 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   headerBtn: {
-    width: scale(38),
-    height: scale(38),
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -298,14 +298,14 @@ const styles = StyleSheet.create({
 
   content: { padding: scale(16), paddingTop: scale(4), paddingBottom: scale(34) },
   intro: {
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#5C6180',
   },
   updated: {
     marginTop: scale(4),
     marginBottom: scale(14),
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(12.5),
     color: '#9498B0',
   },
 
@@ -318,20 +318,21 @@ const styles = StyleSheet.create({
     borderColor: '#EDEEF6',
   },
   heading: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
   },
   body: {
     marginTop: scale(7),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(20),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: '#4A4E6B',
   },
 
   linkBtn: {
     marginTop: scale(8),
+    minHeight: 46,
     height: scale(46),
     borderRadius: scale(12),
     borderWidth: 1,
@@ -343,7 +344,7 @@ const styles = StyleSheet.create({
     gap: scale(7),
   },
   linkText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4C5BF3',
@@ -351,8 +352,8 @@ const styles = StyleSheet.create({
 
   footer: {
     marginTop: scale(14),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(17),
     color: '#9498B0',
     textAlign: 'center',
   },

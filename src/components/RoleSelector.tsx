@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from './Text';
-import { colors, radius, scale, fontScale } from '../theme';
+import { colors, radius, scale, fontScale, touch } from '../theme';
 import { BuildingIcon, PersonIcon } from './icons';
 
 export type Role = 'creator' | 'brand';
@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: scale(8),
-    height: scale(48),
+    height: touch(48),
     borderRadius: radius.chip,
     borderWidth: 1,
     borderColor: colors.border,
@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     borderColor: colors.brand,
     backgroundColor: colors.brandSoft,
   },
-  chipCompact: { height: scale(44) },
+  chipCompact: { height: touch(44) },
   label: { fontSize: fontScale(14), fontFamily: 'Inter-SemiBold', fontWeight: '600' },
 });
 

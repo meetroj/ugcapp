@@ -25,7 +25,7 @@ import {
   type PrivacyPrefs,
 } from '../api';
 import { accountStanding, type ChatWarnings } from '../accountStanding';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 type RowIconName =
   | 'lock'
@@ -358,7 +358,7 @@ function PrivacySecurity({
       />
       <ScrollView
         style={styles.body}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         showsVerticalScrollIndicator={false}
       >
         {warnings ? <StandingCard warnings={warnings} /> : null}
@@ -550,10 +550,10 @@ const styles = StyleSheet.create({
   },
   standingBody: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(19),
   },
-  standingMeta: { marginTop: scale(6), fontSize: fontScale(11), opacity: 0.8 },
+  standingMeta: { marginTop: scale(6), fontSize: fontScale(12), opacity: 0.8 },
   prefsError: {
     marginHorizontal: scale(16),
     marginBottom: scale(10),
@@ -566,9 +566,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  prefsErrorText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  prefsErrorText: { flex: 1, fontSize: fontScale(13), color: '#C4373B' },
   prefsErrorRetry: {
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#C4373B',
@@ -598,15 +598,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowText: { flex: 1, marginLeft: scale(12), marginRight: scale(8) },
+  rowText: { flex: 1, minWidth: 0, marginLeft: scale(12), marginRight: scale(8) },
   rowLabel: {
-    fontSize: fontScale(13.5),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#1E2044',
   },
   rowLabelDanger: { color: '#E5484D' },
-  rowHint: { marginTop: scale(2), fontSize: fontScale(11), lineHeight: fontScale(15), color: '#8A8FA8' },
+  rowHint: { marginTop: scale(2), fontSize: fontScale(12), lineHeight: fontScale(17), color: '#8A8FA8' },
   valuePill: {
     marginRight: scale(8),
     paddingHorizontal: scale(9),

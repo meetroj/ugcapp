@@ -67,7 +67,7 @@ export default function ReviewPlayer({
         {!!uri && !failed && watermark && (
           <View style={styles.mark} pointerEvents="none">
             {Array.from({ length: 5 }).map((_, row) => (
-              <Text key={row} style={styles.markText} numberOfLines={1}>
+              <Text key={row} style={styles.markText} numberOfLines={1} ellipsizeMode="clip">
                 UGCad · SAMPLE   UGCad · SAMPLE   UGCad · SAMPLE
               </Text>
             ))}
@@ -94,9 +94,14 @@ export default function ReviewPlayer({
           </View>
         )}
 
+        {/* Top-left, level with Close: the bottom edge belongs to the native
+            player controls and the title used to sit on top of them. */}
         {!!title && (
           <Text
-            style={[styles.title, { bottom: insets.bottom + scale(16) }]}
+            style={[
+              styles.title,
+              { top: insets.top + scale(12), left: insets.left + scale(16) },
+            ]}
             numberOfLines={1}
           >
             {title}
@@ -104,7 +109,10 @@ export default function ReviewPlayer({
         )}
 
         <TouchableOpacity
-          style={[styles.close, { top: insets.top + scale(12) }]}
+          style={[
+            styles.close,
+            { top: insets.top + scale(12), right: insets.right + scale(16) },
+          ]}
           accessibilityRole="button"
           accessibilityLabel="Close full-screen video"
           onPress={onClose}
@@ -146,13 +154,13 @@ const styles = StyleSheet.create({
   },
   errorText: {
     marginTop: scale(6),
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     color: '#B9BED6',
     textAlign: 'center',
   },
   retry: {
     marginTop: scale(14),
-    minHeight: scale(44),
+    minHeight: 44,
     paddingHorizontal: scale(22),
     borderRadius: scale(12),
     backgroundColor: '#5B63F5',
@@ -162,16 +170,16 @@ const styles = StyleSheet.create({
   retryText: { ...bodyFont(700), fontSize: fontScale(14), color: '#FFFFFF' },
   title: {
     position: 'absolute',
-    left: scale(16),
-    right: scale(16),
-    textAlign: 'center',
-    fontSize: fontScale(13),
+    // Leaves room for the Close pill on the right.
+    right: scale(120),
+    height: 44,
+    lineHeight: 44,
+    fontSize: fontScale(14),
     color: 'rgba(255,255,255,0.85)',
   },
   close: {
     position: 'absolute',
-    right: scale(16),
-    minHeight: scale(44),
+    minHeight: 44,
     paddingHorizontal: scale(18),
     justifyContent: 'center',
     borderRadius: scale(22),

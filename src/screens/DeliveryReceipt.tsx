@@ -6,13 +6,14 @@
  * the backend turns into an open damage report.
  */
 import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Text, TextInput } from '../components/Text';
 import { Alert } from '../components/AppAlert';
 import UploadProgressBar from '../components/UploadProgressBar';
 import { confirmDealReceipt, uploadMedia, MAX_VIDEO_UPLOAD_MB } from '../api';
-import { fontScale, scale } from '../theme';
+import { CONTENT_MAX_WIDTH, fontScale, scale } from '../theme';
 
 type Picked = { uri: string; fileName?: string | null; type?: string | null; fileSize?: number | null };
 
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export default function DeliveryReceipt({ visible, token, dealId, canMark, onClose, onDone }: Props) {
+  const insets = useSafeAreaInsets();
   const [video, setVideo] = useState<Picked | null>(null);
   const [damaged, setDamaged] = useState(false);
   const [description, setDescription] = useState('');
@@ -105,9 +107,13 @@ export default function DeliveryReceipt({ visible, token, dealId, canMark, onClo
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-      <View style={styles.backdrop}>
+      {/* Lifts the damage description above the keyboard ('padding' also works on Android under edge-to-edge). */}
+      <KeyboardAvoidingView style={styles.backdrop} behavior="padding">
         <View style={styles.sheet}>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[styles.body, { paddingBottom: Math.max(scale(28), insets.bottom + scale(12)) }]}
+          >
             <Text style={styles.title}>Mark product received</Text>
             <Text style={styles.sub}>
               Upload a short unboxing video showing the package, opening and the product. The delivery clock starts from here.
@@ -160,7 +166,7 @@ export default function DeliveryReceipt({ visible, token, dealId, canMark, onClo
             </View>
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -169,13 +175,16 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,22,58,0.5)' },
   sheet: {
     maxHeight: '88%',
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),
     backgroundColor: '#FFFFFF',
   },
   body: { padding: scale(18), paddingBottom: scale(28) },
   title: { fontSize: fontScale(17), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163A' },
-  sub: { marginTop: scale(6), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#6B7094' },
+  sub: { marginTop: scale(6), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#6B7094' },
   pick: {
     marginTop: scale(14),
     minHeight: scale(64),
@@ -188,7 +197,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pickText: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#3D4FD8' },
-  pickHint: { marginTop: scale(3), fontSize: fontScale(12), color: '#9296BA' },
+  pickHint: { marginTop: scale(3), fontSize: fontScale(13), color: '#6B7094' },
   check: { flexDirection: 'row', alignItems: 'center', minHeight: scale(48), marginTop: scale(10) },
   box: {
     width: scale(24),
@@ -201,7 +210,7 @@ const styles = StyleSheet.create({
   },
   boxOn: { backgroundColor: '#C0392B', borderColor: '#C0392B' },
   tick: { color: '#FFFFFF', fontSize: fontScale(14), fontWeight: '800' },
-  checkText: { marginLeft: scale(10), fontSize: fontScale(14), color: '#15163A' },
+  checkText: { flex: 1, minWidth: 0, marginLeft: scale(10), fontSize: fontScale(14), color: '#15163A' },
   input: {
     minHeight: scale(84),
     marginTop: scale(6),
@@ -213,9 +222,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#15163A',
   },
-  error: { marginTop: scale(10), fontSize: fontScale(13), color: '#C0392B' },
+  error: { marginTop: scale(10), fontSize: fontScale(14), color: '#C0392B' },
   actions: { flexDirection: 'row', gap: scale(8), marginTop: scale(16) },
-  btn: { flex: 1, minHeight: scale(48), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
+  btn: { flex: 1, minWidth: 0, minHeight: scale(48), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
   ghost: { backgroundColor: '#F1F2F9' },
   primary: { backgroundColor: '#4452F0' },
   ghostText: { color: '#4A5568', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700' },

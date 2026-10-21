@@ -5,6 +5,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,7 @@ import {
   addSavedBrief,
   BACKEND_URL,
   getBidReadiness,
+  getCampaign,
   getCampaigns,
   getMyBids,
   getSavedBriefs,
@@ -46,6 +48,8 @@ import {
   dateLabel,
   deliveryChip,
   filterBriefs,
+  isOpenForBids,
+  isSelectedCreator,
   loadErrorText,
   maxCampaignBid,
   moodImagesOf,
@@ -58,7 +62,10 @@ import {
   validateBid,
   type BrowseFilters,
 } from '../briefs';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
+
+// Tablet: keep the single-column pages a readable width, centred (no-op on phones).
+const COLUMN = { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' } as const;
 
 type Campaign = Record<string, any> & { id: string };
 
@@ -367,13 +374,19 @@ export default function BrowseCampaigns({
 
   // Deep link: ?open=<id> shows that brief's details once the list is in.
   useEffect(() => {
-    if (!openId || opened.current === openId) return;
+    if (!openId || opened.current === openId || loading) return;
+    opened.current = openId;
     const found = open.find(c => c.id === openId);
     if (found) {
-      opened.current = openId;
       setSelected(found);
+      return;
     }
-  }, [openId, open]);
+    // Not in the open list (closed, filled or private): fetch it so a shared
+    // link never lands on a bare list. BriefFlow shows it as closed if it is.
+    getCampaign(token, openId)
+      .then(one => setSelected({ ...one, id: openId }))
+      .catch(error => toast.show(loadErrorText(error, 'that campaign')));
+  }, [openId, open, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ownBidFor = (c: Campaign): OwnBid | null => bids[c.id] || ownBidOn(c, me);
   const clearFilters = () => setFilters(f => ({ ...f, budget: 'any', delivery: 'any' }));
@@ -392,6 +405,7 @@ export default function BrowseCampaigns({
           onBack={() => setSelected(null)}
           onNavigate={onNavigate}
           myBid={ownBidFor(selected)}
+          closed={!isOpenForBids(selected) || isSelectedCreator(selected, me)}
           onDone={message => {
             setSelected(null);
             toast.show(message);
@@ -675,7 +689,7 @@ export function CampaignCard({
         <BrandLogo campaign={campaign} />
         <View style={styles.brandCopy}>
           <View style={styles.inline}>
-            <Text style={styles.brandName}>{campaignName(campaign)}</Text>
+            <Text style={styles.brandName} numberOfLines={1}>{campaignName(campaign)}</Text>
             {!!age && (
               <>
                 <Text style={styles.dot}>•</Text>
@@ -1055,14 +1069,14 @@ function CampaignDetails({
         <View style={styles.statBoxes}>
           <View style={styles.statBox}>
             <Icon name="wallet" color="#514CF2" />
-            <View>
+            <View style={styles.statCopy}>
               <Text style={styles.statLabel}>Budget</Text>
               <Text style={styles.statValue}>{budget || '-'}</Text>
             </View>
           </View>
           <View style={styles.statBox}>
             <Icon name="clock" color="#514CF2" />
-            <View>
+            <View style={styles.statCopy}>
               <Text style={styles.statLabel}>Delivery</Text>
               <Text style={styles.statValue}>{delivery || '-'}</Text>
             </View>
@@ -1262,9 +1276,13 @@ function SubmitBid({
       <KeyboardAvoidingView
         style={styles.flexOne}
         behavior="padding"
+        // Android only: iOS insets the scroll content instead (see AuthLayout),
+        // which cannot leave stuck padding after the keyboard closes.
+        enabled={Platform.OS === 'android'}
       >
       <ScrollView
         contentContainerStyle={styles.bidContent}
+        automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -1272,7 +1290,7 @@ function SubmitBid({
           {titleOf(campaign)} · {campaignName(campaign)}
         </Text>
         <BidField label={split ? 'Combined payout per video (₹)' : 'Bid Amount per video (₹)'} icon="wallet">
-          <TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="Enter your bid amount" placeholderTextColor="#9BA0B8" style={styles.bidInput} />
+          <TextInput value={amount} onChangeText={text => setAmount(text.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="Enter your bid amount" placeholderTextColor="#9BA0B8" style={styles.bidInput} />
         </BidField>
         {split && <Text style={styles.fieldLabel}>One bid includes both the raw video and the edited video.</Text>}
         {maximum > 0 && <Text style={styles.hint}>Highest bid allowed: ₹{maximum.toLocaleString('en-IN')} per video.</Text>}
@@ -1375,7 +1393,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(24),
     borderTopRightRadius: scale(24),
   },
-  browseContent: { paddingTop: scale(6), paddingBottom: scale(18) + NAV_CLEARANCE },
+  browseContent: { ...COLUMN, paddingTop: scale(6), paddingBottom: scale(18) + NAV_CLEARANCE },
   search: {
     minHeight: scale(48),
     marginHorizontal: scale(16),
@@ -1388,7 +1406,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  searchInput: { flex: 1, marginLeft: scale(8), paddingVertical: scale(8), color: '#15173F', fontSize: fontScale(15) },
+  searchInput: { flex: 1, minWidth: 0, marginLeft: scale(8), paddingVertical: scale(8), color: '#15173F', fontSize: 16 },
   searchClear: { width: scale(44), height: scale(44), alignItems: 'center', justifyContent: 'center', marginRight: scale(-10) },
   filterBar: {
     flexDirection: 'row',
@@ -1412,10 +1430,10 @@ const styles = StyleSheet.create({
   filterBtnOn: { borderColor: '#4943EB', backgroundColor: '#F1F0FF' },
   filterBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#24264E' },
   filterBtnTextOn: { color: '#4943EB' },
-  sortNote: { flex: 1, fontSize: fontScale(12), color: '#777C98' },
+  sortNote: { flex: 1, minWidth: 0, fontSize: fontScale(13), color: '#777C98' },
   linkBtn: { minHeight: scale(44), justifyContent: 'center' },
   linkText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4943EB' },
-  searchNote: { marginHorizontal: scale(16), marginBottom: scale(8), fontSize: fontScale(12), color: '#5E6484' },
+  searchNote: { marginHorizontal: scale(16), marginBottom: scale(8), fontSize: fontScale(13), color: '#5E6484' },
   banner: {
     marginHorizontal: scale(16),
     marginBottom: scale(10),
@@ -1426,7 +1444,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  bannerText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  bannerText: { flex: 1, minWidth: 0, fontSize: fontScale(13), color: '#B03030' },
   bannerBtn: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
   bannerBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
   loadMore: {
@@ -1443,7 +1461,7 @@ const styles = StyleSheet.create({
   loadMoreText: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4943EB' },
   emptyBox: { margin: scale(24), alignItems: 'center' },
   emptyTitle: { fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163F', textAlign: 'center' },
-  emptyText: { marginTop: scale(8), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#777C98', textAlign: 'center' },
+  emptyText: { marginTop: scale(8), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#777C98', textAlign: 'center' },
   emptyBtn: {
     marginTop: scale(16),
     minHeight: scale(46),
@@ -1522,16 +1540,17 @@ const styles = StyleSheet.create({
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '900',
   },
-  brandCopy: { flex: 1, marginLeft: scale(10) },
+  brandCopy: { flex: 1, minWidth: 0, marginLeft: scale(10) },
   inline: { flexDirection: 'row', alignItems: 'center' },
   brandName: {
-    fontSize: fontScale(12),
+    flexShrink: 1,
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#16183F',
   },
   dot: { marginHorizontal: scale(7), color: '#8A8EA6' },
-  age: { fontSize: fontScale(10), color: '#858AA3' },
+  age: { flexShrink: 0, fontSize: fontScale(11), color: '#858AA3' },
   campaignTitle: {
     marginTop: scale(9),
     fontSize: fontScale(13),
@@ -1546,11 +1565,11 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
     overflow: 'hidden',
     backgroundColor: '#F4F3FF',
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     color: '#5E5BDD',
   },
   format: { marginTop: scale(8), flexDirection: 'row', alignItems: 'center', gap: scale(5) },
-  formatText: { fontSize: fontScale(10), color: '#5E6484' },
+  formatText: { flexShrink: 1, fontSize: fontScale(12), color: '#5E6484' },
   bidChip: {
     marginTop: scale(8),
     alignSelf: 'flex-start',
@@ -1559,7 +1578,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
     overflow: 'hidden',
     backgroundColor: '#E2F7EE',
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#1B7F55',
@@ -1572,7 +1591,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
     overflow: 'hidden',
     backgroundColor: '#ECEDF5',
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6079',
@@ -1594,7 +1613,7 @@ const styles = StyleSheet.create({
   },
   match: {
     marginTop: scale(1),
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#554EF1',
@@ -1609,7 +1628,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryText: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFF',
@@ -1637,7 +1656,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#16183E',
   },
-  detailContent: { padding: scale(16), paddingBottom: scale(24) },
+  detailContent: { ...COLUMN, padding: scale(16), paddingBottom: scale(24) },
   detailBrand: { flexDirection: 'row', alignItems: 'center', gap: scale(10) },
   // Detail-view sizes. The browse cards deliberately stay compact so more of
   // them fit on screen, so these override the shared card styles rather than
@@ -1648,7 +1667,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#16183F',
   },
-  detailAge: { fontSize: fontScale(12), color: '#858AA3' },
+  detailAge: { fontSize: fontScale(13), color: '#858AA3' },
   detailTag: {
     paddingHorizontal: scale(11),
     paddingVertical: scale(6),
@@ -1688,7 +1707,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     overflow: 'hidden',
     backgroundColor: '#FFF4DE',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#8A5A00',
   },
   closedNote: {
@@ -1697,7 +1716,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     overflow: 'hidden',
     backgroundColor: '#ECEDF5',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#5C6079',
   },
   moodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
@@ -1714,7 +1733,9 @@ const styles = StyleSheet.create({
   statBoxes: { flexDirection: 'row', gap: scale(10), marginTop: scale(14) },
   statBox: {
     flex: 1,
-    height: scale(72),
+    minWidth: 0,
+    minHeight: scale(72),
+    paddingVertical: scale(8),
     borderRadius: scale(12),
     backgroundColor: '#F2F2FC',
     paddingHorizontal: scale(13),
@@ -1722,6 +1743,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
+  statCopy: { flex: 1, minWidth: 0 },
   statLabel: { fontSize: fontScale(12), color: '#777C99' },
   statValue: {
     fontSize: fontScale(15),
@@ -1741,8 +1763,8 @@ const styles = StyleSheet.create({
   },
   body: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#252747' },
   dataRow: { flexDirection: 'row', marginBottom: scale(10) },
-  dataKey: { width: scale(118), fontSize: fontScale(13), color: '#858AA3' },
-  dataValue: { flex: 1, fontSize: fontScale(13), lineHeight: fontScale(19), color: '#262847' },
+  dataKey: { width: scale(118), flexShrink: 0, fontSize: fontScale(13), color: '#858AA3' },
+  dataValue: { flex: 1, minWidth: 0, fontSize: fontScale(14), lineHeight: fontScale(20), color: '#262847' },
   primary: {
     height: scale(50),
     borderRadius: scale(11),
@@ -1757,6 +1779,7 @@ const styles = StyleSheet.create({
   // Separate from the compact `primaryText` on the browse cards, which stays
   // small so the card stays dense.
   detailFooter: {
+    ...COLUMN,
     paddingHorizontal: scale(16),
     paddingTop: scale(10),
     paddingBottom: scale(12),
@@ -1794,17 +1817,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: scale(9),
   },
-  bidContent: { padding: scale(12), paddingBottom: scale(24) + NAV_CLEARANCE },
+  bidContent: { ...COLUMN, padding: scale(16), paddingBottom: scale(24) + NAV_CLEARANCE },
   bidFor: { fontSize: fontScale(13), color: '#8A8FB5', marginTop: scale(4) },
   fieldLabel: {
     marginTop: scale(14),
     marginBottom: scale(8),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#27294E',
   },
-  hint: { marginTop: scale(6), fontSize: fontScale(12), color: '#777C98' },
+  hint: { marginTop: scale(6), fontSize: fontScale(13), color: '#777C98' },
   feeBox: {
     marginTop: scale(12),
     padding: scale(12),
@@ -1815,7 +1838,7 @@ const styles = StyleSheet.create({
     gap: scale(3),
   },
   feeTitle: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163A' },
-  feeText: { fontSize: fontScale(12), color: '#4A4F73' },
+  feeText: { fontSize: fontScale(13), color: '#4A4F73' },
   bidField: {
     minHeight: scale(50),
     borderRadius: scale(10),
@@ -1837,8 +1860,9 @@ const styles = StyleSheet.create({
   bidInput: {
     flex: 1,
     height: scale(48),
+    minWidth: 0,
     paddingHorizontal: scale(10),
-    fontSize: fontScale(15),
+    fontSize: 16,
     color: '#1D1F43',
   },
   proposalField: { height: scale(150), alignItems: 'flex-start', paddingTop: scale(10) },
@@ -1849,7 +1873,7 @@ const styles = StyleSheet.create({
     lineHeight: fontScale(20),
   },
   feedback: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#D14343',
     textAlign: 'center',
     marginTop: scale(13),

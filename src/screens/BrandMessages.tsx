@@ -19,7 +19,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import { BACKEND_URL, getConversations, NetworkError } from '../api';
 import { chatPeerName, conversationPreview } from '../actionCards';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -191,6 +191,7 @@ function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
       </View>
 
       <View style={styles.sheet}>
+        <View style={styles.column}>
         <View style={styles.searchWrap}>
           <Icon name="search" color="#9498B0" size={17} />
           <TextInput
@@ -219,6 +220,8 @@ function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
                 style={[styles.chip, active && styles.chipActive]}
                 onPress={() => setFilter(item.key)}
                 accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                hitSlop={{ top: 6, bottom: 6 }}
               >
                 <Text
                   style={[styles.chipText, active && styles.chipTextActive]}
@@ -250,6 +253,23 @@ function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
               />
             }
           >
+            {!!loadError && !!conversations.length && (
+              <View style={styles.staleBox}>
+                <Text style={styles.staleText}>
+                  {loadError} Showing your last loaded messages.
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setRefreshing(true);
+                    load();
+                  }}
+                  accessibilityRole="button"
+                  style={styles.staleBtn}
+                >
+                  <Text style={styles.staleBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {!visible.length && loadError && !conversations.length ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>{loadError}</Text>
@@ -286,6 +306,9 @@ function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
                     style={styles.row}
                     onPress={() => onOpenThread(row.user_id, name)}
                     accessibilityRole="button"
+                    accessibilityLabel={`${name}${
+                      unread > 0 ? `, ${unread} unread` : ''
+                    }. ${text(conversationPreview(row), 'No messages yet')}`}
                   >
                     <View style={styles.avatarWrap}>
                       <View style={styles.avatar}>
@@ -346,6 +369,7 @@ function BrandMessages({ token, onOpenThread, onBack, role }: Props) {
             )}
           </ScrollView>
         )}
+        </View>
       </View>
     </View>
   );
@@ -393,6 +417,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // A tablet keeps the list a phone-width column instead of stretching rows edge to edge.
+  column: { ...CONTENT_COLUMN, flex: 1 },
   searchWrap: {
     marginTop: scale(16),
     marginHorizontal: scale(16),
@@ -406,7 +432,7 @@ const styles = StyleSheet.create({
   },
   search: {
     flex: 1,
-    fontSize: fontScale(14),
+    fontSize: 16,
     color: '#15163F',
     // Android's default padding would make the row taller than 44.
     paddingVertical: 0,
@@ -415,7 +441,7 @@ const styles = StyleSheet.create({
   filtersBar: { flexGrow: 0, flexShrink: 0 },
   filters: { paddingHorizontal: scale(16), paddingVertical: scale(12), gap: scale(8) },
   chip: {
-    height: scale(32),
+    height: scale(36),
     paddingHorizontal: scale(14),
     borderRadius: scale(16),
     alignItems: 'center',
@@ -424,7 +450,7 @@ const styles = StyleSheet.create({
   },
   chipActive: { backgroundColor: '#15163F' },
   chipText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#6E7391',
@@ -480,8 +506,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#15163F',
   },
-  time: { fontSize: fontScale(11), color: '#9498B0' },
-  snippet: { marginTop: scale(3), fontSize: fontScale(13), lineHeight: fontScale(18), color: '#777B96' },
+  time: { fontSize: fontScale(12), color: '#9498B0' },
+  snippet: { marginTop: scale(3), fontSize: fontScale(14), lineHeight: fontScale(19), color: '#777B96' },
   snippetUnread: {
     color: '#3B3F5C',
     fontFamily: 'Inter-SemiBold',
@@ -496,7 +522,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4F5FA',
   },
   statusText: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
     color: '#6E7391',
@@ -514,7 +540,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   unreadText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -530,12 +556,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',
   },
   empty: { marginTop: scale(40), padding: scale(22), alignItems: 'center' },
+  staleBox: {
+    marginHorizontal: scale(16),
+    marginTop: scale(4),
+    marginBottom: scale(4),
+    padding: scale(12),
+    borderRadius: scale(12),
+    backgroundColor: '#FDECEC',
+  },
+  staleText: { fontSize: fontScale(14), lineHeight: fontScale(20), color: '#B3261E' },
+  staleBtn: { minHeight: scale(44), alignSelf: 'flex-start', justifyContent: 'center' },
+  staleBtnText: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#4C5BF3',
+  },
   emptyTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
@@ -544,7 +586,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },

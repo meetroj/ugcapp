@@ -21,7 +21,8 @@ import Svg, {
   Stop,
 } from 'react-native-svg';
 import ScreenHeader from '../components/ScreenHeader';
-import { scale, fontScale } from '../theme';
+import { Alert } from '../components/AppAlert';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 type Social = {
   key: string;
@@ -142,7 +143,9 @@ function FollowUs({
 }) {
   const open = (social: Social) => {
     if (social.url) {
-      Linking.openURL(social.url).catch(() => {});
+      Linking.openURL(social.url).catch(() =>
+        Alert.alert('Could not open the link', 'Try again, or open it in your browser.'),
+      );
     }
   };
 
@@ -156,7 +159,7 @@ function FollowUs({
       />
       <ScrollView
         style={styles.body}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.hero}>
@@ -259,8 +262,8 @@ const styles = StyleSheet.create({
   },
   heroBody: {
     marginTop: scale(6),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(17),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#767B98',
     textAlign: 'center',
   },
@@ -282,14 +285,14 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E9EAF3',
   },
   rowLast: { borderBottomWidth: 0 },
-  rowText: { flex: 1, marginLeft: scale(12), marginRight: scale(8) },
+  rowText: { flex: 1, minWidth: 0, marginLeft: scale(12), marginRight: scale(8) },
   rowLabel: {
-    fontSize: fontScale(13.5),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#1E2044',
   },
-  rowHandle: { marginTop: scale(2), fontSize: fontScale(11), color: '#8A8FA8' },
+  rowHandle: { marginTop: scale(2), fontSize: fontScale(13), color: '#8A8FA8' },
   pill: {
     marginRight: scale(6),
     paddingHorizontal: scale(10),
@@ -298,7 +301,7 @@ const styles = StyleSheet.create({
   },
   pillLive: { backgroundColor: '#EDEFFE' },
   pillSoon: { backgroundColor: '#F0F1F7' },
-  pillText: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
+  pillText: { fontSize: fontScale(11), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
   pillTextLive: { color: '#4D57E3' },
   pillTextSoon: { color: '#8A8FA8' },
 });

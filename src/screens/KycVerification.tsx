@@ -15,7 +15,7 @@ import {
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBlock } from '../components/Skeleton';
 import { getKyc, type AuthUser } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 import { errorMessage, kycStatusOf, type KycStatus } from '../payoutRules';
 
 type Kyc = Record<string, any>;
@@ -272,6 +272,9 @@ function KycVerification({
   const submitted = status !== 'unsubmitted';
   // Nothing has loaded: show only the error, not a made-up "Not started".
   const unknown = !!failed && !loaded && !loading;
+  // Until the first read lands the status is unknown too: the "Not started"
+  // banner and the Start KYC button must not flash for a verified creator.
+  const hideStatus = unknown || loading;
   // The website only allows (re)submitting from not-submitted or rejected; the
   // backend refuses anything else with "KYC already pending/verified".
   const canEdit = status === 'unsubmitted' || status === 'rejected';
@@ -281,7 +284,7 @@ function KycVerification({
           textOf(kyc.rejection_reason, 'Your documents could not be verified.')
         } Update your details below to resubmit, or contact support for help.`
       : state.noteBody;
-  const aadhaar = String(kyc.aadhaar_number || '').replace(/D/g, '');
+  const aadhaar = String(kyc.aadhaar_number || '').replace(/\D/g, '');
   const submittedOn = kyc.submitted_at ? new Date(kyc.submitted_at) : null;
   const payoutMethod = String(kyc.payout_method || kyc.payment_method || '');
 
@@ -348,7 +351,12 @@ function KycVerification({
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.headerBtn} onPress={onBack}>
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Icon name="back" color="#FFF" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>KYC Verification</Text>
@@ -389,7 +397,7 @@ function KycVerification({
         }
       >
         {/* Status banner */}
-        {!unknown && (
+        {!hideStatus && (
         <View
           style={[styles.card, styles.banner, { backgroundColor: state.tint }]}
         >
@@ -460,22 +468,24 @@ function KycVerification({
                 <Text style={styles.rowValue}>{row.value}</Text>
               </View>
             ))}
-          <View style={[styles.row, styles.rowLast]}>
-            <View style={styles.rowLeft}>
-              <View style={styles.rowIcon}>
-                <Icon name="shieldCheck" size={15} color="#6E74A0" />
+          {!loading && (
+            <View style={[styles.row, styles.rowLast]}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIcon}>
+                  <Icon name="shieldCheck" size={15} color="#6E74A0" />
+                </View>
+                <Text style={styles.rowLabel}>Status</Text>
               </View>
-              <Text style={styles.rowLabel}>Status</Text>
+              <Text style={[styles.rowValue, { color: state.accent }]}>
+                {state.label}
+              </Text>
             </View>
-            <Text style={[styles.rowValue, { color: state.accent }]}>
-              {state.label}
-            </Text>
-          </View>
+          )}
         </View>
         )}
 
         {/* Guidance */}
-        {!unknown && (
+        {!hideStatus && (
         <View
           style={[styles.card, styles.note, { backgroundColor: state.tint }]}
         >
@@ -490,7 +500,7 @@ function KycVerification({
         )}
 
         {/* Update details: only before a submission or after a rejection */}
-        {!unknown && canEdit && (
+        {!hideStatus && canEdit && (
         <View style={[styles.card, styles.actionCard]}>
           <View style={styles.actionCopy}>
             <Text style={styles.actionTitle}>
@@ -537,7 +547,7 @@ function KycVerification({
           </TouchableOpacity>
         </View>
 
-        {!unknown && status === 'verified' && (
+        {!hideStatus && status === 'verified' && (
           <TouchableOpacity
             style={styles.primary}
             onPress={onGoToEarnings}
@@ -604,12 +614,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   badgeText: {
-    fontSize: fontScale(8),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFF',
   },
-  content: { padding: scale(14), paddingBottom: scale(28), gap: scale(12) },
+  // A tablet keeps the page a phone-width column instead of stretching it edge to edge.
+  content: { ...CONTENT_COLUMN, padding: scale(14), paddingBottom: scale(28), gap: scale(12) },
   card: {
     padding: scale(14),
     borderRadius: scale(14),
@@ -631,23 +642,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bannerCopy: { flex: 1 },
+  bannerCopy: { flex: 1, minWidth: 0 },
   bannerTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
   },
-  bannerLine: { marginTop: scale(2), fontSize: fontScale(11), color: '#5C6284' },
+  bannerLine: { marginTop: scale(2), fontSize: fontScale(13), lineHeight: fontScale(18), color: '#5C6284' },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(3),
     paddingHorizontal: scale(8),
-    height: scale(21),
-    borderRadius: scale(11),
+    height: scale(24),
+    borderRadius: scale(12),
   },
   pillText: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFF',
@@ -667,7 +678,7 @@ const styles = StyleSheet.create({
     marginBottom: scale(12),
   },
   errorText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#B3261E',
@@ -679,13 +690,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4741DB',
   },
   row: {
-    height: scale(46),
+    minHeight: scale(46),
+    paddingVertical: scale(6),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -693,7 +705,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F7',
   },
   rowLast: { borderBottomWidth: 0 },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: scale(9) },
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: scale(9), flexShrink: 0 },
   rowIcon: {
     width: scale(26),
     height: scale(26),
@@ -702,24 +714,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowLabel: { fontSize: fontScale(12), color: '#5C6284' },
+  rowLabel: { fontSize: fontScale(14), color: '#5C6284' },
   rowValue: {
-    fontSize: fontScale(12),
+    flexShrink: 1,
+    marginLeft: scale(10),
+    textAlign: 'right',
+    fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#161742',
   },
   note: { alignItems: 'center' },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: scale(6) },
-  noteTitle: { fontSize: fontScale(13), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
+  noteTitle: { fontSize: fontScale(14), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
   noteBody: {
     marginTop: scale(5),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(17),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(19),
     color: '#5C6284',
     textAlign: 'center',
   },
-  actionCard: { flexDirection: 'row', alignItems: 'center', gap: scale(10) },
+  // The button drops under the copy on a narrow phone instead of squeezing it.
+  actionCard: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: scale(10) },
   supportIcon: {
     width: scale(34),
     height: scale(34),
@@ -728,14 +744,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionCopy: { flex: 1 },
+  actionCopy: { flex: 1, minWidth: scale(150) },
   actionTitle: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#161742',
   },
-  actionText: { marginTop: scale(3), fontSize: fontScale(10), lineHeight: fontScale(15), color: '#747A98' },
+  actionText: { marginTop: scale(3), fontSize: fontScale(13), lineHeight: fontScale(18), color: '#747A98' },
   outlineBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -748,7 +764,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
   },
   outlineText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4741DB',

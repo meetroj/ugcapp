@@ -26,7 +26,7 @@ import {
   type AuthUser,
   type NotificationPrefs,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -285,7 +285,7 @@ function NotificationSettings({ token, session, onBack, onChat }: Props) {
           <ActivityIndicator size="large" color="#1B2A6B" />
         </View>
       ) : loadError ? (
-        <View style={[styles.body, styles.bodyContent]}>
+        <View style={[styles.body, styles.bodyContent, CONTENT_COLUMN]}>
           <Text style={styles.status}>{loadError}</Text>
           <TouchableOpacity
             style={styles.saveBtn}
@@ -298,7 +298,7 @@ function NotificationSettings({ token, session, onBack, onChat }: Props) {
       ) : (
         <ScrollView
           style={styles.body}
-          contentContainerStyle={styles.bodyContent}
+          contentContainerStyle={[styles.bodyContent, CONTENT_COLUMN]}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.card}>
@@ -383,14 +383,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowText: { flex: 1 },
+  rowText: { flex: 1, minWidth: 0 },
   rowTitle: {
     fontSize: fontScale(14.5),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  rowBody: { fontSize: fontScale(11.5), color: '#777B96', marginTop: scale(3), lineHeight: fontScale(16) },
+  rowBody: { fontSize: fontScale(13), color: '#777B96', marginTop: scale(3), lineHeight: fontScale(18) },
   note: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -408,17 +408,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  noteText: { flex: 1 },
+  noteText: { flex: 1, minWidth: 0 },
   noteTitle: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#15163F',
   },
-  noteBody: { fontSize: fontScale(11.5), color: '#777B96', marginTop: scale(2) },
+  noteBody: { fontSize: fontScale(13), color: '#777B96', marginTop: scale(2) },
   status: {
     marginTop: scale(14),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#4A5BE0',
     textAlign: 'center',
     fontFamily: 'ReadexPro-SemiBold',

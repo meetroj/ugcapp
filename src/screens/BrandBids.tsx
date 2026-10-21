@@ -47,7 +47,7 @@ import {
   WALLET_RECHARGE_PATH,
   type BidSort,
 } from '../brandHiring';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -131,6 +131,8 @@ function BrandBids({
   const [sortOpen, setSortOpen] = useState(false);
   // Campaign ids the user collapsed. Everything starts expanded, as in the design.
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  // Bids whose full proposal is showing (the website prints it in full).
+  const [openPitch, setOpenPitch] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -222,10 +224,7 @@ function BrandBids({
               } catch (error) {
                 Alert.alert(
                   'Could not finish hiring',
-                  text(
-                    error instanceof Error ? error.message : '',
-                    'Please try again.',
-                  ),
+                  errorMessage(error, 'Please try again.'),
                 );
               } finally {
                 setFinishing(null);
@@ -567,7 +566,7 @@ function BrandBids({
                                         bidKey(campaign.id, bid, index),
                                       )
                                     }
-                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                     accessibilityRole="button"
                                     accessibilityState={{ selected: starred }}
                                     accessibilityLabel={
@@ -593,7 +592,10 @@ function BrandBids({
                                 )}
                               </View>
 
-                              {/* Price and delivery read as labelled columns. */}
+                            </View>
+                            {/* Price and delivery sit on their own row so the
+                                name keeps the room at 320dp. */}
+                            <View style={styles.bidStats}>
                               <View style={styles.statCol}>
                                 <Text style={styles.statValue}>
                                   {rupees(bid.amount || bid.price)}
@@ -618,9 +620,26 @@ function BrandBids({
                             </View>
 
                             {hasProposal(bid) && (
-                              <Text style={styles.pitch} numberOfLines={3}>
-                                {String(bid.proposal).trim()}
-                              </Text>
+                              <TouchableOpacity
+                                onPress={() =>
+                                  setOpenPitch(prev =>
+                                    prev.includes(bidKey(campaign.id, bid, index))
+                                      ? prev.filter(k => k !== bidKey(campaign.id, bid, index))
+                                      : [...prev, bidKey(campaign.id, bid, index)],
+                                  )
+                                }
+                                accessibilityRole="button"
+                                accessibilityLabel={`Show the full proposal from ${who}`}
+                              >
+                                <Text
+                                  style={styles.pitch}
+                                  numberOfLines={
+                                    openPitch.includes(bidKey(campaign.id, bid, index)) ? undefined : 3
+                                  }
+                                >
+                                  {String(bid.proposal).trim()}
+                                </Text>
+                              </TouchableOpacity>
                             )}
 
                             <View style={styles.actions}>
@@ -673,7 +692,7 @@ function BrandBids({
                                     </Text>
                                   </TouchableOpacity>
                                   <TouchableOpacity
-                                    style={styles.declineBtn}
+                                    style={[styles.declineBtn, busy && styles.btnBusy]}
                                     disabled={busy}
                                     onPress={() =>
                                       confirmDecline(campaign, bid, who)
@@ -763,7 +782,7 @@ const styles = StyleSheet.create({
   tabsBar: { flexGrow: 0, flexShrink: 0 },
   tabs: { paddingHorizontal: scale(16), gap: scale(8), paddingTop: scale(14), paddingBottom: scale(12) },
   tab: {
-    height: scale(34),
+    minHeight: 44,
     paddingHorizontal: scale(14),
     borderRadius: scale(10),
     alignItems: 'center',
@@ -774,7 +793,7 @@ const styles = StyleSheet.create({
   },
   tabActive: { backgroundColor: '#15163F', borderColor: '#15163F' },
   tabText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#6E7391',
@@ -789,7 +808,7 @@ const styles = StyleSheet.create({
     gap: scale(4),
   },
   sortText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -804,7 +823,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  errorText: { flex: 1, fontSize: fontScale(14), color: '#B3261E' },
   retryBtn: {
     minHeight: scale(44),
     minWidth: scale(60),
@@ -815,16 +834,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#B3261E',
   },
-  starBtn: { marginLeft: 'auto', alignItems: 'center', justifyContent: 'center' },
-  pitch: { marginTop: scale(8), fontSize: fontScale(11.5), color: '#5C6180' },
+  starBtn: { marginLeft: 'auto', padding: scale(4), alignItems: 'center', justifyContent: 'center' },
+  pitch: { marginTop: scale(8), fontSize: fontScale(14), color: '#5C6180' },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(30) + NAV_CLEARANCE },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingTop: 0,
+    paddingBottom: scale(30) + NAV_CLEARANCE,
+  },
 
   group: {
     marginBottom: scale(12),
@@ -854,14 +881,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4C5BF3',
   },
-  groupCopy: { flex: 1 },
+  groupCopy: { flex: 1, minWidth: 0 },
   groupTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  groupMeta: { marginTop: scale(3), fontSize: fontScale(11), color: '#777B96' },
+  groupMeta: { marginTop: scale(3), fontSize: fontScale(12), color: '#777B96' },
 
   bidRow: {
     paddingHorizontal: scale(13),
@@ -900,7 +927,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8F7EE',
   },
   topMatchText: {
-    fontSize: fontScale(8),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#18A957',
@@ -913,21 +940,29 @@ const styles = StyleSheet.create({
     gap: scale(3),
   },
   ratingText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#8A8FA8',
   },
 
   // Price and delivery, each with its label underneath.
-  statCol: { alignItems: 'center' },
+  bidStats: {
+    marginTop: scale(8),
+    marginLeft: scale(44),
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: scale(20),
+    rowGap: scale(6),
+  },
+  statCol: { alignItems: 'flex-start', flexShrink: 1 },
   statValue: {
     fontSize: fontScale(12.5),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  statLabel: { marginTop: scale(2), fontSize: fontScale(9), color: '#9BA0B8' },
+  statLabel: { marginTop: scale(2), fontSize: fontScale(11), color: '#8A8FA8' },
 
   // The buttons share the row's full width rather than bunching on the right,
   // which used to leave a dead gap on the left of every card.
@@ -939,7 +974,7 @@ const styles = StyleSheet.create({
   },
   ghostBtn: {
     flex: 1,
-    height: scale(32),
+    minHeight: 44,
     paddingHorizontal: scale(12),
     borderRadius: scale(8),
     alignItems: 'center',
@@ -949,14 +984,14 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
   },
   ghostBtnText: {
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#15163F',
   },
   acceptBtn: {
     flex: 1,
-    height: scale(32),
+    minHeight: 44,
     paddingHorizontal: scale(16),
     borderRadius: scale(8),
     alignItems: 'center',
@@ -964,7 +999,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#15163F',
   },
   acceptBtnText: {
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -972,7 +1007,7 @@ const styles = StyleSheet.create({
   btnBusy: { opacity: 0.5 },
   declineBtn: {
     flex: 1,
-    height: scale(32),
+    minHeight: 44,
     paddingHorizontal: scale(8),
     borderRadius: scale(8),
     alignItems: 'center',
@@ -981,7 +1016,7 @@ const styles = StyleSheet.create({
     borderColor: '#F3D2D3',
   },
   declineBtnText: {
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#E5484D',
@@ -990,7 +1025,7 @@ const styles = StyleSheet.create({
   // the same one-third width whether a bid is settled or still open.
   settledPill: {
     flex: 2,
-    height: scale(32),
+    minHeight: 44,
     borderRadius: scale(8),
     alignItems: 'center',
     justifyContent: 'center',
@@ -1004,7 +1039,7 @@ const styles = StyleSheet.create({
   },
   settledText: {
     textAlign: 'center',
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#18A957',
@@ -1016,13 +1051,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: scale(5),
+    minHeight: 44,
     paddingVertical: scale(11),
     borderTopWidth: 1,
     borderTopColor: '#F1F2F8',
     backgroundColor: '#FBFBFE',
   },
   groupFooterText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -1037,7 +1073,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },

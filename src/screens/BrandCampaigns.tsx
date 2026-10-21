@@ -22,7 +22,7 @@ import Svg, { Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { SkeletonCampaignList } from '../components/Skeleton';
 import { deleteCampaign, getCampaigns } from '../api';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -329,13 +329,14 @@ function BrandCampaigns({
   const askDelete = useCallback((campaign: Campaign) => {
     if (deleting.current) return;
     const name = text(campaign.title, 'Untitled campaign');
+    const kind = campaign.status === 'draft' ? 'draft' : 'brief';
     Alert.alert(
-      'Delete this draft?',
+      `Delete this ${kind}?`,
       `"${name}" will be deleted permanently. This can't be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete draft',
+          text: `Delete ${kind}`,
           style: 'destructive',
           onPress: async () => {
             if (deleting.current) return;
@@ -348,7 +349,7 @@ function BrandCampaigns({
               load();
             } catch (err) {
               Alert.alert(
-                'Could not delete the draft',
+                `Could not delete the ${kind}`,
                 isOffline(err)
                   ? "You're offline. Check your connection and try again."
                   : (err as Error)?.message || 'Please try again.',
@@ -521,15 +522,16 @@ function BrandCampaigns({
                         <Text style={styles.cardTitle} numberOfLines={1}>
                           {title}
                         </Text>
-                        <Text style={styles.cardSub} numberOfLines={1}>
-                          {count} {count === 1 ? 'creator' : 'creators'}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.chip, { backgroundColor: chip.bg }]}>
-                        <Text style={[styles.chipText, { color: chip.fg }]}>
-                          {chip.label}
-                        </Text>
+                        <View style={styles.subRow}>
+                          <Text style={styles.cardSub} numberOfLines={1}>
+                            {count} {count === 1 ? 'creator' : 'creators'}
+                          </Text>
+                          <View style={[styles.chip, { backgroundColor: chip.bg }]}>
+                            <Text style={[styles.chipText, { color: chip.fg }]}>
+                              {chip.label}
+                            </Text>
+                          </View>
+                        </View>
                       </View>
                       {deletable && (
                         <TouchableOpacity
@@ -599,7 +601,13 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(24),
     overflow: 'hidden',
   },
-  page: { paddingBottom: scale(96) + NAV_CLEARANCE },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  page: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    paddingBottom: scale(24) + NAV_CLEARANCE,
+  },
   // Filters stay outside the list so scrolling never intercepts their taps.
   stickyTop: { backgroundColor: '#F7F8FC' },
 
@@ -639,8 +647,8 @@ const styles = StyleSheet.create({
   cardBusy: { opacity: 0.5 },
   // 36 + hitSlop 4 each side = the 44 point touch target.
   trashBtn: {
-    width: scale(36),
-    height: scale(36),
+    width: 36,
+    height: 36,
     borderRadius: scale(10),
     alignItems: 'center',
     justifyContent: 'center',
@@ -666,10 +674,18 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#12143A',
   },
-  cardSub: { marginTop: scale(2), fontSize: fontScale(11.5), color: '#8A8FA8' },
+  subRow: {
+    marginTop: scale(4),
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    columnGap: scale(8),
+    rowGap: scale(4),
+  },
+  cardSub: { flexShrink: 1, fontSize: fontScale(13), color: '#8A8FA8' },
   chip: { paddingHorizontal: scale(8), paddingVertical: scale(4), borderRadius: scale(7) },
   chipText: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     letterSpacing: 0.3,
@@ -677,14 +693,17 @@ const styles = StyleSheet.create({
 
   // Format line, on its own row under the title.
   metaRow: {
-    marginTop: scale(18),
+    marginTop: scale(16),
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: scale(6),
+    columnGap: scale(6),
+    rowGap: scale(4),
   },
-  metaText: { flex: 1, fontSize: fontScale(11.5), color: '#5A5F7D' },
+  // The date drops to its own line instead of squeezing the format at 320dp.
+  metaText: { flexGrow: 1, flexShrink: 1, minWidth: scale(120), fontSize: fontScale(13), color: '#5A5F7D' },
   metaDate: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#8A8FA8',
@@ -742,7 +761,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },
@@ -770,7 +789,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorBannerText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  errorBannerText: { flex: 1, fontSize: fontScale(14), color: '#C4373B' },
   retryLink: {
     minHeight: scale(44),
     paddingHorizontal: scale(8),

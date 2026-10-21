@@ -12,7 +12,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -39,7 +41,7 @@ import {
   resolveMediaUrl,
   shipmentStatus,
 } from '../shipmentStatus';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -63,6 +65,13 @@ function formatDate(value: unknown): string {
     month: 'short',
     year: 'numeric',
   });
+}
+
+/** A real calendar date typed as YYYY-MM-DD (rejects 2026-13-45, which the shape check alone lets through). */
+export function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 /**
@@ -448,7 +457,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
   }, [dealId, load, ship, token]);
 
   const saveTracking = useCallback(async () => {
-    if (!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected) || saving) return;
+    if (!tracking.trim() || !isIsoDate(expected) || saving) return;
     setSaving(true);
     try {
       await updateShipment(token, {
@@ -538,17 +547,20 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
             />
           }
         >
-          <View style={[styles.banner, { backgroundColor: banner.bg }]}>
-            <View style={styles.bannerIcon}>
-              <Icon name="box" color={banner.fg} size={19} />
+          {/* No banner while the load itself failed: "NOT REQUESTED" would be a lie. */}
+          {!(loadError && !shipment && !missing) && (
+            <View style={[styles.banner, { backgroundColor: banner.bg }]}>
+              <View style={styles.bannerIcon}>
+                <Icon name="box" color={banner.fg} size={19} />
+              </View>
+              <View style={styles.flex}>
+                <Text style={styles.bannerLabel}>Status</Text>
+                <Text style={[styles.bannerValue, { color: banner.fg }]}>
+                  {banner.label}
+                </Text>
+              </View>
             </View>
-            <View style={styles.flex}>
-              <Text style={styles.bannerLabel}>Status</Text>
-              <Text style={[styles.bannerValue, { color: banner.fg }]}>
-                {banner.label}
-              </Text>
-            </View>
-          </View>
+          )}
 
           {loadError && !shipment && !missing ? (
             <View style={styles.noteCard} testID="shipment-error">
@@ -805,7 +817,10 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
         animationType="fade"
         onRequestClose={() => setRequesting(false)}
       >
-        <View style={styles.editBackdrop}>
+        <KeyboardAvoidingView
+          style={styles.editBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={[styles.editSheet, styles.requestSheet]}>
             <Text style={styles.editTitle}>Request a shipment</Text>
             <ScrollView
@@ -833,7 +848,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 keyboardType="decimal-pad"
               />
 
-              <Text style={styles.editLabel}>Box size in cm (optional)</Text>
+              <Text style={styles.editLabel}>Box size in cm, L x W x H (optional)</Text>
               <View style={styles.dimRow}>
                 {(['length', 'width', 'height'] as const).map(side => (
                   <TextInput
@@ -843,7 +858,8 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                     onChangeText={value =>
                       setShipField(side, value.replace(/\D/g, ''))
                     }
-                    placeholder={side[0].toUpperCase() + side.slice(1)}
+                    placeholder={side[0].toUpperCase()}
+                    accessibilityLabel={`Box ${side} in cm`}
                     placeholderTextColor="#A9ADC2"
                     keyboardType="number-pad"
                   />
@@ -945,7 +961,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Tracking editor. POST /api/shipment/update takes the campaign id, so
@@ -956,10 +972,14 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
         animationType="fade"
         onRequestClose={() => setEditing(false)}
       >
-        <View style={styles.editBackdrop}>
-          <View style={styles.editSheet}>
+        <KeyboardAvoidingView
+          style={styles.editBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={[styles.editSheet, styles.requestSheet]}>
             <Text style={styles.editTitle}>Tracking details</Text>
-
+            {/* Scrolls: on a 320x568 phone the fields are taller than the screen, let alone with the keyboard up. */}
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <Text style={styles.editLabel}>Tracking number</Text>
             <TextInput
               style={styles.editInput}
@@ -998,6 +1018,11 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
               placeholderTextColor="#A9ADC2"
               keyboardType="number-pad"
             />
+            {expected.length === 10 && !isIsoDate(expected) && (
+              <Text style={styles.fieldError} testID="expected-error">
+                Enter a real date as YYYY-MM-DD.
+              </Text>
+            )}
 
             <Text style={styles.editLabel}>Courier slip (optional)</Text>
             <TouchableOpacity
@@ -1036,6 +1061,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 <Text style={styles.checkText}>{check.label}</Text>
               </TouchableOpacity>
             ))}
+            </ScrollView>
 
             <View style={styles.editActions}>
               <TouchableOpacity
@@ -1050,9 +1076,9 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
                 // button stays off until it would actually be accepted.
                 style={[
                   styles.editSave,
-                  (!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected)) && styles.editSaveOff,
+                  (!tracking.trim() || !isIsoDate(expected)) && styles.editSaveOff,
                 ]}
-                disabled={!tracking.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(expected) || saving}
+                disabled={!tracking.trim() || !isIsoDate(expected) || saving}
                 onPress={saveTracking}
                 accessibilityRole="button"
               >
@@ -1064,7 +1090,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1072,7 +1098,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F7F7FD' },
-  flex: { flex: 1 },
+  flex: { flex: 1, minWidth: 0 },
   header: {
     height: scale(56),
     paddingHorizontal: scale(10),
@@ -1094,7 +1120,15 @@ const styles = StyleSheet.create({
   },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingTop: scale(4), paddingBottom: scale(30) },
+  // Tablet: one centred column.
+  content: {
+    padding: scale(16),
+    paddingTop: scale(4),
+    paddingBottom: scale(30),
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
 
   banner: {
     padding: scale(15),
@@ -1230,6 +1264,7 @@ const styles = StyleSheet.create({
   editSheet: {
     width: '100%',
     maxWidth: scale(360),
+    maxHeight: '92%',
     borderRadius: scale(18),
     backgroundColor: '#FFFFFF',
     padding: scale(18),
@@ -1254,9 +1289,11 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     paddingHorizontal: scale(12),
-    fontSize: fontScale(13),
+    // 16 so iOS does not zoom on focus.
+    fontSize: 16,
     color: '#15163F',
   },
+  fieldError: { marginTop: scale(4), fontSize: fontScale(12), color: '#C4373B' },
   slipBtn: {
     height: scale(46),
     borderRadius: scale(12),

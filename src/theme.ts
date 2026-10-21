@@ -93,10 +93,31 @@ export function verticalScale(size: number) {
  * `maxFontSizeMultiplier` prop wired up in `src/components/Text.tsx`.
  */
 const FONT_DAMPING = 0.6;
+/** Body copy never renders below this on a small phone (owner rule: min 14). */
+const MIN_BODY_FONT = 14;
 export function fontScale(size: number) {
   const ratio = clamp(rawRatio(), MIN_SCALE, MAX_SCALE);
   const damped = 1 + (ratio - 1) * FONT_DAMPING;
-  return round(size * damped);
+  // Text designed at 13+ is body copy, so it must not shrink under 13/14 at
+  // 320-375pt. Captions and badges (< 13) keep scaling down as before.
+  const floor = size >= 13 ? Math.min(size, MIN_BODY_FONT) : 0;
+  return Math.max(round(size * damped), floor);
+}
+
+/**
+ * Text fields are never smaller than 16: below that iOS zooms the page on
+ * focus and Android text feels cramped. Not scaled down on small phones.
+ */
+export const INPUT_FONT_SIZE = 16;
+
+/**
+ * Smallest tap target in dp. scale() shrinks to 0.85x on a 320pt phone, which
+ * turned a 48 button into 41 and a 44 into 37; controls size themselves with
+ * touch() so they never fall under this.
+ */
+export const MIN_TOUCH = 44;
+export function touch(size: number) {
+  return Math.max(MIN_TOUCH, scale(size));
 }
 
 /**
@@ -134,6 +155,17 @@ export const CONTENT_MAX_WIDTH = 640;
  * spent on margin, not on making every card bigger.
  */
 export const GUTTER = isTablet ? scale(28) : scale(16);
+
+/**
+ * Spread into a ScrollView's contentContainerStyle (or a screen's root column)
+ * so single-column pages stay a centred, readable column on tablets instead of
+ * stretching edge to edge. On phones it is a no-op (width never exceeds 640).
+ */
+export const CONTENT_COLUMN = {
+  width: '100%' as const,
+  maxWidth: CONTENT_MAX_WIDTH,
+  alignSelf: 'center' as const,
+};
 
 
 /** Design tokens shared by the auth screens. Mirrors the ugcad.io web palette. */
@@ -280,6 +312,6 @@ export const type = {
   bodyStrong: { ...bodyFont(600), fontSize: fontScale(14), lineHeight: fontScale(20) },
   label: { ...bodyFont(600), fontSize: fontScale(13), lineHeight: fontScale(18) },
   caption: { ...bodyFont(500), fontSize: fontScale(11), lineHeight: fontScale(15) },
-  input: { ...bodyFont(400), fontSize: fontScale(15), lineHeight: fontScale(20) },
+  input: { ...bodyFont(400), fontSize: INPUT_FONT_SIZE, lineHeight: fontScale(22) },
   button: { ...bodyFont(700), fontSize: fontScale(15), lineHeight: fontScale(20) },
 } as const;

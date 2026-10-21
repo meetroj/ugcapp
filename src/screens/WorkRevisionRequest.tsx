@@ -37,7 +37,7 @@ import {
   type RevisionCounters,
 } from '../brandHiring';
 import { errorMessage } from '../payoutRules';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Work = Record<string, any> & { id: string };
 
@@ -281,9 +281,59 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
     comments.some(item => !!findContactInfo(item.description));
   const sendingRef = useRef(false);
 
-  const send = useCallback(async () => {
+  /** The request itself; `send` validates and (for a paid round) confirms first. */
+  const post = useCallback(
+    async (all: Comment[]) => {
+      if (sendingRef.current) return;
+      sendingRef.current = true;
+      setSending(true);
+      try {
+        // Throws carrying the backend's own `detail`, which explains refusals
+        // precisely: revision limit hit, wallet short for a paid round, contact
+        // details in the text, or a race with an approval.
+        const result = await requestWorkRevision(
+          token,
+          work.id,
+          buildRevisionPayload(all, note, deadlineAt()),
+        );
+        // Say so when money moved: a bare "requested" would hide the debit.
+        Alert.alert('Revision sent', revisionSentMessage(result as any));
+        onDone();
+        onClose();
+      } catch (err: any) {
+        Alert.alert('Revision not sent', errorMessage(err, 'Please try again.'));
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+    },
+    [note, deadlineAt, work.id, token, onDone, onClose],
+  );
+
+  const send = useCallback(() => {
     if (sendingRef.current) return;
-    if (!comments.length) {
+    // A change typed but not yet added with the arrow is still a change: send
+    // it rather than telling the brand to add one they already wrote.
+    let all = comments;
+    const typed = draft.trim();
+    if (typed) {
+      if (revisionItemCount(all.length, note) >= MAX_ITEMS) {
+        Alert.alert(
+          'Five changes maximum',
+          `A revision request can carry up to ${MAX_ITEMS} changes. Clear the comment box or remove one change.`,
+        );
+        return;
+      }
+      all = [
+        ...all,
+        {
+          key: `${Math.floor(position)}-${all.length}`,
+          description: typed,
+          timestamp_seconds: Math.floor(position),
+        },
+      ];
+    }
+    if (!all.length) {
       Alert.alert(
         'Add a change first',
         'Note at least one thing that needs fixing so the creator knows what to redo.',
@@ -297,35 +347,23 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
       );
       return;
     }
-    if (revisionItemCount(comments.length, note) > MAX_ITEMS) {
+    if (revisionItemCount(all.length, note) > MAX_ITEMS) {
       Alert.alert(
         'Five changes maximum',
         `Your note counts as one of the ${MAX_ITEMS} changes. Remove a comment or shorten it into the note.`,
       );
       return;
     }
-    sendingRef.current = true;
-    setSending(true);
-    try {
-      // Throws carrying the backend's own `detail`, which explains refusals
-      // precisely: revision limit hit, wallet short for a paid round, contact
-      // details in the text, or a race with an approval.
-      const result = await requestWorkRevision(
-        token,
-        work.id,
-        buildRevisionPayload(comments, note, deadlineAt()),
-      );
-      // Say so when money moved: a bare "requested" would hide the debit.
-      Alert.alert('Revision sent', revisionSentMessage(result as any));
-      onDone();
-      onClose();
-    } catch (err: any) {
-      Alert.alert('Revision not sent', errorMessage(err, 'Please try again.'));
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
+    // A paid round debits the wallet and cannot be undone: say so before sending.
+    if (notice?.kind === 'paid') {
+      Alert.alert(notice.title, notice.body, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Send and pay', onPress: () => post(all) },
+      ]);
+      return;
     }
-  }, [comments, contactHit, note, deadlineAt, work.id, token, onDone, onClose]);
+    post(all);
+  }, [comments, draft, position, contactHit, note, notice, post]);
 
   const progress = length > 0 ? Math.min(1, position / length) : 0;
 
@@ -344,7 +382,16 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + scale(10) }]}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: insets.top + scale(10),
+            paddingLeft: scale(10) + insets.left,
+            paddingRight: scale(10) + insets.right,
+          },
+        ]}
+      >
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onClose}
@@ -387,7 +434,11 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: scale(36) + insets.bottom },
+          {
+            paddingBottom: scale(36) + insets.bottom,
+            paddingLeft: scale(14) + insets.left,
+            paddingRight: scale(14) + insets.right,
+          },
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -459,7 +510,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           {watermarked && (
             <View style={styles.watermark} pointerEvents="none">
               {Array.from({ length: 4 }).map((_, r) => (
-                <Text key={r} style={styles.watermarkText} numberOfLines={1}>
+                <Text key={r} style={styles.watermarkText} numberOfLines={1} ellipsizeMode="clip">
                   UGCad · SAMPLE   UGCad · SAMPLE   UGCad · SAMPLE
                 </Text>
               ))}
@@ -533,6 +584,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           <View key={item.key} style={styles.comment}>
             <TouchableOpacity
               style={styles.stampChip}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               onPress={() =>
                 seekTo(item.timestamp_seconds / Math.max(1, length))
               }
@@ -548,7 +600,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
               onPress={() => removeComment(item.key)}
               accessibilityRole="button"
               accessibilityLabel="Delete comment"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
             >
               <Icon name="trash" color="#8B90AE" size={16} />
             </TouchableOpacity>
@@ -688,9 +740,14 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           </Text>
         )}
 
+        {!!notice && notice.kind !== 'free' && (
+          <Text style={styles.feeWarn}>
+            {notice.title}. {notice.body}
+          </Text>
+        )}
         <TouchableOpacity
           style={[styles.submit, (sending || contactHit) && styles.submitOff]}
-          onPress={send}
+          onPress={() => send()}
           disabled={sending || contactHit}
           accessibilityRole="button"
         >
@@ -705,11 +762,6 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
           <Text style={styles.contactWarn}>
             Please remove phone numbers and email addresses. Keep all
             communication on-platform; sharing contact details isn't allowed.
-          </Text>
-        )}
-        {!!notice && notice.kind !== 'free' && (
-          <Text style={styles.feeWarn}>
-            {notice.title}. {notice.body}
           </Text>
         )}
       </ScrollView>
@@ -734,12 +786,12 @@ const styles = StyleSheet.create({
     gap: scale(8),
   },
   headerBtn: {
-    width: scale(34),
-    height: scale(34),
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerText: { flex: 1 },
+  headerText: { flex: 1, minWidth: 0 },
   headerTitle: {
     fontSize: fontScale(17),
     fontFamily: 'ReadexPro-SemiBold',
@@ -748,21 +800,28 @@ const styles = StyleSheet.create({
   },
   headerSub: {
     marginTop: scale(2),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#4ADE80',
   },
   closeBtn: {
-    width: scale(34),
-    height: scale(34),
+    width: 44,
+    height: 44,
     borderRadius: scale(10),
     backgroundColor: '#1A1F3D',
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  content: { paddingHorizontal: scale(14), paddingBottom: scale(36) },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    paddingHorizontal: scale(14),
+    paddingBottom: scale(36),
+  },
 
   player: {
     height: scale(208),
@@ -867,7 +926,7 @@ const styles = StyleSheet.create({
   },
   videoErrText: {
     marginTop: scale(6),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#B9BED6',
     textAlign: 'center',
   },
@@ -908,9 +967,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   count: { color: '#8B90AE' },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: scale(4) },
+  sortBtn: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: scale(4) },
   sortText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#8C93FF',
@@ -925,7 +984,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  commentText: { flex: 1, fontSize: fontScale(13), color: '#E6E8F5' },
+  commentText: { flex: 1, minWidth: 0, fontSize: fontScale(14), color: '#E6E8F5' },
   stampChip: {
     paddingHorizontal: scale(7),
     paddingVertical: scale(4),
@@ -949,20 +1008,21 @@ const styles = StyleSheet.create({
   composerInput: {
     flex: 1,
     maxHeight: scale(90),
-    fontSize: fontScale(13),
+    // 16 keeps iOS from zooming the screen when the field gets focus.
+    fontSize: 16,
     color: '#FFFFFF',
     padding: 0,
   },
   sendChip: {
-    width: scale(32),
-    height: scale(32),
+    width: 44,
+    height: 44,
     borderRadius: scale(9),
     backgroundColor: '#5B63F5',
     alignItems: 'center',
     justifyContent: 'center',
   },
   sendChipOff: { backgroundColor: '#2C3157' },
-  composerHint: { marginTop: scale(8), fontSize: fontScale(11), color: '#6B7091' },
+  composerHint: { marginTop: scale(8), fontSize: fontScale(12), color: '#8B90AE' },
 
   blockTitle: {
     marginTop: scale(20),
@@ -974,7 +1034,8 @@ const styles = StyleSheet.create({
   deadlineRow: { marginTop: scale(10), flexDirection: 'row', gap: scale(8) },
   chip: {
     flex: 1,
-    height: scale(44),
+    minHeight: 44,
+    paddingHorizontal: scale(4),
     borderRadius: scale(11),
     borderWidth: 1,
     borderColor: '#252B4A',
@@ -986,7 +1047,9 @@ const styles = StyleSheet.create({
   },
   chipOn: { borderColor: '#5B63F5', backgroundColor: '#1E2450' },
   chipText: {
-    fontSize: fontScale(11),
+    flexShrink: 1,
+    textAlign: 'center',
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#8B90AE',
@@ -999,17 +1062,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(9),
   },
-  customLabel: { fontSize: fontScale(12), color: '#8B90AE' },
+  customLabel: { fontSize: fontScale(14), color: '#8B90AE' },
   customInput: {
     width: scale(54),
-    height: scale(40),
+    height: 44,
     borderRadius: scale(10),
     borderWidth: 1,
     borderColor: '#252B4A',
     backgroundColor: '#151A33',
     color: '#FFFFFF',
     textAlign: 'center',
-    fontSize: fontScale(14),
+    fontSize: 16,
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     paddingVertical: 0,
@@ -1039,10 +1102,10 @@ const styles = StyleSheet.create({
     borderRadius: scale(12),
     backgroundColor: '#151A33',
     color: '#FFFFFF',
-    fontSize: fontScale(13),
+    fontSize: 16,
   },
 
-  noteHint: { marginTop: scale(6), fontSize: fontScale(11), color: '#6B7091' },
+  noteHint: { marginTop: scale(6), fontSize: fontScale(13), color: '#8B90AE' },
 
   submit: {
     marginTop: scale(18),
@@ -1062,13 +1125,13 @@ const styles = StyleSheet.create({
 
   feeWarn: {
     marginTop: scale(10),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     color: '#F0B45E',
     textAlign: 'center',
   },
   contactWarn: {
     marginTop: scale(10),
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     color: '#FF8A8A',
     textAlign: 'center',
   },

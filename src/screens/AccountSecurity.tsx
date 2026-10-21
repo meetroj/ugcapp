@@ -14,7 +14,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Clipboard,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -31,7 +33,7 @@ import {
   setupTwoFactor,
   verifyTwoFactor,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, INPUT_FONT_SIZE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -231,10 +233,19 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
   return (
     <View style={styles.screen}>
       <ScreenHeader title="Account Security" onBack={onBack} />
+      {/* Android is edge-to-edge (the keyboard does not resize the window), so
+          the lower fields (2FA code, delete confirmation) need this padding to
+          stay above the keyboard; iOS insets the ScrollView itself. */}
+      <KeyboardAvoidingView
+        style={styles.flex1}
+        behavior="padding"
+        enabled={Platform.OS === 'android'}
+      >
       <ScrollView
         style={styles.sheet}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.section}>Change password</Text>
@@ -245,6 +256,8 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
           placeholder="Current password"
           placeholderTextColor="#A9ADC2"
           secureTextEntry
+          autoCapitalize="none"
+          autoComplete="current-password"
         />
         <TextInput
           style={[styles.input, styles.stacked]}
@@ -253,6 +266,8 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
           placeholder="New password"
           placeholderTextColor="#A9ADC2"
           secureTextEntry
+          autoCapitalize="none"
+          autoComplete="new-password"
         />
         <TextInput
           style={[styles.input, styles.stacked]}
@@ -261,6 +276,9 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
           placeholder="Confirm new password"
           placeholderTextColor="#A9ADC2"
           secureTextEntry
+          autoCapitalize="none"
+          autoComplete="new-password"
+          onSubmitEditing={savePassword}
         />
         <TouchableOpacity
           style={styles.primary}
@@ -492,12 +510,14 @@ function AccountSecurity({ token, onBack, onLogout }: Props) {
           </TouchableOpacity>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0E1330' },
+  flex1: { flex: 1 },
   sheet: {
     flex: 1,
     backgroundColor: '#F8F8FE',
@@ -515,22 +535,24 @@ const styles = StyleSheet.create({
   },
   body: {
     marginBottom: scale(12),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
   },
   input: {
     height: scale(48),
+    minHeight: 44,
     paddingHorizontal: scale(13),
     borderRadius: scale(13),
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#ECECF6',
-    fontSize: fontScale(13),
+    // 16 or more so the keyboard does not zoom/crop the field on focus.
+    fontSize: INPUT_FONT_SIZE,
     color: '#181943',
   },
   stacked: { marginTop: scale(10) },
-  code: { fontSize: fontScale(18), letterSpacing: scale(5) },
+  code: { fontSize: Math.max(INPUT_FONT_SIZE, fontScale(18)), letterSpacing: scale(5) },
   row: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
   flex: { flex: 1 },
   noTop: { marginTop: 0 },
@@ -540,13 +562,14 @@ const styles = StyleSheet.create({
   primary: {
     marginTop: scale(14),
     height: scale(48),
+    minHeight: 44,
     borderRadius: scale(13),
     backgroundColor: '#4C5BF3',
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -554,6 +577,7 @@ const styles = StyleSheet.create({
   ghost: {
     marginTop: scale(4),
     height: scale(48),
+    minHeight: 44,
     borderRadius: scale(13),
     borderWidth: 1,
     borderColor: '#D9DCF3',
@@ -562,7 +586,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   ghostText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -570,6 +594,7 @@ const styles = StyleSheet.create({
   danger: {
     marginTop: scale(4),
     height: scale(48),
+    minHeight: 44,
     borderRadius: scale(13),
     backgroundColor: '#C0392B',
     alignItems: 'center',
@@ -591,7 +616,7 @@ const styles = StyleSheet.create({
   },
   secretHint: {
     marginTop: scale(6),
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     color: '#8A8FA8',
   },
 });

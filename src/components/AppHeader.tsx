@@ -23,7 +23,13 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { scale, fontScale } from '../theme';
+import { scale, fontScale, MIN_TOUCH } from '../theme';
+
+// Hit area grown to MIN_TOUCH around the 34dp buttons (more on a 320pt phone,
+// where scale() shrinks them). Horizontal slop is capped so the two action
+// buttons, 6dp apart, do not swallow each other's taps.
+const HIT_Y = Math.max(8, Math.ceil((MIN_TOUCH - scale(34)) / 2));
+const HIT_X = Math.max(4, Math.ceil((MIN_TOUCH - scale(34)) / 2));
 
 function BackIcon() {
   return (
@@ -156,7 +162,7 @@ function AppHeader({
                 onPress={onProfile}
                 accessibilityRole="button"
                 accessibilityLabel="Profile"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                hitSlop={{ top: HIT_Y, bottom: HIT_Y, left: HIT_X, right: HIT_X }}
               >
                 {profilePhoto ? (
                   <Image
@@ -204,6 +210,7 @@ function AppHeader({
           onPress={onNotifications}
           accessibilityRole="button"
           accessibilityLabel="Notifications"
+          hitSlop={{ top: HIT_Y, bottom: HIT_Y, left: HIT_X, right: HIT_X }}
         >
           <NotificationIcon />
           {notificationCount > 0 && (
@@ -220,6 +227,7 @@ function AppHeader({
           onPress={onMessages}
           accessibilityRole="button"
           accessibilityLabel="Messages"
+          hitSlop={{ top: HIT_Y, bottom: HIT_Y, left: HIT_X, right: HIT_X }}
         >
           <MessageIcon />
           {unreadMessages > 0 && (
@@ -257,6 +265,8 @@ const styles = StyleSheet.create({
     width: scale(30),
     height: scale(30),
     borderRadius: scale(15),
+    // Never stretched: the photo is cropped to the circle, not squashed.
+    resizeMode: 'cover',
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.55)',
     backgroundColor: '#2A2E55',
@@ -275,6 +285,9 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     bottom: 0,
+    // Keeps a long title (ellipsized) clear of the logo/back on the left and
+    // the two action buttons on the right, which it is centred between.
+    paddingHorizontal: scale(88),
     alignItems: 'center',
     justifyContent: 'center',
   },

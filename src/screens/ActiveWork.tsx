@@ -27,7 +27,8 @@ import {
   workStages,
   workStatusMeta,
 } from '../dealRoom';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { loadErrorText } from '../briefs';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Work = Record<string, any> & { id: string };
 type Tab = 'Requests' | 'Active' | 'Completed' | 'Cancelled';
@@ -105,6 +106,7 @@ function ActiveWork({
   onNotifications,
   onMessages,
   onOpenThread,
+  onBrowse,
   unread = 0,
 }: {
   token: string;
@@ -122,6 +124,8 @@ function ActiveWork({
   onNotifications?: () => void;
   /** Opens Messages from the header chat icon. */
   onMessages?: () => void;
+  /** Empty Active tab: sends the creator to Browse Campaigns. Button hidden when not given. */
+  onBrowse?: () => void;
   /** Unread count for the chat badge. */
   unread?: number;
 }) {
@@ -134,15 +138,17 @@ function ActiveWork({
   const [filterOpen, setFilterOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Distinguishes "you have no deals" from "we could not load them".
-  const [failed, setFailed] = useState(false);
+  // Distinguishes "you have no deals" from "we could not load them" ('' = fine).
+  const [failed, setFailed] = useState('');
+  // True once a load has succeeded: a failed 10 s background poll then keeps the list.
+  const loaded = useRef(false);
   // Real unread-notification count for the header bell (was hardcoded to 7).
   const [notifications, setNotifications] = useState(0);
   const mounted = useRef(false);
   const requestId = useRef(0);
   const autoTabbed = useRef(false);
 
-  const loadDeals = useCallback(() => {
+  const loadDeals = useCallback((quiet = false) => {
     const currentRequest = ++requestId.current;
     const isCurrent = () => mounted.current && currentRequest === requestId.current;
     // GET /api/deals/my — the backend derives the creator from the token and
@@ -154,7 +160,8 @@ function ActiveWork({
         if (!isCurrent()) {
           return;
         }
-        setFailed(false);
+        loaded.current = true;
+        setFailed('');
         setWorks(
           deals.map((deal, index) => ({
             ...deal,
@@ -165,9 +172,9 @@ function ActiveWork({
           })),
         );
       })
-      .catch(() => {
-        if (isCurrent()) {
-          setFailed(true);
+      .catch(error => {
+        if (isCurrent() && !(quiet && loaded.current)) {
+          setFailed(loadErrorText(error, 'your work'));
         }
       })
       .finally(() => {
@@ -192,10 +199,10 @@ function ActiveWork({
     autoTabbed.current = false;
     loadDeals();
     const interval = setInterval(() => {
-      if (AppState.currentState === 'active') loadDeals();
+      if (AppState.currentState === 'active') loadDeals(true);
     }, 10000);
     const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active') loadDeals();
+      if (state === 'active') loadDeals(true);
     });
     return () => {
       mounted.current = false;
@@ -350,10 +357,10 @@ function ActiveWork({
         )}
         </View>
         {loading && <SkeletonList count={4} lines={2} footer />}
-        {!loading && failed && (
+        {!loading && !!failed && (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Could not load your work</Text>
-            <Text style={styles.emptyText}>Check your connection and try again.</Text>
+            <Text style={styles.emptyText}>{failed}</Text>
             <TouchableOpacity
               style={styles.retry}
               onPress={() => {
@@ -371,6 +378,16 @@ function ActiveWork({
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>{`No ${tab.toLowerCase()} work`}</Text>
             <Text style={styles.emptyText}>Campaigns in this stage will appear here.</Text>
+            {tab === 'Active' && !!onBrowse && (
+              <TouchableOpacity
+                style={styles.retry}
+                onPress={onBrowse}
+                accessibilityRole="button"
+                accessibilityLabel="Browse Campaigns"
+              >
+                <Text style={styles.retryText}>Browse Campaigns</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
         {visible.map(work => (
@@ -455,8 +472,8 @@ function WorkCard({
             </Text>
           </View>
           {!!title && <Text style={styles.campaignTitle} numberOfLines={1}>{title}</Text>}
-          <Text style={styles.brandName}>{brand}</Text>
-          <Text style={styles.meta}>
+          <Text style={styles.brandName} numberOfLines={1}>{brand}</Text>
+          <Text style={styles.meta} numberOfLines={2}>
             {stringValue(work.parent_brand, brand)}
             {stringValue(work.campaign_type || work.category, '')
               ? ` · Via ${stringValue(work.campaign_type || work.category, '')}`
@@ -490,7 +507,7 @@ function WorkCard({
         // Work has not started, so the stage bar would mislead: show the payout
         // and a direct way into the booking card.
         <View style={styles.requestRow}>
-          <View>
+          <View style={styles.requestPayBox}>
             <Text style={styles.requestPay}>{`₹ ${payout.toLocaleString('en-IN')}`}</Text>
             <Text style={styles.requestPayHint}>you'll be paid</Text>
           </View>
@@ -512,9 +529,11 @@ function WorkCard({
             {stages.map((label, index) => (
               <Text
                 key={label}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
                 style={[
                   styles.progressLabel,
-                  { width: `${Math.floor(100 / stages.length) - 1}%` },
                   index <= currentStage && styles.progressLabelActive,
                 ]}
               >
@@ -594,7 +613,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(24),
     borderTopRightRadius: scale(24),
   },
-  content: { padding: scale(18), paddingBottom: scale(30) + NAV_CLEARANCE },
+  // Tablet: a centred, readable column (no-op on phones).
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(18),
+    paddingBottom: scale(30) + NAV_CLEARANCE,
+  },
   tools: {
     marginTop: scale(12),
     marginBottom: scale(12),
@@ -623,7 +649,8 @@ const styles = StyleSheet.create({
     color: '#25274C',
   },
   // Anchors the dropdown so it can float over the list below.
-  toolsWrap: { zIndex: 10 },
+  // elevation too: on Android the cards' elevation would otherwise draw over the menu.
+  toolsWrap: { zIndex: 10, elevation: 6 },
   filterMenu: {
     // Overlays the content rather than pushing it down: the list keeps its
     // scroll position while the menu is open, so dismissing it does not jump
@@ -660,7 +687,7 @@ const styles = StyleSheet.create({
     color: '#626784',
   },
   filterOptionTextActive: { color: '#4741DB' },
-  filterCount: { fontSize: fontScale(12), color: '#9094AA' },
+  filterCount: { fontSize: fontScale(13), color: '#8A8EA6' },
   loading: { marginTop: scale(35) },
   empty: { marginTop: scale(40), alignItems: 'center' },
   emptyTitle: {
@@ -669,7 +696,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#25274C',
   },
-  emptyText: { marginTop: scale(5), fontSize: fontScale(11), color: '#858AA3' },
+  emptyText: { marginTop: scale(5), fontSize: fontScale(14), color: '#858AA3', textAlign: 'center' },
   retry: {
     marginTop: scale(14),
     minWidth: scale(110),
@@ -698,15 +725,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  revisionBtnText: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B45309' },
+  revisionBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B45309' },
   requestRow: {
     marginTop: scale(14),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: scale(10),
   },
+  requestPayBox: { flexShrink: 1 },
   requestPay: { fontSize: fontScale(15), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#16183F' },
-  requestPayHint: { fontSize: fontScale(10), color: '#8B90AA' },
+  requestPayHint: { fontSize: fontScale(12), color: '#8B90AA' },
   respondBtn: {
     minHeight: scale(44),
     paddingHorizontal: scale(16),
@@ -756,29 +785,33 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFF',
   },
-  brandCopy: { flex: 1, marginLeft: scale(11) },
-  referenceRow: { flexDirection: 'row', alignItems: 'center', gap: scale(3) },
+  brandCopy: { flex: 1, minWidth: 0, marginLeft: scale(11), marginRight: scale(8) },
+  // Wraps so a long reference + status never pushes the arrow button off the card at 320.
+  referenceRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: scale(3) },
   reference: {
-    fontSize: fontScale(11),
+    flexShrink: 1,
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#26284C',
   },
   active: {
-    fontSize: fontScale(9),
+    flexShrink: 1,
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#17AC54',
   },
   brandName: {
     marginTop: scale(4),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '900',
     color: '#16183F',
   },
-  meta: { marginTop: scale(4), fontSize: fontScale(9), color: '#8B90AA' },
+  meta: { marginTop: scale(4), fontSize: fontScale(11), color: '#8B90AA' },
   arrowButton: {
+    flexShrink: 0,
     width: scale(36),
     height: scale(36),
     borderRadius: scale(18),
@@ -786,13 +819,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Same gap and flex as the bars below so each label sits over its own bar.
   progressLabels: {
     marginTop: scale(18),
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: scale(7),
   },
   progressLabel: {
-    fontSize: fontScale(8),
+    flex: 1,
+    minWidth: 0,
+    fontSize: fontScale(10),
     textAlign: 'center',
     color: '#8C90A8',
   },

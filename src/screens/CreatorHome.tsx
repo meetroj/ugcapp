@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -31,7 +32,7 @@ import {
 import AppHeader from '../components/AppHeader';
 import { isSelectedCreator, loadErrorText } from '../briefs';
 import { profileNudge, profilePercent } from '../profileCompletion';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 // "Later" on the complete-your-profile pop-up hides it until the app restarts
 // (the website hides it for the browser session).
@@ -184,6 +185,8 @@ function CreatorHome({
   onOpenDeals,
   onNavigate,
 }: Props) {
+  // At 320pt the greeting and the two stat rows cannot share one row, so the hero stacks.
+  const narrow = useWindowDimensions().width < 360;
   const [profile, setProfile] = useState<AuthUser>(session);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [completedDeals, setCompletedDeals] = useState(0);
@@ -454,9 +457,9 @@ function CreatorHome({
           />
         }
       >
-        <View style={styles.hero}>
-          <View style={styles.heroIntro}>
-            <Text style={styles.greeting}>Hi, {displayName(profile)}</Text>
+        <View style={[styles.hero, narrow && styles.heroNarrow]}>
+          <View style={[styles.heroIntro, narrow && styles.heroIntroNarrow]}>
+            <Text style={styles.greeting} numberOfLines={2}>Hi, {displayName(profile)}</Text>
             {(!!category || rating > 0) && (
               <View style={styles.metaRow}>
                 {!!category && <Text style={styles.metaChip}>{category}</Text>}
@@ -482,8 +485,8 @@ function CreatorHome({
               <Text style={styles.arrow}>→</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.heroDivider} />
-          <View style={styles.statColumn}>
+          {!narrow && <View style={styles.heroDivider} />}
+          <View style={[styles.statColumn, narrow && styles.statColumnNarrow]}>
             {/* The chevrons promise navigation, so the rows deliver it. */}
             <TouchableOpacity
               style={styles.statRow}
@@ -497,7 +500,7 @@ function CreatorHome({
               </View>
               <View style={styles.statCopy}>
                 <Text style={styles.statLabel}>Total Earnings</Text>
-                <Text style={styles.statValue}>{money(earnings)}</Text>
+                <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{money(earnings)}</Text>
               </View>
               <Text style={styles.chevron}>›</Text>
             </TouchableOpacity>
@@ -749,7 +752,13 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(24),
     borderTopRightRadius: scale(24),
   },
-  content: { paddingBottom: scale(24) + NAV_CLEARANCE },
+  // Tablet: a centred, readable column (no-op on phones).
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    paddingBottom: scale(24) + NAV_CLEARANCE,
+  },
   header: {
     height: scale(58),
     paddingHorizontal: scale(16),
@@ -815,7 +824,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8E8FC',
   },
-  heroIntro: { flex: 1.05, paddingRight: scale(14) },
+  heroIntro: { flex: 1.05, minWidth: 0, paddingRight: scale(14) },
+  heroNarrow: { flexDirection: 'column' },
+  heroIntroNarrow: { flex: 0, paddingRight: 0 },
   metaRow: { marginTop: scale(8), flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: scale(8) },
   metaChip: {
     paddingHorizontal: scale(9),
@@ -823,13 +834,13 @@ const styles = StyleSheet.create({
     borderRadius: scale(8),
     overflow: 'hidden',
     backgroundColor: '#E4E3FF',
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4D48EF',
     textTransform: 'capitalize',
   },
-  metaRating: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B4790B' },
+  metaRating: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B4790B' },
   errorBox: {
     marginHorizontal: scale(16),
     marginBottom: scale(12),
@@ -840,7 +851,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  errorText: { flex: 1, minWidth: 0, fontSize: fontScale(13), color: '#B03030' },
   retry: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
   retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
   progressCard: {
@@ -855,8 +866,8 @@ const styles = StyleSheet.create({
     borderColor: '#E9E9F4',
   },
   progressTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  progressText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#11123D' },
-  progressCta: { fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4D48EF' },
+  progressText: { flexShrink: 1, fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#11123D' },
+  progressCta: { flexShrink: 0, marginLeft: scale(8), fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4D48EF' },
   progressTrack: { marginTop: scale(8), height: scale(6), borderRadius: scale(3), backgroundColor: '#E9EAF3', overflow: 'hidden' },
   progressFill: { height: scale(6), borderRadius: scale(3), backgroundColor: '#4C5BF3' },
   dealCard: {
@@ -869,9 +880,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8E8FC',
   },
-  dealLabel: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#6658F5', letterSpacing: 0.5 },
+  dealLabel: { fontSize: fontScale(11), fontFamily: 'Inter-ExtraBold', fontWeight: '800', color: '#6658F5', letterSpacing: 0.5 },
   dealTitle: { marginTop: scale(4), fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#11123D' },
-  dealMeta: { marginTop: scale(3), fontSize: fontScale(12), color: '#7E829D' },
+  dealMeta: { marginTop: scale(3), fontSize: fontScale(13), color: '#6B7094' },
   heroDivider: {
     width: 1,
     marginVertical: scale(4),
@@ -886,15 +897,15 @@ const styles = StyleSheet.create({
   },
   tagline: {
     marginTop: scale(9),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#737895',
   },
   browseButton: {
     marginTop: scale(18),
-    height: scale(40),
+    minHeight: scale(44),
     borderRadius: scale(8),
     paddingHorizontal: scale(10),
     backgroundColor: '#5B5CF6',
@@ -911,7 +922,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   arrow: { fontSize: fontScale(19), color: '#FFF', marginLeft: scale(6) },
-  statColumn: { flex: 1, justifyContent: 'center' },
+  statColumn: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  statColumnNarrow: { flex: 0, marginTop: scale(14), paddingTop: scale(6), borderTopWidth: 1, borderTopColor: '#DDDDF0' },
   statRow: { minHeight: scale(70), flexDirection: 'row', alignItems: 'center' },
   statIcon: {
     width: scale(38),
@@ -928,9 +940,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
   },
-  statCopy: { flex: 1, marginLeft: scale(9) },
+  statCopy: { flex: 1, minWidth: 0, marginLeft: scale(9) },
   statLabel: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#7E829D',
@@ -963,10 +975,10 @@ const styles = StyleSheet.create({
     marginTop: scale(8),
     marginBottom: scale(24),
     paddingHorizontal: scale(17),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
-    color: '#8A8EA7',
+    color: '#6B7094',
   },
   creatorRow: { paddingHorizontal: scale(16), paddingBottom: scale(12), gap: scale(14) },
   creatorSkeleton: { width: CARD_WIDTH },
@@ -1068,7 +1080,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#5B5CF6',
   },
-  creatorIdentityCopy: { flex: 1, marginLeft: scale(9) },
+  creatorIdentityCopy: { flex: 1, minWidth: 0, marginLeft: scale(9) },
   creatorName: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
@@ -1077,8 +1089,8 @@ const styles = StyleSheet.create({
   },
   creatorHandle: {
     marginTop: scale(2),
-    fontSize: fontScale(10),
-    color: '#9295AA',
+    fontSize: fontScale(12),
+    color: '#7A7F9C',
   },
   creatorMetrics: {
     marginTop: scale(12),
@@ -1089,7 +1101,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  metricLabel: { fontSize: fontScale(9), color: '#A0A3B5' },
+  metricLabel: { fontSize: fontScale(11), color: '#7A7F9C' },
   metricValue: {
     marginTop: scale(3),
     fontSize: fontScale(12),

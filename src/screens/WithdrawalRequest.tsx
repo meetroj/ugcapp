@@ -22,7 +22,7 @@ import { Text, TextInput } from '../components/Text';
 import ScreenHeader from '../components/ScreenHeader';
 import { SkeletonBlock } from '../components/Skeleton';
 import { getPayoutOverview, requestWithdrawal } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 import {
   MIN_WITHDRAWAL_AMOUNT,
   amountIssue,
@@ -325,6 +325,7 @@ function WithdrawalRequest({ token, onBack, onVerifyKyc }: Props) {
                     }}
                     placeholder="Full name"
                     placeholderTextColor="#9CA3AF"
+                    autoCapitalize="words"
                   />
                   <Text style={styles.label}>Account number</Text>
                   <TextInput
@@ -405,7 +406,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
-  content: { padding: scale(16), paddingBottom: scale(34) },
+  // Centred, capped column so the form does not stretch edge to edge on a tablet.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingBottom: scale(32),
+  },
   balanceCard: {
     padding: scale(16),
     borderRadius: scale(16),
@@ -414,22 +422,22 @@ const styles = StyleSheet.create({
     borderColor: '#E1E2F8',
   },
   balanceLabel: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#7E829D',
   },
   balanceValue: {
-    marginTop: scale(6),
+    marginTop: scale(8),
     fontSize: fontScale(24),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
   },
   label: {
-    marginTop: scale(20),
-    marginBottom: scale(6),
-    fontSize: fontScale(11),
+    marginTop: scale(24),
+    marginBottom: scale(8),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#7E829D',
@@ -451,7 +459,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  hint: { fontSize: fontScale(11), color: '#9295AA' },
+  hint: { flexShrink: 1, fontSize: fontScale(12), color: '#9295AA' },
   maxBtn: {
     minHeight: scale(44),
     paddingHorizontal: scale(4),
@@ -484,7 +492,7 @@ const styles = StyleSheet.create({
   chipTextOn: { color: '#FFFFFF' },
   error: {
     marginTop: scale(12),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',
@@ -496,7 +504,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FDECEC',
   },
   errorBoxText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#B3261E',
@@ -544,9 +552,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   note: {
-    marginTop: scale(14),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
+    marginTop: scale(16),
+    fontSize: fontScale(12),
+    lineHeight: fontScale(18),
     color: '#9295AA',
     textAlign: 'center',
   },
@@ -566,8 +574,8 @@ const styles = StyleSheet.create({
   },
   doneBody: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
   },
   gateCard: {
@@ -586,14 +594,14 @@ const styles = StyleSheet.create({
   },
   gateBody: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
   },
   gateReason: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',

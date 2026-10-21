@@ -46,7 +46,7 @@ export default function WalletCheckout({ token, order, prefill, onClose, onSucce
       <SafeAreaView style={styles.screen}>
         <View style={styles.header}>
           <Text style={styles.title}>Add funds · Payment</Text>
-          <TouchableOpacity onPress={close} disabled={busy} accessibilityRole="button">
+          <TouchableOpacity onPress={close} disabled={busy} accessibilityRole="button" style={styles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Text style={styles.close}>Close</Text>
           </TouchableOpacity>
         </View>
@@ -95,7 +95,8 @@ export default function WalletCheckout({ token, order, prefill, onClose, onSucce
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#FFFFFF' },
   header: { padding: scale(16), flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontSize: fontScale(16), fontFamily: 'ReadexPro-SemiBold', fontWeight: '600', color: '#15163F' },
+  title: { flex: 1, minWidth: 0, fontSize: fontScale(16), fontFamily: 'ReadexPro-SemiBold', fontWeight: '600', color: '#15163F' },
+  closeBtn: { minHeight: scale(44), minWidth: scale(44), alignItems: 'center', justifyContent: 'center' },
   close: { fontSize: fontScale(14), fontFamily: 'Inter-SemiBold', fontWeight: '600', color: '#4C4DD6' },
   verifying: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', gap: scale(12) },
 });

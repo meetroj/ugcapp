@@ -98,6 +98,20 @@ const input = (tree: any, placeholder: string) =>
   tree.root
     .findAllByType(TextInput)
     .find((node: any) => node.props.placeholder === placeholder);
+// The clip button opens a chooser; the picker itself opens after the sheet's fade (iOS wait).
+const attach = async (tree: any, source: 'Photo or video' | 'PDF document') => {
+  await press(byLabel(tree, 'Attach a file'));
+  await press(byText(tree, source));
+  await act(async () => {
+    jest.advanceTimersByTime(600);
+  });
+  // Let the picker -> upload promise chain settle.
+  for (let i = 0; i < 5; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+};
 const type = async (node: any, value: string) => {
   expect(node).toBeTruthy();
   await act(async () => {
@@ -242,7 +256,7 @@ test('files: up to five, a file-only message carries the packed text, bad files 
     .mockResolvedValueOnce('/uploads/b.pdf');
   const { tree } = await mount(creator, { title: 'Levis' });
 
-  await press(byLabel(tree, 'Attach a file'));
+  await attach(tree, 'Photo or video');
   expect(uploadMedia).toHaveBeenCalledTimes(2);
   expect((launchImageLibrary as jest.Mock).mock.calls[0][0].selectionLimit).toBe(5);
   await press(byLabel(tree, 'Send message'));
@@ -258,9 +272,43 @@ test('files: up to five, a file-only message carries the packed text, bad files 
   (launchImageLibrary as jest.Mock).mockResolvedValueOnce({
     assets: [{ uri: 'file:///big.jpg', fileName: 'big.jpg', type: 'image/jpeg', fileSize: 11 * MB }],
   });
-  await press(byLabel(tree, 'Attach a file'));
+  await attach(tree, 'Photo or video');
   expect(uploadMedia).not.toHaveBeenCalled();
   expect(allText(tree)).toContain('Images must be 10 MB or smaller.');
+});
+
+test('PDFs come from the Files picker, over 25 MB or a wrong type attaches nothing', async () => {
+  const MB = 1024 * 1024;
+  const {
+    NativeDocumentPicker,
+  } = require('../node_modules/@react-native-documents/picker/lib/module/spec/NativeDocumentPicker');
+  const pdf = (over: Record<string, unknown> = {}) => ({
+    uri: 'file:///cache/brief.pdf', name: 'brief.pdf', type: 'application/pdf', size: 2 * MB,
+    error: null, isVirtual: false, hasRequestedType: true, ...over,
+  });
+  (uploadMedia as jest.Mock).mockResolvedValue('/uploads/brief.pdf');
+  const { tree } = await mount(creator, { title: 'Levis' });
+
+  NativeDocumentPicker.pick.mockResolvedValueOnce([pdf()]);
+  await attach(tree, 'PDF document');
+  expect(uploadMedia).toHaveBeenCalledWith('t', {
+    uri: 'file:///cache/brief.pdf', fileName: 'brief.pdf', type: 'application/pdf', fileSize: 2 * MB,
+  });
+  await press(byLabel(tree, 'Send message'));
+  expect(sendMessage).toHaveBeenCalledWith(
+    't', 'other-1', '__UGCAD_ATTACHMENT__:/uploads/brief.pdf', ['/uploads/brief.pdf'],
+  );
+
+  (uploadMedia as jest.Mock).mockClear();
+  NativeDocumentPicker.pick.mockResolvedValueOnce([pdf({ name: 'big.pdf', size: 26 * MB })]);
+  await attach(tree, 'PDF document');
+  expect(uploadMedia).not.toHaveBeenCalled();
+  expect(allText(tree)).toContain('"big.pdf" is larger than 25 MB');
+
+  NativeDocumentPicker.pick.mockResolvedValueOnce([pdf({ name: 'x.docx', type: 'application/msword' })]);
+  await attach(tree, 'PDF document');
+  expect(uploadMedia).not.toHaveBeenCalled();
+  expect(allText(tree)).toContain('not a supported file');
 });
 
 test('a file-only message shows the file, not the packed text', async () => {

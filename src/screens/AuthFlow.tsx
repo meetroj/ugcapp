@@ -4,12 +4,15 @@ import { Alert } from '../components/AppAlert';
  * AuthLayout stays mounted while only the form content changes, allowing
  * LayoutAnimation to resize the card without animating the whole screen.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
+  KeyboardAvoidingView,
   LayoutAnimation,
   Modal,
   Platform,
+  ScrollView,
   StatusBar,
   StyleSheet,
   TouchableOpacity,
@@ -41,7 +44,7 @@ import {
   appleSignInAvailable,
   getAppleCredential,
 } from '../appleSignIn';
-import { colors, fontScale, scale } from '../theme';
+import { colors, fontScale, INPUT_FONT_SIZE, scale } from '../theme';
 
 // LayoutAnimation is opt-in on old-architecture Android. Harmless elsewhere:
 // the flag only exists when the legacy UIManager is in play.
@@ -103,6 +106,17 @@ function AuthFlow({ onAuthenticated, initialLink }: Props) {
     },
     [mode],
   );
+
+  // Android Back on Sign up / Reset password goes to Log in; quitting the app from
+  // a form the user only meant to leave felt like a crash. Log in itself exits.
+  useEffect(() => {
+    if (mode === 'login') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      switchTo('login');
+      return true;
+    });
+    return () => sub.remove();
+  }, [mode, switchTo]);
 
   const handleSignUp = async (values: {
     role: Role;
@@ -284,49 +298,62 @@ function AuthFlow({ onAuthenticated, initialLink }: Props) {
         visible={!!pending}
         transparent
         animationType="fade"
+        statusBarTranslucent
         onRequestClose={() => setPending(null)}
       >
-        <View style={styles.backdrop}>
-          <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>Two-factor code</Text>
-            <Text style={styles.sheetBody}>
-              Enter the 6-digit code from your authenticator app.
-            </Text>
-            <TextInput
-              style={styles.code}
-              value={totp}
-              onChangeText={text => setTotp(text.replace(/\D/g, '').slice(0, 6))}
-              placeholder="123456"
-              placeholderTextColor={colors.placeholder}
-              keyboardType="number-pad"
-              autoFocus
-            />
-            <View style={styles.sheetActions}>
-              <TouchableOpacity
-                style={styles.sheetGhost}
-                onPress={() => setPending(null)}
-                accessibilityRole="button"
-              >
-                <Text style={styles.sheetGhostText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sheetPrimary,
-                  totp.length !== 6 && styles.sheetPrimaryOff,
-                ]}
-                onPress={submitTotp}
-                disabled={totp.length !== 6 || verifying}
-                accessibilityRole="button"
-              >
-                {verifying ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.sheetPrimaryText}>Verify</Text>
-                )}
-              </TouchableOpacity>
+        {/* Padding on both platforms so the keyboard never covers the code box. */}
+        <KeyboardAvoidingView style={styles.backdropFill} behavior="padding">
+          {/* Scrolls so the code box and Verify stay reachable in landscape or on a
+              short phone with the keyboard open. */}
+          <ScrollView
+            contentContainerStyle={styles.backdrop}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.sheet}>
+              <Text style={styles.sheetTitle}>Two-factor code</Text>
+              <Text style={styles.sheetBody}>
+                Enter the 6-digit code from your authenticator app.
+              </Text>
+              <TextInput
+                style={styles.code}
+                value={totp}
+                onChangeText={text => setTotp(text.replace(/\D/g, '').slice(0, 6))}
+                placeholder="123456"
+                placeholderTextColor={colors.placeholder}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="sms-otp"
+                onSubmitEditing={submitTotp}
+                autoFocus
+              />
+              <View style={styles.sheetActions}>
+                <TouchableOpacity
+                  style={styles.sheetGhost}
+                  onPress={() => setPending(null)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.sheetGhostText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.sheetPrimary,
+                    totp.length !== 6 && styles.sheetPrimaryOff,
+                  ]}
+                  onPress={submitTotp}
+                  disabled={totp.length !== 6 || verifying}
+                  accessibilityRole="button"
+                >
+                  {verifying ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.sheetPrimaryText}>Verify</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -336,9 +363,9 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.backdrop },
   flex: { flex: 1 },
 
+  backdropFill: { flex: 1, backgroundColor: 'rgba(11,12,38,0.55)' },
   backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(11,12,38,0.55)',
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: scale(22),
@@ -357,19 +384,20 @@ const styles = StyleSheet.create({
   },
   sheetBody: {
     marginTop: scale(6),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: colors.muted,
   },
   code: {
     marginTop: scale(14),
     height: scale(50),
+    minHeight: 48,
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     paddingHorizontal: scale(14),
-    fontSize: fontScale(20),
+    fontSize: Math.max(INPUT_FONT_SIZE, fontScale(20)),
     // Wide tracking so the six digits read as a code rather than a number.
     letterSpacing: scale(6),
     color: '#15163F',
@@ -378,6 +406,7 @@ const styles = StyleSheet.create({
   sheetGhost: {
     flex: 1,
     height: scale(46),
+    minHeight: 44,
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#D9DCF3',
@@ -385,7 +414,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sheetGhostText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -393,6 +422,7 @@ const styles = StyleSheet.create({
   sheetPrimary: {
     flex: 1,
     height: scale(46),
+    minHeight: 44,
     borderRadius: scale(12),
     backgroundColor: colors.brand,
     alignItems: 'center',
@@ -400,7 +430,7 @@ const styles = StyleSheet.create({
   },
   sheetPrimaryOff: { opacity: 0.5 },
   sheetPrimaryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',

@@ -21,7 +21,7 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import AppHeader from '../components/AppHeader';
 import { HelpSheet } from './DealSheets';
 import type { AuthUser } from '../api';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   session: AuthUser;
@@ -479,7 +479,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(24),
     borderTopRightRadius: scale(24),
   },
-  content: { paddingTop: scale(16), paddingBottom: scale(28) + NAV_CLEARANCE },
+  // Tablet: a centred column instead of rows stretched across 768pt.
+  content: {
+    paddingTop: scale(16),
+    paddingBottom: scale(28) + NAV_CLEARANCE,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   // Sits outside the section cards, below Support, so signing out reads as a
   // standalone action rather than another settings row.
   logout: {
@@ -523,7 +530,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFF',
   },
-  profileText: { flex: 1 },
+  profileText: { flex: 1, minWidth: 0 },
   name: {
     fontSize: fontScale(18),
     fontFamily: 'ReadexPro-SemiBold',
@@ -568,7 +575,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#EFF0FF',
   },
-  rowText: { flex: 1, marginLeft: scale(12), marginRight: scale(8) },
+  rowText: { flex: 1, minWidth: 0, marginLeft: scale(12), marginRight: scale(8) },
   rowLabel: {
     fontSize: fontScale(14.5),
     fontFamily: 'Inter-Bold',

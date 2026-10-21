@@ -12,17 +12,19 @@ export default function UploadProgressBar({
   color?: string;
 }) {
   if (percent == null) return null;
+  // A stray 104% or NaN must never overflow or collapse the bar.
+  const pct = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
   return (
     <View
       style={styles.wrap}
       accessibilityRole="progressbar"
-      accessibilityValue={{min: 0, max: 100, now: percent}}
+      accessibilityValue={{min: 0, max: 100, now: pct}}
     >
       <View style={styles.track}>
-        <View style={[styles.fill, {width: `${percent}%`, backgroundColor: color}]} />
+        <View style={[styles.fill, {width: `${pct}%`, backgroundColor: color}]} />
       </View>
       <Text style={styles.label}>
-        {percent >= 100 ? 'Processing…' : `Uploading ${percent}%`}
+        {pct >= 100 ? 'Processing…' : `Uploading ${Math.round(pct)}%`}
       </Text>
     </View>
   );
@@ -37,5 +39,5 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   fill: {height: '100%', borderRadius: scale(4)},
-  label: {marginTop: scale(4), fontSize: fontScale(12), color: '#5C6180'},
+  label: {marginTop: scale(4), fontSize: fontScale(13), color: '#5C6180'},
 });

@@ -23,9 +23,9 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Text, TextInput } from '../components/Text';
@@ -44,8 +44,9 @@ import {
   type WalletPaymentOrder,
 } from '../api';
 import UploadProgressBar from '../components/UploadProgressBar';
+import { errorMessage } from '../payoutRules';
 import WalletCheckout from './WalletCheckout';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -999,10 +1000,12 @@ function DateField({
     ...Array.from({ length: firstWeekday }, () => null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
-  const shiftMonth = (by: number) =>
-    setCursor(`${pad(year)}-${pad(month + 1 + by)}-01`.length === 10
-      ? new Date(year, month + by, 1).toISOString().slice(0, 10)
-      : cursor);
+  // Built from local parts: toISOString() is UTC, so in India (UTC+5:30) the
+  // 1st of next month came back as the last day of this one and "next" stalled.
+  const shiftMonth = (by: number) => {
+    const next = new Date(year, month + by, 1);
+    setCursor(`${next.getFullYear()}-${pad(next.getMonth() + 1)}-01`);
+  };
 
   const invalid = typed.length === 10 && !displayToIso(typed);
   const tooEarly =
@@ -1057,6 +1060,7 @@ function DateField({
         visible={open}
         transparent
         animationType="fade"
+        supportedOrientations={['portrait', 'landscape']}
         onRequestClose={() => setOpen(false)}
       >
         <TouchableOpacity
@@ -1065,6 +1069,7 @@ function DateField({
           onPress={() => setOpen(false)}
         >
           <TouchableOpacity style={styles.calendar} activeOpacity={1}>
+            <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
             <View style={styles.calendarHead}>
               <TouchableOpacity
                 onPress={() => shiftMonth(-1)}
@@ -1131,6 +1136,7 @@ function DateField({
             <Text style={styles.calendarNote}>
               Today and earlier dates cannot be selected.
             </Text>
+            </ScrollView>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
@@ -1268,6 +1274,7 @@ function MultiSelectField({
         visible={open}
         transparent
         animationType="fade"
+        supportedOrientations={['portrait', 'landscape']}
         onRequestClose={() => setOpen(false)}
       >
         <TouchableOpacity
@@ -1404,7 +1411,9 @@ function BrandPostBrief({
   resumeDraftId,
   creatorId: creatorIdProp,
 }: Props) {
-  const insets = useSafeAreaInsets();
+  // On a tablet the header and footer line up with the capped form column.
+  const winWidth = useWindowDimensions().width;
+  const sideGap = Math.max(0, (winWidth - CONTENT_MAX_WIDTH) / 2);
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(initialForm);
   const [busy, setBusy] = useState<'draft' | 'publish' | null>(null);
@@ -2260,8 +2269,12 @@ function BrandPostBrief({
           onDone(id);
         }
       } catch (err: any) {
-        const message = err?.message || 'Could not save the campaign.';
+        const message = errorMessage(err, 'Could not save the campaign.');
         setError(message);
+        // The confirm sheet is already closed and the inline line sits at the
+        // foot of the form, so a refused publish (short wallet, offline) is also
+        // told in an alert.
+        if (mode === 'publish') Alert.alert('Could not publish', message);
         if (mode === 'draft') {
           Alert.alert(
             creatorId ? 'Draft not saved' : 'Saved on this device only',
@@ -2354,7 +2367,7 @@ function BrandPostBrief({
       setConfirmOpen(false);
       setPaymentOrder(order);
     } catch (err: any) {
-      setTopupError(err?.message || 'Could not start the payment.');
+      setTopupError(errorMessage(err, 'Could not start the payment.'));
     } finally {
       walletBusy.current = false;
       setStartingPayment(false);
@@ -2669,7 +2682,7 @@ function BrandPostBrief({
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingHorizontal: scale(10) + sideGap }]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={step === 1 ? onBack : goBack}
@@ -2699,7 +2712,7 @@ function BrandPostBrief({
           </TouchableOpacity>
       </View>
 
-      <View style={styles.progress}>
+      <View style={[styles.progress, { paddingHorizontal: scale(16) + sideGap }]}>
         {STEPS.map((label, index) => (
           <View
             key={label}
@@ -2940,7 +2953,7 @@ function BrandPostBrief({
                         onPress={() => removeDeliverable(item.id)}
                         accessibilityRole="button"
                         accessibilityLabel={`Remove deliverable ${index + 1}`}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                       >
                         <Icon name="trash" color="#C4373B" size={18} />
                       </TouchableOpacity>
@@ -3300,7 +3313,7 @@ function BrandPostBrief({
                           <TouchableOpacity
                             style={styles.moodRemove}
                             onPress={() => removeMoodImage(index)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                             accessibilityRole="button"
                             accessibilityLabel={`Remove mood board image ${index + 1}`}
                           >
@@ -3727,7 +3740,12 @@ function BrandPostBrief({
           )}
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: scale(12) + insets.bottom }]}>
+        <View
+          style={[
+            styles.footer,
+            { paddingHorizontal: scale(16) + sideGap },
+          ]}
+        >
           {step > 1 && (
             <TouchableOpacity
               style={styles.backBtn}
@@ -3770,7 +3788,18 @@ function BrandPostBrief({
       {/* An in-screen sheet rather than a Modal: the payment checkout and the
           app's alerts are Modals, and stacking Modals fails on iOS. */}
       {confirmOpen && (
-        <View style={styles.overlay} accessibilityViewIsModal>
+        <KeyboardAvoidingView
+          style={styles.overlay}
+          // 'padding' on both: Android is edge-to-edge, so `undefined` left the
+          // keyboard covering the top-up amount.
+          behavior="padding"
+          accessibilityViewIsModal
+        >
+          <ScrollView
+            contentContainerStyle={styles.overlayBody}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
           <View style={styles.confirmCard}>
             {confirmPhase === 'confirm' ? (
               <>
@@ -3863,7 +3892,8 @@ function BrandPostBrief({
               </>
             )}
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </View>
   );
@@ -3881,19 +3911,19 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   headerBtn: {
-    width: scale(36),
-    height: scale(36),
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerCopy: { flex: 1 },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerTitle: {
     fontSize: fontScale(17),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  headerStep: { marginTop: scale(2), fontSize: fontScale(11), color: '#777B96' },
+  headerStep: { marginTop: scale(2), fontSize: fontScale(13), color: '#777B96' },
   saveDraftBtn: {
     minHeight: scale(44),
     minWidth: scale(44),
@@ -3979,12 +4009,20 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'rgba(11,12,38,0.5)',
-    paddingHorizontal: scale(22),
-    paddingTop: scale(90),
     zIndex: 20,
     elevation: 20,
   },
+  // Centres the card and lets it scroll when the keyboard or landscape leaves
+  // less room than the card needs.
+  overlayBody: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: scale(22),
+  },
   confirmCard: {
+    width: '100%',
+    maxWidth: scale(420),
     borderRadius: scale(18),
     backgroundColor: '#FFFFFF',
     padding: scale(18),
@@ -3997,7 +4035,7 @@ const styles = StyleSheet.create({
   },
   holdCallout: {
     marginTop: scale(10),
-    fontSize: fontScale(13.5),
+    fontSize: fontScale(14),
     lineHeight: fontScale(20),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
@@ -4005,7 +4043,7 @@ const styles = StyleSheet.create({
   },
   holdBreakdown: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     lineHeight: fontScale(18),
     color: '#5C6180',
   },
@@ -4029,7 +4067,7 @@ const styles = StyleSheet.create({
   },
   saveDraft: {
     paddingHorizontal: scale(8),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -4052,7 +4090,15 @@ const styles = StyleSheet.create({
   // The tail padding is deliberately generous: with the keyboard up, the last
   // field in a section (budget, price) used to sit under it with nothing left
   // to scroll into, so it could not be read while being typed.
-  content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(140) },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingTop: 0,
+    paddingBottom: scale(140),
+  },
   card: {
     padding: scale(16),
     paddingTop: scale(2),
@@ -4071,14 +4117,14 @@ const styles = StyleSheet.create({
 
   field: { marginTop: scale(14) },
   fieldLabel: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#15163F',
     marginBottom: scale(7),
   },
   required: { color: '#E5484D' },
-  hint: { marginTop: scale(5), fontSize: fontScale(11), color: '#8A8FA8' },
+  hint: { marginTop: scale(5), fontSize: fontScale(13), color: '#8A8FA8' },
   // The counter turns red while the entry is outside its length rule.
   hintBad: { color: '#D2454B' },
   resumed: {
@@ -4093,16 +4139,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#CDEBE0',
   },
-  resumedText: { flex: 1, fontSize: fontScale(11.5), color: '#186A4B' },
+  resumedText: { flex: 1, fontSize: fontScale(13), color: '#186A4B' },
   resumedAction: {
-    fontSize: fontScale(11.5),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#0F7B43',
   },
   typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   typeCard: {
-    width: '48%',
+    // Two per row; the basis leaves room for the grid gap so cards stay equal.
+    flexGrow: 1,
+    flexBasis: '45%',
+    minWidth: 0,
     padding: scale(11),
     borderRadius: scale(13),
     borderWidth: 1.5,
@@ -4111,7 +4160,7 @@ const styles = StyleSheet.create({
   },
   typeCardOn: { borderColor: '#4C5BF3', backgroundColor: '#EEEFFF' },
   typeLabel: {
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
     color: '#15163F',
@@ -4119,14 +4168,14 @@ const styles = StyleSheet.create({
   typeLabelOn: { color: '#2F3ACF' },
   typeHint: {
     marginTop: scale(3),
-    fontSize: fontScale(10.5),
+    fontSize: fontScale(12),
     lineHeight: fontScale(14),
     color: '#8A8FA8',
   },
   typeOther: { marginTop: scale(9) },
   typeNote: {
     marginTop: scale(8),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#0891B2',
@@ -4134,8 +4183,8 @@ const styles = StyleSheet.create({
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
   dateInput: { flex: 1 },
   calendarBtn: {
-    width: scale(46),
-    height: scale(46),
+    width: 46,
+    height: 46,
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -4153,6 +4202,7 @@ const styles = StyleSheet.create({
   calendar: {
     width: '100%',
     maxWidth: scale(340),
+    maxHeight: '96%',
     borderRadius: scale(18),
     backgroundColor: '#FFFFFF',
     padding: scale(14),
@@ -4164,8 +4214,8 @@ const styles = StyleSheet.create({
     marginBottom: scale(8),
   },
   calendarNav: {
-    width: scale(34),
-    height: scale(34),
+    width: 44,
+    height: 44,
     borderRadius: scale(10),
     alignItems: 'center',
     justifyContent: 'center',
@@ -4187,7 +4237,7 @@ const styles = StyleSheet.create({
   weekDay: {
     width: `${100 / 7}%`,
     textAlign: 'center',
-    fontSize: fontScale(10.5),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#9497B4',
@@ -4195,7 +4245,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   day: {
     width: `${100 / 7}%`,
-    height: scale(38),
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4214,7 +4264,7 @@ const styles = StyleSheet.create({
   },
   calendarNote: {
     marginTop: scale(6),
-    fontSize: fontScale(10.5),
+    fontSize: fontScale(12),
     color: '#8A8FA8',
     textAlign: 'center',
   },
@@ -4225,7 +4275,8 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     paddingHorizontal: scale(12),
-    fontSize: fontScale(15),
+    // 16 keeps iOS from zooming the screen when a field gets focus.
+    fontSize: 16,
     color: '#15163F',
     paddingVertical: scale(12),
   },
@@ -4233,9 +4284,9 @@ const styles = StyleSheet.create({
   // The picked-value / placeholder line inside a tap-to-open field. Line height
   // keeps a one-line summary vertically centred in the same box a TextInput
   // would fill, so a select row and a text row sit on the same rhythm.
-  selectValue: { fontSize: fontScale(15), color: '#15163F', lineHeight: fontScale(22) },
+  selectValue: { fontSize: 16, color: '#15163F', lineHeight: fontScale(22) },
   selectPlaceholder: {
-    fontSize: fontScale(15),
+    fontSize: 16,
     color: '#A9ADC2',
     lineHeight: fontScale(22),
   },
@@ -4266,10 +4317,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 44,
     paddingVertical: scale(11),
     paddingHorizontal: scale(4),
   },
-  modalRowText: { fontSize: fontScale(14), color: '#5C6180' },
+  modalRowText: { fontSize: fontScale(15), color: '#5C6180' },
   modalRowTextOn: {
     color: '#15163F',
     fontFamily: 'Inter-Bold',
@@ -4278,7 +4330,7 @@ const styles = StyleSheet.create({
   modalTick: { fontSize: fontScale(14), color: '#4C5BF3' },
   modalDone: {
     marginTop: scale(8),
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(12),
     alignItems: 'center',
     justifyContent: 'center',
@@ -4300,7 +4352,7 @@ const styles = StyleSheet.create({
   // Single-line variant: chips ride one horizontal swipe row, never wrap.
   chipScrollRow: { flexDirection: 'row', gap: scale(8), paddingRight: scale(8) },
   chip: {
-    height: scale(36),
+    minHeight: 44,
     paddingHorizontal: scale(14),
     borderRadius: scale(10),
     alignItems: 'center',
@@ -4309,10 +4361,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EDEEF6',
   },
-  chipCompact: { height: scale(32), paddingHorizontal: scale(11) },
+  chipCompact: { minHeight: 44, paddingHorizontal: scale(11) },
   chipActive: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
   chipText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -4322,7 +4374,7 @@ const styles = StyleSheet.create({
   segment: { flexDirection: 'row', gap: scale(8) },
   segmentBtn: {
     flex: 1,
-    height: scale(40),
+    minHeight: 44,
     borderRadius: scale(10),
     alignItems: 'center',
     justifyContent: 'center',
@@ -4332,7 +4384,7 @@ const styles = StyleSheet.create({
   },
   segmentOn: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
   segmentText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -4360,8 +4412,8 @@ const styles = StyleSheet.create({
 
   stepper: { flexDirection: 'row', alignItems: 'center', gap: scale(14) },
   stepBtn: {
-    width: scale(38),
-    height: scale(38),
+    width: 44,
+    height: 44,
     borderRadius: scale(10),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -4407,7 +4459,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   boxOn: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
-  checkText: { flex: 1, fontSize: fontScale(13), color: '#3B3F5C' },
+  checkText: { flex: 1, fontSize: fontScale(14), color: '#3B3F5C' },
 
   reviewRow: {
     marginTop: scale(12),
@@ -4416,12 +4468,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F2F3F9',
   },
   reviewLabel: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#8A8FA8',
   },
-  reviewValue: { marginTop: scale(3), fontSize: fontScale(13), color: '#15163F' },
+  reviewValue: { marginTop: scale(3), fontSize: fontScale(14), color: '#15163F' },
 
   summary: {
     marginTop: scale(18),
@@ -4462,7 +4514,7 @@ const styles = StyleSheet.create({
   },
   summaryNote: {
     marginTop: scale(10),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     lineHeight: fontScale(16),
     color: '#777B96',
   },
@@ -4474,13 +4526,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8E8',
   },
   liftsTitle: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#8A6100',
     marginBottom: scale(6),
   },
-  liftText: { fontSize: fontScale(11), lineHeight: fontScale(17), color: '#8A6100' },
+  liftText: { fontSize: fontScale(13), lineHeight: fontScale(17), color: '#8A6100' },
 
   errorBox: {
     marginTop: scale(12),
@@ -4489,7 +4541,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE6E7',
   },
   errorText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     lineHeight: fontScale(17),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
@@ -4507,7 +4559,7 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     width: scale(100),
-    height: scale(48),
+    minHeight: 48,
     borderRadius: scale(13),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -4522,7 +4574,7 @@ const styles = StyleSheet.create({
   },
   nextBtn: {
     flex: 1,
-    height: scale(48),
+    minHeight: 48,
     borderRadius: scale(13),
     backgroundColor: '#1B2A6B',
     alignItems: 'center',

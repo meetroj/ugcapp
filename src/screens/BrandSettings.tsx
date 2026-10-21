@@ -13,7 +13,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   View,
-} from 'react-native';import { Text, TextInput } from '../components/Text';
+} from 'react-native';
+import { Text, TextInput } from '../components/Text';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Alert } from '../components/AppAlert';
@@ -29,7 +30,7 @@ import {
   saveBusinessProfile,
   uploadBusinessLogo,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 import { BillingPanel, TeamPanel } from './BrandTeam';
 
 type Props = {
@@ -337,8 +338,8 @@ function BrandSettings({ token, onBack, onNavigate }: Props) {
       mediaType: 'photo',
       selectionLimit: 1,
       quality: 0.8,
-    });
-    const file = picked.assets?.[0];
+    }).catch(() => null);
+    const file = picked?.assets?.[0];
     if (!file?.uri) return;
     logoRef.current = true;
     setLogoBusy(true);
@@ -393,6 +394,17 @@ function BrandSettings({ token, onBack, onNavigate }: Props) {
     setMissing(blank);
     if (blank.length) {
       setStatus({ ok: false, text: 'Fill in the highlighted fields.' });
+      return;
+    }
+    // The server answers a bad email with a 422 that reads as noise; say it here.
+    if (onProfileTab && !/^\S+@\S+\.\S+$/.test(String(values.work_email).trim())) {
+      setMissing(['work_email']);
+      setStatus({ ok: false, text: 'Enter a valid work email.' });
+      return;
+    }
+    if (!onProfileTab && values.pincode && values.pincode.length !== 6) {
+      setMissing(['pincode']);
+      setStatus({ ok: false, text: 'Pincode must be 6 digits.' });
       return;
     }
 
@@ -452,6 +464,7 @@ function BrandSettings({ token, onBack, onNavigate }: Props) {
               <TouchableOpacity
                 key={key}
                 style={[styles.tab, active && styles.tabActive]}
+                testID={'settings-tab-' + key}
                 onPress={() => {
                   setTab(key);
                   setStatus(null);
@@ -460,7 +473,7 @@ function BrandSettings({ token, onBack, onNavigate }: Props) {
                 accessibilityRole="button"
                 accessibilityState={{ selected: active }}
               >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>
+                <Text style={[styles.tabText, active && styles.tabTextActive]} numberOfLines={1}>
                   {label}
                 </Text>
               </TouchableOpacity>
@@ -688,7 +701,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  // Tablet: tabs and form share one centred column.
   tabs: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     flexDirection: 'row',
     gap: scale(8),
     paddingHorizontal: scale(16),
@@ -697,7 +714,8 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
-    height: scale(40),
+    minWidth: 0,
+    minHeight: scale(44),
     borderRadius: scale(12),
     flexDirection: 'row',
     alignItems: 'center',
@@ -717,7 +735,13 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#FFFFFF' },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingBottom: scale(40) },
+  content: {
+    padding: scale(16),
+    paddingBottom: scale(40),
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
 
   card: {
     padding: scale(16),
@@ -772,7 +796,8 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     paddingHorizontal: scale(12),
-    fontSize: fontScale(15),
+    // 16 so iOS does not zoom on focus.
+    fontSize: 16,
     color: '#15163F',
     // Android adds vertical padding that makes the box taller than 46.
     paddingVertical: 0,
@@ -788,8 +813,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  pickValue: { flex: 1, fontSize: fontScale(15), color: '#15163F' },
-  pickPlaceholder: { flex: 1, fontSize: fontScale(15), color: '#A9ADC2' },
+  pickValue: { flex: 1, minWidth: 0, fontSize: 16, color: '#15163F' },
+  pickPlaceholder: { flex: 1, minWidth: 0, fontSize: 16, color: '#A9ADC2' },
   pickCaret: { fontSize: fontScale(14), color: '#7E829D', marginLeft: scale(8) },
 
   logoRow: {
@@ -814,7 +839,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#3D4FD8',
   },
-  logoActions: { flex: 1, gap: scale(8) },
+  logoActions: { flex: 1, minWidth: 0, gap: scale(8) },
   logoBtn: {
     minHeight: scale(44),
     borderRadius: scale(12),

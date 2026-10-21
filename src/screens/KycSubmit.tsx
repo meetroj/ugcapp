@@ -2,18 +2,21 @@ import { Alert } from '../components/AppAlert';
 /**
  * KYC details — the native screen behind "Start KYC" / "Update Details".
  *
- * The whole submission happens here (document photos included, via
- * `react-native-image-picker`) and posts the same payload as the website's
- * CreatorKYC page. Rules mirror CreatorKYC.js and server.py /kyc/submit so a
- * rejection is caught before the request: PAN by format, Aadhaar (optional)
- * by the Verhoeff checksum, IFSC / UPI by shape, bank accounts 9-18 digits,
- * the creator must be 18+, and only the PAN photo is required.
+ * The whole submission happens here and posts the same payload as the
+ * website's CreatorKYC page. Documents are an image (photo library, via
+ * `react-native-image-picker`) or an image / PDF from the Files app (via
+ * `../documentPicker`), up to 5 MB each, like the website. Rules mirror
+ * CreatorKYC.js and server.py /kyc/submit so a rejection is caught before the
+ * request: PAN by format, Aadhaar (optional) by the Verhoeff checksum, IFSC /
+ * UPI by shape, bank accounts 9-18 digits, the creator must be 18+, and only
+ * the PAN document is required.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -24,7 +27,8 @@ import { Text, TextInput } from '../components/Text';
 import ScreenHeader from '../components/ScreenHeader';
 import ChoiceSheet from '../components/ChoiceSheet';
 import { getKyc, getPayoutOverview, submitKyc, uploadMedia } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
+import { afterSheetCloses, pickDocuments } from '../documentPicker';
 import {
   GENDERS,
   IFSC_RE,
@@ -62,7 +66,7 @@ const MONTHS = [
   'December',
 ];
 
-/** Photos the form asks for. Only the PAN card is required (CreatorKYC.js). */
+/** Documents the form asks for. Only the PAN card is required (CreatorKYC.js). */
 const DOCS = [
   { key: 'pan_doc_url', label: 'PAN card photo' },
   { key: 'aadhaar_front_url', label: 'Aadhaar - front' },
@@ -72,6 +76,9 @@ const DOCS = [
 type DocKey = (typeof DOCS)[number]['key'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
+
+/** An uploaded document that is a PDF (it cannot be drawn as a thumbnail). */
+export const isPdfUrl = (url: string) => /\.pdf(\?|#|$)/i.test(url);
 
 function KycSubmit({ onBack, token, onSubmitted }: Props) {
   const [name, setName] = useState('');
@@ -107,6 +114,10 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
 
   /** Which document is uploading, so only its tile shows a spinner. */
   const [uploading, setUploading] = useState<DocKey | ''>('');
+  /** Which document's "photo or file" choice is open. */
+  const [docSheet, setDocSheet] = useState<DocKey | ''>('');
+  // The saved record decides whether the form shows at all, so wait for it once.
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const submitting = useRef(false);
   // 'pending' / 'verified': the backend refuses a second submission.
@@ -202,7 +213,9 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
 
   useEffect(() => {
     let active = true;
-    loadSaved(() => active);
+    loadSaved(() => active).finally(() => {
+      if (active) setLoading(false);
+    });
     return () => {
       active = false;
     };
@@ -264,7 +277,24 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
       ? 'Account numbers are 9 to 18 digits.'
       : '';
 
-  const pickDoc = async (key: DocKey) => {
+  /** Uploads one already-checked document and keeps its URL for the submit. */
+  const uploadDoc = async (
+    key: DocKey,
+    file: { uri: string; fileName: string; type: string; fileSize?: number },
+  ) => {
+    setUploading(key);
+    try {
+      const url = await uploadMedia(token, file);
+      setDocs(current => ({ ...current, [key]: url }));
+    } catch (error) {
+      Alert.alert('Upload failed', errorMessage(error, 'Could not upload that file. Please try again.'));
+    } finally {
+      setUploading('');
+    }
+  };
+
+  /** From the photo library: an image, shrunk so it stays under the 5 MB cap. */
+  const pickPhoto = async (key: DocKey) => {
     if (uploading) return;
     const picked = await launchImageLibrary({
       mediaType: 'photo',
@@ -275,26 +305,37 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
       maxHeight: 2000,
       quality: 0.8,
     }).catch(() => null);
+    if (picked?.errorMessage) {
+      Alert.alert('Could not open photos', picked.errorMessage);
+      return;
+    }
     const asset = picked?.assets?.[0];
     if (!asset?.uri) return;
     if (asset.fileSize && asset.fileSize > MAX_KYC_DOC_BYTES) {
       Alert.alert('File too large', 'Maximum 5MB. Pick a smaller photo.');
       return;
     }
+    await uploadDoc(key, {
+      uri: asset.uri,
+      fileName: asset.fileName || `${key}.jpg`,
+      type: asset.type || 'image/jpeg',
+      fileSize: asset.fileSize,
+    });
+  };
 
-    setUploading(key);
+  /** From the Files app: an image or a PDF, like the website's "Upload image or PDF". */
+  const pickFile = async (key: DocKey) => {
+    if (uploading) return;
+    let picked;
     try {
-      const url = await uploadMedia(token, {
-        uri: asset.uri,
-        fileName: asset.fileName || `${key}.jpg`,
-        type: asset.type || 'image/jpeg',
-      });
-      setDocs(current => ({ ...current, [key]: url }));
+      picked = await pickDocuments({ types: ['image', 'pdf'], maxBytes: MAX_KYC_DOC_BYTES });
     } catch (error) {
-      Alert.alert('Upload failed', errorMessage(error, 'Could not upload that photo. Please try again.'));
-    } finally {
-      setUploading('');
+      Alert.alert('Could not attach', errorMessage(error, 'Could not open your files.'));
+      return;
     }
+    const file = picked[0];
+    if (!file) return;
+    await uploadDoc(key, { uri: file.uri, fileName: file.name, type: file.type, fileSize: file.size });
   };
 
   const form = () => ({
@@ -394,15 +435,23 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
     <TouchableOpacity
       key={doc.key}
       style={styles.docRow}
-      onPress={() => pickDoc(doc.key)}
+      onPress={() => setDocSheet(doc.key)}
       disabled={!!uploading}
       accessibilityRole="button"
       accessibilityLabel={`${doc.label}. ${
         docs[doc.key] ? 'Attached' : 'Not attached'
       }`}
     >
-      {docs[doc.key] ? (
-        <Image source={{ uri: docs[doc.key] }} style={styles.docThumb} />
+      {docs[doc.key] && isPdfUrl(docs[doc.key]) ? (
+        <View style={[styles.docThumb, styles.docEmpty]}>
+          <Text style={styles.docPdf}>PDF</Text>
+        </View>
+      ) : docs[doc.key] ? (
+        <Image
+          source={{ uri: docs[doc.key] }}
+          style={styles.docThumb}
+          resizeMode="cover"
+        />
       ) : (
         <View style={[styles.docThumb, styles.docEmpty]}>
           <Text style={styles.docPlus}>+</Text>
@@ -411,7 +460,7 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
       <View style={styles.docText}>
         <Text style={styles.docLabel}>{doc.label}</Text>
         <Text style={styles.docState}>
-          {docs[doc.key] ? 'Attached - tap to replace' : 'Tap to attach (photo, up to 5MB)'}
+          {docs[doc.key] ? 'Attached - tap to replace' : 'Tap to attach (image or PDF, up to 5MB)'}
         </Text>
       </View>
       {uploading === doc.key && (
@@ -447,10 +496,24 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
     );
   }
 
+  if (loading) {
+    return (
+      <View style={styles.screen}>
+        <ScreenHeader title="KYC Details" onBack={onBack} />
+        <View style={[styles.sheet, styles.loading]} testID="kyc-loading">
+          <ActivityIndicator color="#4C5BF3" />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen}>
       <ScreenHeader title="KYC Details" onBack={onBack} />
-      <KeyboardAvoidingView style={styles.sheet} behavior="padding">
+      <KeyboardAvoidingView
+        style={styles.sheet}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
@@ -562,7 +625,8 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
           />
           {panError ? <Text style={styles.error}>{panError}</Text> : null}
           <Text style={styles.sectionHint}>
-            A clear photo of your PAN card. All four corners visible, no glare.
+            A clear photo or PDF of your PAN card. All four corners visible, no
+            glare.
           </Text>
           {renderDoc(DOCS[0])}
 
@@ -750,6 +814,21 @@ function KycSubmit({ onBack, token, onSubmitted }: Props) {
         options={dobSheet ? dobOptions(dobSheet) : []}
         onClose={() => setDobSheet('')}
       />
+      <ChoiceSheet
+        visible={!!docSheet}
+        title="Attach a document"
+        options={[
+          {
+            label: 'Photo library',
+            onPress: () => afterSheetCloses(() => pickPhoto(docSheet as DocKey)),
+          },
+          {
+            label: 'Files (image or PDF)',
+            onPress: () => afterSheetCloses(() => pickFile(docSheet as DocKey)),
+          },
+        ]}
+        onClose={() => setDocSheet('')}
+      />
     </View>
   );
 }
@@ -764,17 +843,19 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
-  content: { padding: scale(16), paddingBottom: scale(34) },
+  // A tablet keeps the form a phone-width column instead of stretching it edge to edge.
+  content: { ...CONTENT_COLUMN, padding: scale(16), paddingBottom: scale(34) },
+  loading: { alignItems: 'center', justifyContent: 'center' },
   intro: {
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
     marginBottom: scale(6),
   },
   label: {
     marginTop: scale(14),
     marginBottom: scale(6),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#7E829D',
@@ -789,14 +870,14 @@ const styles = StyleSheet.create({
   sectionHint: {
     marginTop: scale(4),
     marginBottom: scale(4),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(17),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(19),
     color: '#8A8FA8',
   },
   hint: {
     marginTop: scale(6),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(18),
     color: '#8A8FA8',
   },
   input: {
@@ -806,7 +887,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#ECECF6',
-    fontSize: fontScale(13),
+    // 16 keeps iOS from zooming into the field and is easier to read.
+    fontSize: 16,
     color: '#181943',
   },
   inputStacked: { marginTop: scale(10) },
@@ -814,11 +896,11 @@ const styles = StyleSheet.create({
   rowItem: { flex: 1 },
   rowItemWide: { flex: 2 },
   pickBtn: { justifyContent: 'center' },
-  pickText: { fontSize: fontScale(13), color: '#181943' },
-  pickPlaceholder: { fontSize: fontScale(13), color: '#9CA3AF' },
+  pickText: { fontSize: 16, color: '#181943' },
+  pickPlaceholder: { fontSize: 16, color: '#9CA3AF' },
   error: {
     marginTop: scale(6),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',
@@ -830,7 +912,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FDECEC',
   },
   errorBoxText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#B3261E',
@@ -842,7 +924,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4C5BF3',
@@ -861,7 +943,7 @@ const styles = StyleSheet.create({
   },
   chipOn: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
   chipText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -887,16 +969,22 @@ const styles = StyleSheet.create({
   },
   docEmpty: { alignItems: 'center', justifyContent: 'center' },
   docPlus: { fontSize: fontScale(22), color: '#A9ADC2' },
-  docText: { flex: 1 },
-  docLabel: {
+  docPdf: {
     fontSize: fontScale(13),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#4C5BF3',
+  },
+  docText: { flex: 1, minWidth: 0 },
+  docLabel: {
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#181943',
   },
   docState: {
     marginTop: scale(3),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     color: '#8A8FA8',
   },
 

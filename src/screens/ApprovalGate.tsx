@@ -156,6 +156,9 @@ function ApprovalGate({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(false);
+  // Shown after Check Status when nothing changed, so the tap visibly did
+  // something instead of looking like a dead button.
+  const [notice, setNotice] = useState('');
   const isBrand = kind === 'business';
   const rejected = status === 'rejected';
   const needsInfo = status === 'more_info';
@@ -166,8 +169,13 @@ function ApprovalGate({
 
   const check = async () => {
     setChecking(true);
+    setNotice('');
     try {
       await onRefresh();
+      // Approval swaps this screen out; reaching here means it is still open.
+      setNotice('Still under review. We will email you as soon as it is decided.');
+    } catch {
+      setNotice("Couldn't check right now. Check your connection and try again.");
     } finally {
       setChecking(false);
     }
@@ -201,7 +209,12 @@ function ApprovalGate({
     <View
       style={[
         styles.screen,
-        { paddingTop: insets.top, paddingBottom: insets.bottom },
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
       ]}
     >
       <View style={styles.topbar}>
@@ -336,6 +349,11 @@ function ApprovalGate({
               )}
             </TouchableOpacity>
           )}
+          {!!notice && !rejected && !needsInfo && (
+            <Text style={styles.notice} accessibilityLiveRegion="polite">
+              {notice}
+            </Text>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -358,7 +376,7 @@ const styles = StyleSheet.create({
   },
   brandDim: { color: '#FFFFFF' },
   logout: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
     color: 'rgba(255,255,255,0.78)',
@@ -370,6 +388,9 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
+    // A tablet gets a centred card, not one stretched edge to edge.
+    maxWidth: scale(520),
+    alignSelf: 'center',
     alignItems: 'center',
     padding: scale(24),
     borderRadius: scale(18),
@@ -401,10 +422,17 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     textAlign: 'center',
   },
+  notice: {
+    marginTop: scale(12),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
+    color: MUTED,
+    textAlign: 'center',
+  },
   copy: {
     marginTop: scale(10),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(20),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: MUTED,
     textAlign: 'center',
   },
@@ -427,8 +455,8 @@ const styles = StyleSheet.create({
     color: '#8B8FB5',
   },
   infoNoteText: {
-    fontSize: fontScale(13.5),
-    lineHeight: fontScale(20),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: '#E7E7F2',
   },
   infoItems: { width: '100%', marginTop: scale(12), gap: scale(8) },
@@ -444,13 +472,13 @@ const styles = StyleSheet.create({
   infoBullet: { color: ACCENT, fontSize: fontScale(14) },
   infoItemText: {
     flex: 1,
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#E7E7F2',
   },
   infoFallback: {
     marginTop: scale(12),
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     lineHeight: fontScale(19),
     color: MUTED,
     textAlign: 'center',
@@ -481,7 +509,7 @@ const styles = StyleSheet.create({
   },
   reasonText: {
     marginTop: scale(4),
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     lineHeight: fontScale(19),
     color: '#D6D7EC',
   },
@@ -495,7 +523,7 @@ const styles = StyleSheet.create({
   },
   supportSub: {
     marginBottom: scale(4),
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     lineHeight: fontScale(18),
     color: MUTED,
     textAlign: 'center',
@@ -520,10 +548,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#F4F4F8',
   },
-  supportRowSub: { fontSize: fontScale(12.5), color: MUTED },
+  supportRowSub: { fontSize: fontScale(13), color: MUTED },
   primary: {
     marginTop: scale(20),
     minWidth: scale(180),
+    minHeight: 46,
     height: scale(46),
     borderRadius: scale(13),
     backgroundColor: '#1B2A6B',

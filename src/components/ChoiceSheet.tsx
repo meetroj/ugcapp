@@ -17,7 +17,7 @@
  *   />
  */
 import React from 'react';
-import { Dimensions, Modal, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Text } from './Text';
 import { scale, fontScale } from '../theme';
 
@@ -42,11 +42,14 @@ export default function ChoiceSheet({
   cancelLabel?: string;
   onClose: () => void;
 }) {
+  // Live window size, not a module-load constant: after a rotation (landscape
+  // is only ~390 tall) a stale portrait height let the card run off screen.
+  const { height } = useWindowDimensions();
   return (
     <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
       <View style={styles.centre} pointerEvents="box-none">
-        <View style={styles.card}>
+        <View style={[styles.card, { maxHeight: height - 2 * scale(24) }]}>
           <Text style={styles.title}>{title}</Text>
           {!!message && <Text style={styles.message}>{message}</Text>}
           {/* Long lists (e.g. creator categories) scroll; Cancel stays reachable below. */}
@@ -94,11 +97,13 @@ const styles = StyleSheet.create({
     padding: scale(20),
   },
   title: { fontSize: fontScale(18), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163F' },
-  message: { marginTop: scale(8), fontSize: fontScale(13.5), lineHeight: fontScale(20), color: '#5C6079' },
-  optionsScroll: { marginTop: scale(14), maxHeight: Dimensions.get('window').height * 0.55 },
+  message: { marginTop: scale(8), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#5C6079' },
+  // flexShrink lets the list give up height to the card's maxHeight, so Cancel
+  // always stays on screen.
+  optionsScroll: { marginTop: scale(14), flexShrink: 1, flexGrow: 0 },
   options: { gap: scale(2) },
   cancelRow: { marginTop: scale(2) },
-  option: { paddingVertical: scale(13), alignItems: 'center' },
+  option: { minHeight: 44, justifyContent: 'center', paddingVertical: scale(13), alignItems: 'center' },
   optionText: { fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '700', color: '#4C4DD6' },
   destructive: { color: '#D6407F' },
   cancelText: { fontSize: fontScale(15), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#9295AA' },

@@ -53,7 +53,7 @@ import {
   revisionCounterFields,
 } from '../brandHiring';
 import { errorMessage } from '../payoutRules';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -413,6 +413,7 @@ function BrandWorkReview({
           <TouchableOpacity
             style={styles.headerBtn}
             onPress={onNotifications}
+            hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
             accessibilityRole="button"
             accessibilityLabel="Notifications"
           >
@@ -421,6 +422,7 @@ function BrandWorkReview({
           <TouchableOpacity
             style={styles.headerBtn}
             onPress={onMessages}
+            hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
             accessibilityRole="button"
             accessibilityLabel="Messages"
           >
@@ -550,6 +552,7 @@ function BrandWorkReview({
                         <Image
                           source={{ uri: thumb }}
                           style={styles.mediaImg}
+                          resizeMode="cover"
                         />
                       ) : (
                         <View style={styles.mediaFallback} />
@@ -585,7 +588,7 @@ function BrandWorkReview({
                       <View style={styles.metaGrid}>
                         <View style={styles.metaItem}>
                           <Icon name="clock" color="#9498B0" size={13} />
-                          <View>
+                          <View style={styles.metaCopy}>
                             <Text style={styles.metaLabel}>
                               {durations[work.id] ? 'Duration' : 'Duration (brief)'}
                             </Text>
@@ -598,7 +601,7 @@ function BrandWorkReview({
                         </View>
                         <View style={styles.metaItem}>
                           <Icon name="file" color="#9498B0" size={13} />
-                          <View>
+                          <View style={styles.metaCopy}>
                             <Text style={styles.metaLabel}>File type</Text>
                             <Text style={styles.metaValue}>
                               {fileExt(rawPlayable) || '-'}
@@ -607,7 +610,7 @@ function BrandWorkReview({
                         </View>
                         <View style={styles.metaItem}>
                           <Icon name="calendar" color="#9498B0" size={13} />
-                          <View>
+                          <View style={styles.metaCopy}>
                             <Text style={styles.metaLabel}>Submitted</Text>
                             <Text style={styles.metaValue}>
                               {formatDate(
@@ -624,7 +627,7 @@ function BrandWorkReview({
                           accessibilityLabel={`Open campaign ${campaign || ''}`}
                         >
                           <Icon name="campaign" color="#4C5BF3" size={13} />
-                          <View>
+                          <View style={styles.metaCopy}>
                             <Text style={styles.metaLabel}>Campaign</Text>
                             <Text style={styles.metaLinkValue} numberOfLines={1}>
                               {campaign || '-'}
@@ -744,7 +747,7 @@ function BrandWorkReview({
                     accessibilityLabel="Play video"
                   >
                     {thumb ? (
-                      <Image source={{ uri: thumb }} style={styles.mediaImg} />
+                      <Image source={{ uri: thumb }} style={styles.mediaImg} resizeMode="cover" />
                     ) : (
                       <View style={styles.mediaFallback} />
                     )}
@@ -900,6 +903,7 @@ function BrandWorkReview({
         animationType="slide"
         onRequestClose={() => setRevising(null)}
         statusBarTranslucent
+        supportedOrientations={['portrait', 'landscape']}
       >
         {!!revising && (
           <WorkRevisionRequest
@@ -969,8 +973,9 @@ const styles = StyleSheet.create({
   },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
   headerBtn: {
-    width: scale(38),
-    height: scale(38),
+    // Flat 44 so the touch target holds on a 320dp phone too.
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -998,7 +1003,15 @@ const styles = StyleSheet.create({
   },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(16), paddingTop: scale(16), paddingBottom: scale(30) + NAV_CLEARANCE },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingTop: scale(16),
+    paddingBottom: scale(30) + NAV_CLEARANCE,
+  },
 
   errorBanner: {
     marginBottom: scale(12),
@@ -1009,7 +1022,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  errorText: { flex: 1, fontSize: fontScale(14), color: '#B3261E' },
   retryBtn: {
     minHeight: scale(44),
     minWidth: scale(60),
@@ -1020,21 +1033,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#B3261E',
   },
   metaLinkValue: {
     marginTop: scale(1),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
   },
 
   pager: { marginTop: scale(4), alignItems: 'center', gap: scale(10) },
-  pagerCount: { fontSize: fontScale(12), color: '#777B96' },
+  pagerCount: { fontSize: fontScale(13), color: '#777B96' },
   pagerRow: { flexDirection: 'row', alignItems: 'center', gap: scale(14) },
   pagerBtn: {
     minHeight: scale(44),
@@ -1049,12 +1062,12 @@ const styles = StyleSheet.create({
   },
   pagerBtnOff: { opacity: 0.4 },
   pagerBtnText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
   },
-  pagerPage: { fontSize: fontScale(12), color: '#15163F' },
+  pagerPage: { fontSize: fontScale(13), color: '#15163F' },
 
   // Full-screen preview player.
   previewScreen: {
@@ -1134,7 +1147,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.65)',
   },
   durationText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',
@@ -1150,6 +1163,7 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   pendingChip: {
+    flexShrink: 0,
     paddingHorizontal: scale(9),
     paddingVertical: scale(5),
     borderRadius: scale(8),
@@ -1161,7 +1175,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#B4741B',
   },
-  byline: { marginTop: scale(5), fontSize: fontScale(11), color: '#777B96' },
+  byline: { marginTop: scale(5), fontSize: fontScale(13), color: '#777B96' },
 
   metaGrid: {
     marginTop: scale(13),
@@ -1181,17 +1195,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(7),
   },
-  metaLabel: { fontSize: fontScale(9), color: '#9498B0' },
+  // The text block beside each icon: lets a long campaign name ellipsize
+  // instead of pushing the grid wider than the card.
+  metaCopy: { flexShrink: 1, minWidth: 0 },
+  metaLabel: { fontSize: fontScale(11), color: '#8A8FA8' },
   metaValue: {
     marginTop: scale(1),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#15163F',
   },
 
   decisionRow: { flexDirection: 'row', gap: scale(10), marginTop: scale(12) },
-  decisionButton: { flex: 1, marginTop: 0, minHeight: scale(48), height: 'auto', paddingVertical: scale(10) },
+  decisionButton: { flex: 1, marginTop: 0, minHeight: 48, height: 'auto', paddingVertical: scale(10) },
   approveBtn: {
     marginTop: scale(13),
     height: scale(46),
@@ -1204,6 +1221,8 @@ const styles = StyleSheet.create({
   },
   approveBtnOff: { backgroundColor: '#6FBF8E' },
   approveText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
@@ -1213,7 +1232,9 @@ const styles = StyleSheet.create({
   secondaryRow: { marginTop: scale(9), flexDirection: 'row', gap: scale(9) },
   secondaryBtn: {
     flex: 1,
-    height: scale(42),
+    minHeight: 44,
+    paddingVertical: scale(8),
+    paddingHorizontal: scale(8),
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -1224,7 +1245,9 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   secondaryText: {
-    fontSize: fontScale(12),
+    flexShrink: 1,
+    textAlign: 'center',
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -1233,18 +1256,20 @@ const styles = StyleSheet.create({
   empty: { marginTop: scale(30), padding: scale(22), alignItems: 'center' },
   tabs: { gap: scale(8), paddingBottom: scale(12) },
   tab: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingHorizontal: scale(14),
     paddingVertical: scale(8),
     borderRadius: scale(18),
     backgroundColor: '#F1F2F8',
   },
   tabOn: { backgroundColor: '#15163F' },
-  tabText: { fontSize: fontScale(12), fontWeight: '700', color: '#5C6180' },
+  tabText: { fontSize: fontScale(13), fontWeight: '700', color: '#5C6180' },
   tabTextOn: { color: '#FFFFFF' },
   waitingNote: {
     marginTop: scale(10),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(17),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7C819C',
   },
   emptyTitle: {
@@ -1255,7 +1280,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },

@@ -264,13 +264,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * App registers a session re-check here. Every signed-in call funnels through
+ * json(), so a 401 (expired / revoked token) on ANY screen reaches it and the
+ * user is sent to login instead of staring at a screen that keeps failing.
+ */
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
 async function json(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ApiError(
-      typeof data.detail === 'string' ? data.detail : 'Request failed',
-      response.status,
-    );
+    if (response.status === 401) onUnauthorized?.();
+    // errorDetail also reads FastAPI's 422 list form instead of a vague fallback.
+    throw new ApiError(errorDetail(data, 'Request failed'), response.status);
   }
   return data;
 }
@@ -1521,6 +1530,9 @@ export async function submitWork(
      *  Optional - the backend defaults both to [] when a brief needs no edited cut. */
     edited_files?: string[];
     raw_files?: string[];
+    /** Uploaded caption / script and thumbnail, for briefs that require them. */
+    caption_url?: string;
+    thumbnail_url?: string;
   },
 ) {
   return send(token, 'POST', '/api/work/submit', {
@@ -2220,6 +2232,11 @@ export async function sendDealMessage(
     message,
     attachment_urls: [],
   });
+}
+
+/** Opening the deal chat: the GET also marks the brand's messages read, which clears `unread_count`. */
+export async function markDealChatRead(token: string, dealId: string) {
+  return get(token, `/api/deals/${encodeURIComponent(dealId)}/chat`);
 }
 
 /** The brand's side of the deal list. */

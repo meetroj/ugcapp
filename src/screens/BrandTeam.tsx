@@ -25,6 +25,7 @@ import {
   getMe,
   getTeamPayload,
   inviteTeamMember,
+  NetworkError,
   removeTeamMember,
   updateTeamMemberRole,
 } from '../api';
@@ -74,6 +75,12 @@ export function budgetPercent(used: unknown, limit: unknown): number {
 
 const rupees = (value: unknown) =>
   `₹${Number(value || 0).toLocaleString('en-IN')}`;
+
+/** A dropped connection says so, instead of the raw fetch error. */
+const failText = (e: any, fallback: string) =>
+  e instanceof NetworkError
+    ? "You're offline. Check your connection and try again."
+    : e?.message || fallback;
 
 type Member = {
   id?: string;
@@ -125,7 +132,7 @@ export function TeamPanel({
         setMe((user || {}) as Record<string, any>);
       })
       .catch(e => {
-        if (active) setError(e?.message || 'Could not load your team.');
+        if (active) setError(failText(e, 'Could not load your team.'));
       });
     return () => {
       active = false;
@@ -146,7 +153,7 @@ export function TeamPanel({
         onToast(done);
         return true;
       } catch (e: any) {
-        Alert.alert('Could not complete', e?.message || failFallback);
+        Alert.alert('Could not complete', failText(e, failFallback));
         return false;
       } finally {
         busyRef.current = false;
@@ -426,7 +433,7 @@ export function BillingPanel({
         setSummary(s || {});
       })
       .catch(e => {
-        if (active) setError(e?.message || 'Could not load billing.');
+        if (active) setError(failText(e, 'Could not load billing.'));
       });
     return () => {
       active = false;
@@ -491,6 +498,10 @@ export function BillingPanel({
           <View style={[styles.fill, { width: `${percent}%` }]} />
         </View>
         <Text style={styles.note}>{percent}% of budget used this month</Text>
+        {/* The website has no invoice page either: a payment receipt is emailed after every wallet recharge. */}
+        <Text style={styles.note}>
+          A payment receipt is emailed to the account owner after every wallet recharge.
+        </Text>
         {!!billing.next_billing_date && (
           <Text style={styles.note}>Next billing: {String(billing.next_billing_date)}</Text>
         )}
@@ -502,7 +513,7 @@ export function BillingPanel({
           onPress={onOpenWallet}
           accessibilityRole="button"
         >
-          <Text style={styles.primaryText}>Billing history &amp; payment methods</Text>
+          <Text style={styles.primaryText}>Wallet &amp; transaction history</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -553,7 +564,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FBFBFE',
     paddingHorizontal: scale(12),
     paddingVertical: 0,
-    fontSize: fontScale(16),
+    // Literal 16: fontScale(16) drops below 16 on phones narrower than 390 and iOS then zooms in.
+    fontSize: 16,
     color: '#15163F',
   },
   inputError: { borderColor: '#E5484D', backgroundColor: '#FFF6F6' },
@@ -646,7 +658,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#3D4FD8',
   },
-  memberText: { flex: 1, marginHorizontal: scale(12) },
+  memberText: { flex: 1, minWidth: 0, marginHorizontal: scale(12) },
   memberName: {
     fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
@@ -654,7 +666,7 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   memberEmail: { fontSize: fontScale(12), color: '#7E829D', marginTop: scale(1) },
-  chips: { flexDirection: 'row', gap: scale(6), marginTop: scale(6) },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(6), marginTop: scale(6) },
   chipBtn: {
     paddingHorizontal: scale(10),
     paddingVertical: scale(4),

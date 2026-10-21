@@ -286,11 +286,11 @@ export function bidStatusLabel(status: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export type BidTabKey = 'all' | 'shortlisted' | 'accepted' | 'rejected';
+export type BidTabKey = 'all' | 'accepted' | 'rejected';
 
 export const BID_TABS: { key: BidTabKey; label: string; match: (status: string) => boolean }[] = [
+  // No Shortlisted tab: GET /bids/my only ever returns pending / approved / rejected (the website dropped it too).
   { key: 'all', label: 'All', match: () => true },
-  { key: 'shortlisted', label: 'Shortlisted', match: s => s === 'shortlisted' },
   { key: 'accepted', label: 'Accepted', match: s => WON_STATUSES.includes(s) },
   { key: 'rejected', label: 'Rejected', match: s => s === 'rejected' },
 ];

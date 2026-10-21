@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';import { Text } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, scale, fontScale } from '../theme';
 
 type Props = {
   onBack: () => void;
@@ -112,7 +112,7 @@ function AppSettings({ onBack, onNavigate }: Props) {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, CONTENT_COLUMN]}>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={onBack}
@@ -126,7 +126,7 @@ function AppSettings({ onBack, onNavigate }: Props) {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         showsVerticalScrollIndicator={false}
       >
         {ITEMS.map(item => (
@@ -161,8 +161,8 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   headerBtn: {
-    width: scale(38),
-    height: scale(38),
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -189,14 +189,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowText: { flex: 1, marginLeft: scale(13) },
+  rowText: { flex: 1, minWidth: 0, marginLeft: scale(13) },
   rowLabel: {
     fontSize: fontScale(15),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  rowCaption: { marginTop: scale(3), fontSize: fontScale(12), color: '#777B96' },
+  rowCaption: { marginTop: scale(3), fontSize: fontScale(13), color: '#777B96' },
   chevron: { fontSize: fontScale(24), color: '#B9BCCC' },
 });
 

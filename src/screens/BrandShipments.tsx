@@ -22,7 +22,7 @@ import AppHeader from '../components/AppHeader';
 import { SkeletonList } from '../components/Skeleton';
 import { ApiError, NetworkError, getCampaigns, getShipment } from '../api';
 import { isMockShipment, needsShipment, shipmentStatus } from '../shipmentStatus';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -250,6 +250,7 @@ function BrandShipments({
       </View>
 
       <View style={styles.sheet}>
+       <View style={styles.inner}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -330,7 +331,9 @@ function BrandShipments({
                 <Icon name="box" color="#C3C6D6" size={34} />
                 <Text style={styles.emptyTitle}>No shipments</Text>
                 <Text style={styles.emptyText}>
-                  {tab === 'all'
+                  {query.trim()
+                    ? 'No campaign matches your search. Try a different name.'
+                    : tab === 'all'
                     ? 'Campaigns that need a physical product shipped appear here.'
                     : 'Nothing in this state right now.'}
                 </Text>
@@ -417,6 +420,7 @@ function BrandShipments({
             )}
           </ScrollView>
         )}
+       </View>
       </View>
     </View>
   );
@@ -433,6 +437,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(24),
     overflow: 'hidden',
   },
+  // Tablet: tabs, search and list share one centred column.
+  inner: { flex: 1, width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   // Wrapper for the shared AppHeader; transparent so the navy backdrop shows
   // through, matching the other brand tabs.
   topBar: { backgroundColor: 'transparent' },
@@ -461,7 +467,7 @@ const styles = StyleSheet.create({
   searchWrap: {
     marginHorizontal: scale(16),
     marginBottom: scale(12),
-    height: scale(42),
+    height: scale(44),
     borderRadius: scale(12),
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
@@ -473,7 +479,9 @@ const styles = StyleSheet.create({
   },
   search: {
     flex: 1,
-    fontSize: fontScale(14),
+    minWidth: 0,
+    // 16 so iOS does not zoom on focus.
+    fontSize: 16,
     color: '#15163F',
     paddingVertical: 0,
   },
@@ -506,7 +514,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4C5BF3',
   },
-  cardCopy: { flex: 1 },
+  cardCopy: { flex: 1, minWidth: 0 },
   cardTitle: {
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
@@ -514,7 +522,7 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   cardMeta: { marginTop: scale(3), fontSize: fontScale(11), color: '#777B96' },
-  chip: { paddingHorizontal: scale(9), paddingVertical: scale(5), borderRadius: scale(8) },
+  chip: { flexShrink: 0, paddingHorizontal: scale(9), paddingVertical: scale(5), borderRadius: scale(8) },
   chipText: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
 
   trackRow: {
@@ -528,6 +536,7 @@ const styles = StyleSheet.create({
   },
   trackText: {
     flex: 1,
+    minWidth: 0,
     fontSize: fontScale(12),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',

@@ -57,7 +57,11 @@ function ForgotPasswordForm({
     );
 
   const sendCode = async () => {
-    if (!email.trim() || loading) return;
+    if (loading) return;
+    if (!email.trim()) {
+      Alert.alert('Enter your email', 'Type the email on your account first.');
+      return;
+    }
     setLoading(true);
     try {
       await forgotPassword(email.trim());
@@ -74,7 +78,11 @@ function ForgotPasswordForm({
   };
 
   const checkCode = async () => {
-    if (code.length !== 6 || loading) return;
+    if (loading) return;
+    if (code.length !== 6) {
+      Alert.alert('Check the code', 'Enter the 6-digit code from the email.');
+      return;
+    }
     setLoading(true);
     try {
       await verifyResetCode(email.trim(), code);
@@ -148,6 +156,10 @@ function ForgotPasswordForm({
             icon="lock"
             placeholder="123456"
             keyboardType="number-pad"
+            // A code is read back while typing; only passwords are masked.
+            secureTextEntry={false}
+            textContentType="oneTimeCode"
+            autoComplete="sms-otp"
             value={code}
             onChangeText={text => setCode(text.replace(/\D/g, '').slice(0, 6))}
           />
@@ -157,7 +169,11 @@ function ForgotPasswordForm({
             loading={loading}
           />
           <View style={styles.resendRow}>
-            <TouchableOpacity onPress={sendCode} accessibilityRole="button">
+            <TouchableOpacity
+              onPress={sendCode}
+              accessibilityRole="button"
+              hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+            >
               <Text style={styles.link}>Send it again</Text>
             </TouchableOpacity>
           </View>
@@ -182,6 +198,7 @@ function ForgotPasswordForm({
             textContentType="newPassword"
             value={confirm}
             onChangeText={setConfirm}
+            onSubmitEditing={save}
           />
           <PrimaryButton
             label="Save password"
@@ -215,13 +232,13 @@ function ForgotPasswordForm({
 const styles = StyleSheet.create({
   hint: {
     marginBottom: scale(14),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: colors.muted,
   },
   resendRow: { alignItems: 'center', marginTop: scale(12) },
   link: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     color: colors.brand,
     fontFamily: 'Inter-Bold',
     fontWeight: '700',

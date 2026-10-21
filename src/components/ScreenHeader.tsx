@@ -33,6 +33,7 @@ function ScreenHeader({
         onPress={onBack}
         accessibilityRole="button"
         accessibilityLabel="Go back"
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
         <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
           <Path
@@ -49,11 +50,15 @@ function ScreenHeader({
         {title}
       </Text>
 
+      {/* No handler means no button: a chat icon that does nothing is a dead
+          control. The spacer keeps the title centred. */}
+      {onChat ? (
       <TouchableOpacity
         style={styles.iconBtn}
         onPress={onChat}
         accessibilityRole="button"
         accessibilityLabel="Messages"
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
         <Svg width={21} height={21} viewBox="0 0 24 24" fill="none">
           <Path
@@ -70,6 +75,9 @@ function ScreenHeader({
           </View>
         )}
       </TouchableOpacity>
+      ) : (
+        <View style={styles.iconBtn} />
+      )}
     </View>
   );
 }
@@ -92,6 +100,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
+    // flex + centre: a long title ellipsizes between the two buttons instead of
+    // shoving the chat button off the edge on a 320pt screen.
+    flex: 1,
+    textAlign: 'center',
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',

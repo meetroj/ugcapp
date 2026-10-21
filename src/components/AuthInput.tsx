@@ -12,7 +12,7 @@ import {
   type TextInputProps,
 } from 'react-native';
 import { Text, TextInput } from './Text';
-import { colors, radius, scale, fontScale } from '../theme';
+import { colors, radius, scale, fontScale, touch, INPUT_FONT_SIZE } from '../theme';
 import { EyeIcon, GlobeIcon, LockIcon, MailIcon, PersonIcon, PhoneIcon } from './icons';
 
 type Props = TextInputProps & {
@@ -36,7 +36,9 @@ function AuthInput({
   error,
   ...inputProps
 }: Props) {
-  const isPassword = icon === 'lock';
+  // A 'lock' field is a password unless the caller opts out (reset code, 2FA
+  // code: secureTextEntry={false}) so those stay readable while typing.
+  const isPassword = icon === 'lock' && inputProps.secureTextEntry !== false;
   const [hidden, setHidden] = useState(isPassword);
 
   return (
@@ -82,6 +84,16 @@ function AuthInput({
           secureTextEntry={hidden}
           autoCapitalize="none"
           autoCorrect={false}
+          // Lets the password manager fill and offer to save.
+          autoComplete={
+            isPassword
+              ? inputProps.textContentType === 'newPassword'
+                ? 'new-password'
+                : 'password'
+              : icon === 'mail'
+              ? 'email'
+              : undefined
+          }
           {...inputProps}
           returnKeyType={isPassword ? 'done' : inputProps.returnKeyType}
           blurOnSubmit={isPassword}
@@ -113,7 +125,7 @@ const styles = StyleSheet.create({
   wrap: { marginTop: scale(16) },
   wrapCompact: { marginTop: scale(11) },
   label: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: colors.text,
@@ -122,14 +134,14 @@ const styles = StyleSheet.create({
   field: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: scale(48),
+    height: touch(48),
     borderRadius: radius.field,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.field,
     paddingHorizontal: scale(12),
   },
-  fieldCompact: { height: scale(44) },
+  fieldCompact: { height: touch(44) },
   fieldError: { borderColor: '#E5484D' },
   prefix: {
     marginRight: scale(8),
@@ -138,6 +150,8 @@ const styles = StyleSheet.create({
     borderRightColor: colors.border,
     justifyContent: 'center',
     minHeight: 32,
+    // A long "+91 v" label must never squeeze the number field on 320pt.
+    flexShrink: 0,
   },
   prefixText: {
     fontSize: fontScale(14),
@@ -147,14 +161,16 @@ const styles = StyleSheet.create({
   },
   error: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#E5484D',
   },
   leading: { marginRight: scale(8) },
   trailing: { marginLeft: scale(8) },
   input: {
     flex: 1,
-    fontSize: fontScale(15),
+    // 16 or more: iOS zooms into smaller fields, and 15 shrank below 14 at 320.
+    fontSize: INPUT_FONT_SIZE,
+    minWidth: 0,
     color: colors.text,
     // Android adds its own vertical padding that misaligns the icon row.
     paddingVertical: 0,

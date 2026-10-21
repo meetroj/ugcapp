@@ -25,6 +25,6 @@ export default function VideoPreview({ uri, onClose }: { uri: string | null; onC
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#000000' },
   video: { flex: 1 },
-  close: { position: 'absolute', right: scale(16), minHeight: scale(44), paddingHorizontal: scale(18), justifyContent: 'center', borderRadius: scale(22), backgroundColor: 'rgba(21,22,63,0.85)' },
+  close: { position: 'absolute', right: scale(16), minHeight: 44, paddingHorizontal: scale(18), justifyContent: 'center', borderRadius: scale(22), backgroundColor: 'rgba(21,22,63,0.85)' },
   label: { ...bodyFont(600), fontSize: fontScale(14), color: '#FFFFFF' },
 });

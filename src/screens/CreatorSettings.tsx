@@ -32,8 +32,10 @@ import {
 } from 'react-native';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Path } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import ScreenHeader from '../components/ScreenHeader';
+import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonForm } from '../components/Skeleton';
 import {
   BACKEND_URL,
@@ -43,8 +45,9 @@ import {
   uploadMedia,
   type AuthUser,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 import { IMAGE_TOO_LARGE_MESSAGE, imageTooLarge } from '../profileImage';
+import { errorMessage } from '../payoutRules';
 import { CONTENT_STYLES, NICHE_CATEGORIES } from './CreatorProfileSetup';
 
 type Opt = { value: string; label: string };
@@ -218,6 +221,7 @@ function Field({
   placeholder,
   multiline,
   numeric,
+  maxLength,
 }: {
   label: string;
   value: string;
@@ -225,6 +229,7 @@ function Field({
   placeholder?: string;
   multiline?: boolean;
   numeric?: boolean;
+  maxLength?: number;
 }) {
   return (
     <View style={styles.group}>
@@ -238,6 +243,7 @@ function Field({
         placeholder={placeholder}
         placeholderTextColor="#9CA3AF"
         multiline={multiline}
+        maxLength={maxLength}
         keyboardType={numeric ? 'number-pad' : 'default'}
       />
     </View>
@@ -247,7 +253,8 @@ function Field({
 /**
  * Single-choice list rendered as chips. The web uses a <select>; a native
  * picker would need an extra dependency, and chips keep every option one tap
- * away instead of behind a modal.
+ * away instead of behind a modal. `sheet` is for long lists (the 36 states),
+ * which open the app's scrolling ChoiceSheet instead of a wall of chips.
  */
 function Choice({
   label,
@@ -255,18 +262,47 @@ function Choice({
   options,
   onChange,
   placeholder,
+  sheet,
 }: {
   label: string;
   value: string;
   options: string[];
   onChange: (next: string) => void;
   placeholder?: string;
+  sheet?: boolean;
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   return (
     <View style={styles.group}>
       <Text style={styles.label}>{label}</Text>
       {options.length === 0 ? (
         <Text style={styles.emptyHint}>{placeholder || 'No options'}</Text>
+      ) : sheet ? (
+        <>
+          <TouchableOpacity
+            style={[styles.input, styles.select]}
+            onPress={() => setPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`${label}: ${value || 'not set'}. Change`}
+          >
+            <Text
+              style={[styles.selectText, !value && styles.selectPlaceholder]}
+              numberOfLines={1}
+            >
+              {value || `Select ${label.toLowerCase()}`}
+            </Text>
+            <Chevron open={false} />
+          </TouchableOpacity>
+          <ChoiceSheet
+            visible={pickerOpen}
+            title={label}
+            options={options.map(option => ({
+              label: option,
+              onPress: () => onChange(option),
+            }))}
+            onClose={() => setPickerOpen(false)}
+          />
+        </>
       ) : (
         <View style={styles.chips}>
           {options.map(option => {
@@ -396,6 +432,9 @@ function CreatorSettings({ token, onBack }: Props) {
   // Set when /auth/me fails: the form must not render, because saving an
   // empty form would replace the stored profile with blanks.
   const [loadFailed, setLoadFailed] = useState('');
+  // Shown inside the work-details sheet: the page error line is hidden behind it.
+  const [draftError, setDraftError] = useState('');
+  const insets = useSafeAreaInsets();
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState<string | null>('Basic Information');
   const [loading, setLoading] = useState(true);
@@ -492,9 +531,7 @@ function CreatorSettings({ token, onBack }: Props) {
         setWork(Array.isArray(items) ? items : []);
       } catch (e) {
         if (active) {
-          setLoadFailed(
-            e instanceof Error && e.message ? e.message : 'Could not load your profile.',
-          );
+          setLoadFailed(errorMessage(e, 'Could not load your profile.'));
         }
       } finally {
         if (active) setLoading(false);
@@ -529,10 +566,7 @@ function CreatorSettings({ token, onBack }: Props) {
         else setBannerUrl(url);
       } catch (e) {
         // The server OCR-scans images and rejects ones carrying contact info.
-        Alert.alert(
-          title,
-          e instanceof Error && e.message ? e.message : 'Please try again.',
-        );
+        Alert.alert(title, errorMessage(e, 'Please try again.'));
       } finally {
         setImageBusy(null);
       }
@@ -570,6 +604,7 @@ function CreatorSettings({ token, onBack }: Props) {
       // The clip is uploaded but NOT saved yet — the details form below adds
       // it once the creator fills in category / price / delivery, which is
       // what a brand actually sees on each video card.
+      setDraftError('');
       setDraft({
         index: null,
         url,
@@ -579,7 +614,7 @@ function CreatorSettings({ token, onBack }: Props) {
         delivery: '',
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not upload that video.');
+      setError(errorMessage(e, 'Could not upload that video.'));
     } finally {
       setUploading(false);
     }
@@ -590,6 +625,7 @@ function CreatorSettings({ token, onBack }: Props) {
     (index: number) => {
       const item = work[index];
       const meta: WorkItem = typeof item === 'string' ? {} : item || {};
+      setDraftError('');
       setDraft({
         index,
         url: workUrl(item),
@@ -633,13 +669,13 @@ function CreatorSettings({ token, onBack }: Props) {
         ? [...work, item]
         : work.map((existing, i) => (i === draft.index ? item : existing));
     setSavingWork(true);
-    setError('');
+    setDraftError('');
     try {
       await savePortfolio(token, next);
       setWork(next);
       setDraft(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save those details.');
+      setDraftError(errorMessage(e, 'Could not save those details.'));
     } finally {
       setSavingWork(false);
     }
@@ -658,8 +694,11 @@ function CreatorSettings({ token, onBack }: Props) {
               await savePortfolio(token, next);
               setWork(next);
             } catch (e) {
-              setError(
-                e instanceof Error ? e.message : 'Could not remove that clip.',
+              // An alert, not the page error line: that sits at the bottom of a
+              // long form, far from the tile that was tapped.
+              Alert.alert(
+                'Clip not removed',
+                errorMessage(e, 'Could not remove that clip.'),
               );
             }
           },
@@ -670,6 +709,7 @@ function CreatorSettings({ token, onBack }: Props) {
   );
 
   const onSave = useCallback(async () => {
+    if (saving) return;
     // The web requires a delivery time; without it brands have no turnaround.
     if (!(Number(form.deliveryDays) > 0)) {
       setError('Enter your typical delivery time (days) under Pricing.');
@@ -732,6 +772,11 @@ function CreatorSettings({ token, onBack }: Props) {
           weekly: form.weekly,
           flexible: !!form.flexible,
         },
+        // The clips as they are NOW (added or removed through PATCH above). The
+        // loaded profile holds the signup-time list, and this endpoint mirrors
+        // `portfolio` onto the user, so sending that one would undo My Work edits.
+        portfolio: work.filter(item => workUrl(item)),
+        portfolio_items: work,
         expectedPayout: form.expectedPayout,
         payoutPeriod: payoutPeriod,
         delivery_days: Number(form.deliveryDays),
@@ -746,11 +791,11 @@ function CreatorSettings({ token, onBack }: Props) {
       });
       setSaved(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save your changes.');
+      setError(errorMessage(e, 'Could not save your changes.'));
     } finally {
       setSaving(false);
     }
-  }, [form, loaded, token]);
+  }, [form, loaded, token, work, saving]);
 
   /** Two rows of three tiles — the cap the brief asks for. */
   const tiles = useMemo(() => work.slice(0, 6), [work]);
@@ -967,6 +1012,7 @@ function CreatorSettings({ token, onBack }: Props) {
                 onChange={v => set('country', v)}
               />
               <Choice
+                sheet
                 label="State"
                 value={form.state || ''}
                 options={STATES}
@@ -986,6 +1032,7 @@ function CreatorSettings({ token, onBack }: Props) {
                 value={form.pincode || ''}
                 onChange={v => set('pincode', v)}
                 numeric
+                maxLength={6}
               />
               <Field
                 label="Phone"
@@ -1165,8 +1212,13 @@ function CreatorSettings({ token, onBack }: Props) {
         statusBarTranslucent
         onRequestClose={() => setDraft(null)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
+        <KeyboardAvoidingView style={styles.modalBackdrop} behavior="padding">
+          <View
+            style={[
+              styles.modalSheet,
+              { paddingBottom: scale(20) + insets.bottom },
+            ]}
+          >
             <Text style={styles.modalTitle}>
               {draft?.index == null ? 'Add work details' : 'Edit work details'}
             </Text>
@@ -1217,6 +1269,8 @@ function CreatorSettings({ token, onBack }: Props) {
               />
             </ScrollView>
 
+            {draftError ? <Text style={styles.draftError}>{draftError}</Text> : null}
+
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.modalGhost}
@@ -1242,7 +1296,7 @@ function CreatorSettings({ token, onBack }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1258,7 +1312,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
-  content: { padding: scale(16), paddingBottom: scale(34) },
+  // Centred, capped column so the form does not stretch edge to edge on a tablet.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingBottom: scale(32),
+  },
 
   blockTitle: {
     fontSize: fontScale(16),
@@ -1268,9 +1329,10 @@ const styles = StyleSheet.create({
   },
   detailsTitle: { marginTop: scale(20), marginBottom: scale(10) },
 
-  imageRow: { flexDirection: 'row', gap: scale(10), marginBottom: scale(18) },
+  imageRow: { flexDirection: 'row', gap: scale(12), marginBottom: scale(24) },
   imageCard: {
     flex: 1,
+    minWidth: 0,
     minHeight: scale(44),
     alignItems: 'center',
     padding: scale(12),
@@ -1298,7 +1360,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#15163F',
   },
-  imageChange: { marginTop: scale(2), fontSize: fontScale(11), color: '#5B5CF6' },
+  imageChange: { marginTop: scale(4), fontSize: fontScale(12), color: '#5B5CF6' },
 
   workHead: {
     flexDirection: 'row',
@@ -1306,15 +1368,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   addWork: {
-    fontSize: fontScale(13),
+    paddingVertical: scale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5B5CF6',
   },
   workHint: {
     marginTop: scale(3),
-    marginBottom: scale(9),
-    fontSize: fontScale(11),
+    marginBottom: scale(12),
+    fontSize: fontScale(12),
     color: '#8A8DA6',
   },
   // Three per row, two rows max — the tile width is a third of the sheet less
@@ -1366,9 +1429,19 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     justifyContent: 'flex-end',
+    alignItems: 'center',
     backgroundColor: 'rgba(10,13,35,0.45)',
   },
+  draftError: {
+    marginTop: scale(10),
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
+    color: '#C0392B',
+  },
   modalSheet: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
     // Capped so the keyboard still leaves the action row reachable on a short
     // phone; the fields scroll inside.
     maxHeight: '82%',
@@ -1387,8 +1460,8 @@ const styles = StyleSheet.create({
   },
   modalHint: {
     marginTop: scale(4),
-    marginBottom: scale(14),
-    fontSize: fontScale(12),
+    marginBottom: scale(16),
+    fontSize: fontScale(14),
     color: '#858AA3',
   },
   modalActions: {
@@ -1437,11 +1510,12 @@ const styles = StyleSheet.create({
   sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: scale(14),
-    paddingVertical: scale(13),
+    minHeight: scale(56),
+    paddingHorizontal: scale(16),
+    paddingVertical: scale(12),
     gap: scale(10),
   },
-  sectionText: { flex: 1 },
+  sectionText: { flex: 1, minWidth: 0 },
   sectionTitle: {
     fontSize: fontScale(13.5),
     fontFamily: 'ReadexPro-SemiBold',
@@ -1450,12 +1524,12 @@ const styles = StyleSheet.create({
   },
   sectionSub: {
     marginTop: scale(2),
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     color: '#8A8DA6',
   },
   sectionBody: {
-    paddingHorizontal: scale(14),
-    paddingBottom: scale(14),
+    paddingHorizontal: scale(16),
+    paddingBottom: scale(16),
     borderTopWidth: 1,
     borderTopColor: '#F1F1F8',
     paddingTop: scale(12),
@@ -1463,8 +1537,8 @@ const styles = StyleSheet.create({
 
   group: { marginBottom: scale(14) },
   label: {
-    marginBottom: scale(6),
-    fontSize: fontScale(11),
+    marginBottom: scale(8),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#7E829D',
@@ -1477,32 +1551,44 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#ECECF6',
-    fontSize: fontScale(13),
+    // 16 stops the iOS zoom-on-focus.
+    fontSize: 16,
     color: '#181943',
   },
   multiline: { minHeight: scale(90), textAlignVertical: 'top' },
   readonly: { justifyContent: 'center', backgroundColor: '#F5F5FB' },
-  readonlyText: { fontSize: fontScale(13), color: '#6C7091' },
-  emptyHint: { fontSize: fontScale(12), color: '#9295AA' },
+  readonlyText: { fontSize: 16, color: '#6C7091' },
+  emptyHint: { fontSize: fontScale(14), color: '#9295AA' },
+  select: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: scale(8),
+  },
+  selectText: { flex: 1, minWidth: 0, fontSize: 16, color: '#181943' },
+  selectPlaceholder: { color: '#9CA3AF' },
 
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(7) },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(8) },
   chip: {
-    paddingHorizontal: scale(11),
-    paddingVertical: scale(7),
-    borderRadius: scale(9),
+    maxWidth: '100%',
+    minHeight: scale(44),
+    justifyContent: 'center',
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(8),
+    borderRadius: scale(10),
     backgroundColor: '#F4F4FB',
     borderWidth: 1,
     borderColor: '#EAEAF4',
   },
   chipOn: { backgroundColor: '#EEEFFF', borderColor: '#C9CBFB' },
-  chipText: { fontSize: fontScale(12), color: '#5C6180' },
+  chipText: { fontSize: fontScale(13), color: '#5C6180' },
   chipTextOn: {
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
   },
 
-  check: { flexDirection: 'row', alignItems: 'center', gap: scale(9) },
+  check: { flexDirection: 'row', alignItems: 'center', gap: scale(10), minHeight: scale(44) },
   box: {
     width: scale(20),
     height: scale(20),
@@ -1519,18 +1605,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  checkText: { fontSize: fontScale(13), color: '#2B2D55' },
+  checkText: { flex: 1, fontSize: fontScale(14), color: '#2B2D55' },
 
   error: {
-    marginBottom: scale(10),
-    fontSize: fontScale(12),
+    marginBottom: scale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',
   },
   saved: {
-    marginBottom: scale(10),
-    fontSize: fontScale(12),
+    marginBottom: scale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#1FA971',

@@ -28,6 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SkeletonBlock } from '../components/Skeleton';
 import ChoiceSheet from '../components/ChoiceSheet';
+import { MB, afterSheetCloses, pickDocuments } from '../documentPicker';
 import BottomSheet from '../components/BottomSheet';
 import { ToastBar, useToast } from '../components/Toast';
 import { RateBrandSheet } from './DealSheets';
@@ -82,7 +83,7 @@ import {
   validateCard,
   type AttachmentKind,
 } from '../actionCards';
-import { scale, fontScale } from '../theme';
+import { CONTENT_COLUMN, CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -502,6 +503,8 @@ function BrandChatThread({
   const { message: toast, show: showToast } = useToast();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  // The "Photo or video / PDF" chooser opened by the clip button.
+  const [attachMenu, setAttachMenu] = useState(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const insets = useSafeAreaInsets();
 
@@ -817,51 +820,90 @@ function BrandChatThread({
     }
   }, [attachments, cardsOnly, draft, load, loadWarnings, otherUserId, showToast, token]);
 
-  /** Picks files (up to 5) and uploads them, holding the URLs until the message is sent. */
-  const attach = useCallback(async () => {
+  /** Validates the picked files (up to 5 per message) and uploads them; the URLs wait for the message to be sent. */
+  const uploadPicked = useCallback(
+    async (
+      files: { uri?: string; fileName?: string | null; type?: string | null; fileSize?: number | null }[],
+    ) => {
+      files = files.filter(file => file.uri);
+      if (!files.length) return;
+
+      // Check every file first so one bad pick attaches nothing, like the website.
+      for (let index = 0; index < files.length; index += 1) {
+        const problem = attachmentProblem(files[index], attachments.length + index);
+        if (problem) {
+          setError(problem);
+          return;
+        }
+      }
+
+      setUploading(true);
+      setError('');
+      const added: Attachment[] = [];
+      try {
+        for (const file of files) {
+          const url = await uploadMedia(token, {
+            uri: file.uri as string,
+            fileName: file.fileName,
+            type: file.type,
+            fileSize: file.fileSize,
+          });
+          const name = file.fileName || attachmentName(url, added.length);
+          added.push({ url, name, kind: attachmentKind(name, file.type) });
+        }
+      } catch (err: any) {
+        setError(
+          err?.name === 'NetworkError' ? OFFLINE : err?.message || 'That file could not be uploaded.',
+        );
+      } finally {
+        // Files that did upload before a failure stay attached.
+        if (added.length) setAttachments(current => [...current, ...added]);
+        setUploading(false);
+      }
+    },
+    [attachments.length, token],
+  );
+
+  /** Photos and videos from the gallery. */
+  const attachFromGallery = useCallback(async () => {
     if (uploading || attachments.length >= MAX_ATTACHMENTS || cardsOnly) return;
-    const picked = await launchImageLibrary({
-      mediaType: 'mixed',
-      selectionLimit: MAX_ATTACHMENTS - attachments.length,
-    }).catch(() => null);
-    const assets = picked?.assets || [];
-    if (!assets.length) return;
-
-    // Check every file first so one bad pick attaches nothing, like the website.
-    for (let index = 0; index < assets.length; index += 1) {
-      const problem = attachmentProblem(
-        { fileName: assets[index].fileName, uri: assets[index].uri, type: assets[index].type, fileSize: assets[index].fileSize },
-        attachments.length + index,
-      );
-      if (problem) {
-        setError(problem);
-        return;
-      }
-    }
-
-    setUploading(true);
-    setError('');
-    const added: Attachment[] = [];
+    let picked;
     try {
-      for (const asset of assets) {
-        if (!asset.uri) continue;
-        const url = await uploadMedia(token, {
-          uri: asset.uri,
-          fileName: asset.fileName,
-          type: asset.type,
-          fileSize: asset.fileSize,
-        });
-        const name = asset.fileName || attachmentName(url, added.length);
-        added.push({ url, name, kind: attachmentKind(name, asset.type) });
-      }
-    } catch (err: any) {
-      setError(err?.message || 'That file could not be uploaded.');
-    } finally {
-      // Files that did upload before a failure stay attached.
-      if (added.length) setAttachments(current => [...current, ...added]);
-      setUploading(false);
+      picked = await launchImageLibrary({
+        mediaType: 'mixed',
+        selectionLimit: MAX_ATTACHMENTS - attachments.length,
+      });
+    } catch {
+      setError('Could not open your gallery. Check the photo permission and try again.');
+      return;
     }
-  }, [attachments.length, cardsOnly, token, uploading]);
+    if (picked?.errorMessage) {
+      setError(picked.errorMessage);
+      return;
+    }
+    await uploadPicked(picked?.assets || []);
+  }, [attachments.length, cardsOnly, uploadPicked, uploading]);
+
+  /** PDFs from the system Files picker (the website allows them; the gallery cannot hand them over). */
+  const attachPdf = useCallback(async () => {
+    if (uploading || attachments.length >= MAX_ATTACHMENTS || cardsOnly) return;
+    let docs;
+    try {
+      docs = await pickDocuments({ types: ['pdf'], allowMultiple: true, maxBytes: 25 * MB });
+    } catch (err: any) {
+      setError(err?.message || 'Could not open your files.');
+      return;
+    }
+    await uploadPicked(
+      docs.map(doc => ({ uri: doc.uri, fileName: doc.name, type: doc.type, fileSize: doc.size })),
+    );
+  }, [attachments.length, cardsOnly, uploadPicked, uploading]);
+
+  /** The clip button: choose where the file comes from. */
+  const attach = useCallback(() => {
+    if (uploading || attachments.length >= MAX_ATTACHMENTS || cardsOnly) return;
+    setAttachMenu(true);
+  }, [attachments.length, cardsOnly, uploading]);
 
   /** After accepting an invitation the creator can nudge the brand for the full brief. */
   const [requestingBrief, setRequestingBrief] = useState(false);
@@ -983,6 +1025,7 @@ function BrandChatThread({
             style={styles.briefBtn}
             onPress={openPrivateBrief}
             accessibilityRole="button"
+            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
           >
             <Icon name="brief" color="#FFFFFF" size={14} />
             <Text style={styles.briefText}>Send a Brief</Text>
@@ -1568,6 +1611,17 @@ function BrandChatThread({
       </Modal>
 
       <ChoiceSheet
+        visible={attachMenu}
+        title="Attach a file"
+        message="Up to 5 files per message. Images 10 MB, PDFs 25 MB, videos 100 MB."
+        options={[
+          { label: 'Photo or video', onPress: () => afterSheetCloses(attachFromGallery) },
+          { label: 'PDF document', onPress: () => afterSheetCloses(attachPdf) },
+        ]}
+        onClose={() => setAttachMenu(false)}
+      />
+
+      <ChoiceSheet
         visible={menuOpen}
         title={peerName}
         options={menuOptions}
@@ -1681,7 +1735,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
   },
-  headerCopy: { flex: 1 },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerTitle: {
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
@@ -1698,14 +1752,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#15163F',
   },
   briefText: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
   },
 
   loading: { marginTop: scale(40) },
-  content: { padding: scale(14), paddingBottom: scale(20) },
+  // A tablet keeps the thread a phone-width column instead of stretching bubbles and cards.
+  content: { ...CONTENT_COLUMN, padding: scale(14), paddingBottom: scale(20) },
 
   bubbleRow: { marginBottom: scale(10), alignItems: 'flex-start' },
   bubbleRowMine: { alignItems: 'flex-end' },
@@ -1716,7 +1771,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4F5FA',
   },
   bubbleMine: { backgroundColor: '#EEEFFF' },
-  bubbleText: { fontSize: fontScale(13), lineHeight: fontScale(19), color: '#25274C' },
+  bubbleText: { fontSize: fontScale(15), lineHeight: fontScale(21), color: '#25274C' },
   bubbleTextMine: { color: '#25274C' },
   attachment: {
     marginTop: scale(8),
@@ -1727,7 +1782,7 @@ const styles = StyleSheet.create({
   },
   fileChip: {
     marginTop: scale(8),
-    minHeight: scale(36),
+    minHeight: scale(44),
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(6),
@@ -1739,18 +1794,18 @@ const styles = StyleSheet.create({
   },
   fileChipText: {
     flexShrink: 1,
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#3D4FD8',
   },
   typing: {
     marginBottom: scale(8),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontStyle: 'italic',
     color: '#858AA3',
   },
-  stamp: { marginTop: scale(5), fontSize: fontScale(9), color: '#9498B0' },
+  stamp: { marginTop: scale(5), fontSize: fontScale(11), color: '#9498B0' },
   stampMine: { textAlign: 'right' },
 
   systemCard: {
@@ -1761,7 +1816,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#CFEBDC',
   },
-  systemText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#17603A' },
+  systemText: { fontSize: fontScale(14), lineHeight: fontScale(20), color: '#17603A' },
   systemAction: { marginTop: scale(8) },
   systemActionText: {
     fontSize: fontScale(12),
@@ -1797,7 +1852,8 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     flex: 1,
-    fontSize: fontScale(13),
+    minWidth: 0,
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#15163F',
@@ -1808,7 +1864,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(20),
   },
   cardStatusText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#4A4F73',
@@ -1822,13 +1878,14 @@ const styles = StyleSheet.create({
   },
   cardKey: {
     width: '38%',
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     color: '#8A8FA8',
     textTransform: 'capitalize',
   },
   cardVal: {
     flex: 1,
-    fontSize: fontScale(12),
+    minWidth: 0,
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#22254D',
@@ -1853,7 +1910,7 @@ const styles = StyleSheet.create({
   },
   cardBtnPrimary: { backgroundColor: '#3D4FD8', borderColor: '#3D4FD8' },
   cardBtnText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#3F4468',
@@ -1861,39 +1918,42 @@ const styles = StyleSheet.create({
   cardBtnTextPrimary: { color: '#FFFFFF' },
   cardNote: {
     marginTop: scale(9),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
+    fontSize: fontScale(13),
+    lineHeight: fontScale(18),
     color: '#6B7092',
   },
   cardLink: {
-    marginTop: scale(10),
+    marginTop: scale(6),
+    minHeight: scale(44),
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(4),
   },
   cardLinkText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#3D4FD8',
   },
   cardTime: {
     marginTop: scale(8),
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     color: '#A2A6BE',
   },
 
   /* ---- decline picker ---- */
   decline: { marginTop: scale(11), gap: scale(8) },
   declineLabel: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#4A4F73',
   },
   declineOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(6) },
   declineChip: {
-    paddingHorizontal: scale(10),
+    minHeight: scale(44),
+    justifyContent: 'center',
+    paddingHorizontal: scale(12),
     paddingVertical: scale(6),
     borderRadius: scale(18),
     borderWidth: 1,
@@ -1901,7 +1961,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   declineChipOn: { backgroundColor: '#EEF0FE', borderColor: '#3D4FD8' },
-  declineChipText: { fontSize: fontScale(11), color: '#5A5F80' },
+  declineChipText: { fontSize: fontScale(13), color: '#5A5F80' },
   declineChipTextOn: {
     color: '#3D4FD8',
     fontFamily: 'Inter-SemiBold',
@@ -1913,7 +1973,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4F5FA',
     paddingHorizontal: scale(11),
     paddingVertical: scale(9),
-    fontSize: fontScale(12),
+    fontSize: 16,
     color: '#15163F',
   },
 
@@ -1925,6 +1985,7 @@ const styles = StyleSheet.create({
     gap: scale(8),
   },
   actionChip: {
+    minHeight: scale(44),
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(6),
@@ -1936,7 +1997,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   actionChipText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#2B2F55',
@@ -1946,7 +2007,8 @@ const styles = StyleSheet.create({
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(14,19,48,0.42)' },
   // Tapping the dimmed area above the sheet closes it.
   sheetDismiss: { flex: 1 },
-  sheetWrap: { maxHeight: '88%' },
+  // A tablet keeps the card sheet a phone-width column, centred.
+  sheetWrap: { maxHeight: '88%', width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   sheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: scale(22),
@@ -1974,8 +2036,8 @@ const styles = StyleSheet.create({
     color: '#15163F',
   },
   sheetClose: {
-    width: scale(32),
-    height: scale(32),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1989,12 +2051,12 @@ const styles = StyleSheet.create({
     marginBottom: scale(6),
   },
   formLabel: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#3F4468',
   },
-  formCount: { fontSize: fontScale(11), color: '#8A8FA8' },
+  formCount: { fontSize: fontScale(12), color: '#8A8FA8' },
   formCountBad: {
     color: '#DC2626',
     fontFamily: 'Inter-SemiBold',
@@ -2006,12 +2068,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4F5FA',
     paddingHorizontal: scale(13),
     paddingVertical: scale(11),
-    fontSize: fontScale(14),
+    fontSize: 16,
     color: '#15163F',
   },
   formTextarea: { minHeight: scale(96), textAlignVertical: 'top' },
   formOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: scale(7) },
   formOption: {
+    minHeight: scale(44),
+    justifyContent: 'center',
     paddingHorizontal: scale(13),
     paddingVertical: scale(9),
     borderRadius: scale(20),
@@ -2020,7 +2084,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   formOptionOn: { backgroundColor: '#EEF0FE', borderColor: '#3D4FD8' },
-  formOptionText: { fontSize: fontScale(12), color: '#5A5F80' },
+  formOptionText: { fontSize: fontScale(14), color: '#5A5F80' },
   formOptionTextOn: {
     color: '#3D4FD8',
     fontFamily: 'Inter-SemiBold',
@@ -2028,8 +2092,8 @@ const styles = StyleSheet.create({
   },
   formError: {
     marginBottom: scale(10),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(17),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(19),
     color: '#DC2626',
   },
   formSend: {
@@ -2054,14 +2118,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE6E7',
   },
   errorText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C4373B',
   },
 
   /** Wraps the action chips + composer so both clear the keyboard together. */
-  dock: {},
+  dock: { ...CONTENT_COLUMN },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -2089,7 +2153,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F2F8',
   },
   pendingFile: { alignItems: 'center', justifyContent: 'center', padding: scale(4) },
-  pendingFileText: { fontSize: fontScale(8), color: '#3D4FD8' },
+  pendingFileText: { fontSize: fontScale(10), color: '#3D4FD8' },
   policyBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2098,9 +2162,9 @@ const styles = StyleSheet.create({
     paddingVertical: scale(9),
     backgroundColor: '#FEF3C7',
   },
-  policyText: { flex: 1, fontSize: fontScale(12), lineHeight: fontScale(17), color: '#92400E' },
+  policyText: { flex: 1, fontSize: fontScale(14), lineHeight: fontScale(19), color: '#92400E' },
   dateChips: { marginTop: scale(8) },
-  reportHint: { fontSize: fontScale(12), lineHeight: fontScale(17), color: '#6B7092', marginBottom: scale(12) },
+  reportHint: { fontSize: fontScale(14), lineHeight: fontScale(19), color: '#6B7092', marginBottom: scale(12) },
   reportReasons: { marginTop: scale(6), marginBottom: scale(14) },
   retryBtn: {
     marginTop: scale(14),
@@ -2112,7 +2176,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',
@@ -2143,7 +2207,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(13),
     paddingTop: scale(11),
     paddingBottom: scale(11),
-    fontSize: fontScale(14),
+    fontSize: 16,
     color: '#15163F',
   },
   sendBtn: {
@@ -2163,7 +2227,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#25274C',
   },
-  emptyText: { marginTop: scale(5), fontSize: fontScale(12), color: '#858AA3' },
+  emptyText: { marginTop: scale(5), fontSize: fontScale(14), color: '#858AA3' },
 });
 
 export default BrandChatThread;

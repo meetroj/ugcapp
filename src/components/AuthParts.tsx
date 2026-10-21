@@ -7,7 +7,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from './Text';
-import { colors, radius, scale, fontScale } from '../theme';
+import { colors, radius, scale, fontScale, touch } from '../theme';
 import { AppleIcon, GoogleIcon } from './icons';
 
 /** Filled navy call-to-action ("Create Account" / "Log In"). */
@@ -171,7 +171,11 @@ export function SwitchPrompt({
   return (
     <View style={[styles.switchRow, compact && styles.switchRowCompact]}>
       <Text style={styles.switchText}>{question} </Text>
-      <TouchableOpacity onPress={onPress} accessibilityRole="button">
+      <TouchableOpacity
+        onPress={onPress}
+        accessibilityRole="button"
+        hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+      >
         <Text style={styles.switchAction}>{action}</Text>
       </TouchableOpacity>
     </View>
@@ -180,7 +184,7 @@ export function SwitchPrompt({
 
 const styles = StyleSheet.create({
   primary: {
-    height: scale(50),
+    height: touch(50),
     borderRadius: radius.button,
     backgroundColor: colors.navy,
     alignItems: 'center',
@@ -193,7 +197,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
   },
-  primaryCompact: { height: scale(46), marginTop: scale(16) },
+  primaryCompact: { height: touch(46), marginTop: scale(16) },
   disabled: { opacity: 0.7 },
 
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: scale(18) },
@@ -201,7 +205,7 @@ const styles = StyleSheet.create({
   rule: { flex: 1, height: 1, backgroundColor: colors.border },
   or: {
     marginHorizontal: scale(12),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: colors.muted,
     fontFamily: 'Inter-Medium',
     fontWeight: '500',
@@ -211,7 +215,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    height: scale(50),
+    height: touch(50),
     borderRadius: radius.button,
     borderWidth: 1,
     borderColor: colors.border,
@@ -224,13 +228,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.text,
   },
-  googleCompact: { height: scale(46) },
+  googleCompact: { height: touch(46) },
 
   apple: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    height: scale(50),
+    height: touch(50),
     borderRadius: radius.button,
     backgroundColor: '#000000',
   },
@@ -241,7 +245,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  appleCompact: { height: scale(46) },
+  appleCompact: { height: touch(46) },
 
   socialRow: { flexDirection: 'row', gap: scale(10) },
   // Equal flex, so neither provider reads as the lesser option.
@@ -251,6 +255,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    // Wraps instead of overflowing when the OS font size is large.
+    flexWrap: 'wrap',
     marginTop: scale(20),
   },
   switchRowCompact: { marginTop: scale(13) },

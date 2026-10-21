@@ -119,7 +119,14 @@ export function SignUpForm({
       : undefined;
 
   const submit = async () => {
-    if (!email.trim() || !phone.trim() || !password || loading) return;
+    if (loading) return;
+    if (!email.trim() || !phone.trim() || !password) {
+      Alert.alert(
+        'Missing details',
+        'Enter your email, mobile number and a password to create your account.',
+      );
+      return;
+    }
     if (!isValidPhone(phone, dialCode)) {
       Alert.alert(
         'Check your mobile number',
@@ -201,6 +208,7 @@ export function SignUpForm({
         textContentType="newPassword"
         value={password}
         onChangeText={setPassword}
+        onSubmitEditing={submit}
         compact
       />
 

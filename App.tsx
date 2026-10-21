@@ -3,8 +3,8 @@ import AppAlertHost from './src/components/AppAlert';
  * ugcad.io — native Android shell around the live PWA.
  * Shows the native auth screens first, then hands over to the WebView shell.
  */
-import React, { useCallback, useEffect, useState } from 'react';
-import { Linking, Modal } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Linking, Modal } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AuthFlow from './src/screens/AuthFlow';
 import SplashScreen from './src/screens/SplashScreen';
@@ -13,7 +13,7 @@ import OnboardingWebView from './src/screens/OnboardingWebView';
 import ApprovalGate from './src/screens/ApprovalGate';
 import AgreementGate from './src/screens/AgreementGate';
 import TeamAcceptWebView from './src/screens/TeamAcceptWebView';
-import { verifySession, type AuthUser } from './src/api';
+import { setUnauthorizedHandler, verifySession, type AuthUser } from './src/api';
 import { parseDeepLink, type DeepLink } from './src/deepLink';
 import { clearSession, loadSession, saveSession } from './src/session';
 
@@ -23,6 +23,9 @@ import { clearSession, loadSession, saveSession } from './src/session';
  * like the app is stalling.
  */
 const SPLASH_MIN_MS = 1600;
+
+/** How often an open app re-asks the server whether the login still works. */
+const SESSION_RECHECK_MS = 5 * 60 * 1000;
 
 /** Where a session lands after logging in, based on role and profile state. */
 function homePathFor(session: AuthUser): string {
@@ -132,16 +135,78 @@ function App(): React.JSX.Element {
    * Onboarding just set profile_completed on the server. Re-read the session so
    * the native routes — all gated on that flag — open up without a restart.
    */
-  const handleProfileComplete = useCallback(async () => {
+  const handleProfileComplete = useCallback(async (strict = false) => {
     if (!session) return;
     const refreshed = await verifySession(session);
-    // verifySession returns null only on an explicit token rejection; falling
-    // back to a local flip keeps the user moving if it merely failed to reach
-    // the server.
-    const next = refreshed || {...session, profile_completed: true};
-    setSession(next);
-    await saveSession(next);
-  }, [session]);
+    // verifySession returns null only when the server rejected the token
+    // (401/403: expired, revoked, account deleted). That is a sign-out, not a
+    // reason to wave the user through; a mere network failure comes back as the
+    // unchanged session, so offline users stay logged in.
+    if (!refreshed) {
+      handleLogout();
+      return;
+    }
+    // "Check Status" must not claim "still under review" when the server was
+    // never reached: verifySession hands back the same object on a network error.
+    if (strict && refreshed === session) throw new Error('unreachable');
+    setSession(refreshed);
+    await saveSession(refreshed);
+  }, [session, handleLogout]);
+
+  // 401 -> login. Native screens each call the API on their own, so the one
+  // place that notices an ended session is a re-check whenever the app comes
+  // back to the foreground and every few minutes while it is open.
+  const sessionRef = useRef<AuthUser | null>(null);
+  sessionRef.current = session;
+  const signedIn = !!session;
+  // Any API call that gets a 401 asks for a re-check, which logs out only when
+  // the server really rejects the token (a stray 401 elsewhere cannot sign out).
+  const lastUnauthorizedCheck = useRef(0);
+  useEffect(() => {
+    if (!signedIn) return;
+    setUnauthorizedHandler(() => {
+      const current = sessionRef.current;
+      const now = Date.now();
+      if (!current || now - lastUnauthorizedCheck.current < 5000) return;
+      lastUnauthorizedCheck.current = now;
+      verifySession(current).then(fresh => {
+        if (fresh === null) handleLogout();
+      });
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [signedIn, handleLogout]);
+  useEffect(() => {
+    if (!signedIn) return;
+    let stopped = false;
+    const recheck = async () => {
+      const current = sessionRef.current;
+      if (!current || AppState.currentState !== 'active') return;
+      const fresh = await verifySession(current);
+      if (stopped) return;
+      if (fresh === null) {
+        handleLogout();
+        return;
+      }
+      // Admin approved / asked for more info while the app was open: pick the
+      // new state up here so the gate lifts without a manual Check Status.
+      if (
+        fresh.approval_status !== current.approval_status ||
+        fresh.profile_completed !== current.profile_completed
+      ) {
+        setSession(fresh);
+        saveSession(fresh);
+      }
+    };
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') recheck();
+    });
+    const timer = setInterval(recheck, SESSION_RECHECK_MS);
+    return () => {
+      stopped = true;
+      sub.remove();
+      clearInterval(timer);
+    };
+  }, [signedIn, handleLogout]);
 
   if (restoring) {
     return (
@@ -205,7 +270,7 @@ function App(): React.JSX.Element {
             role: session.role,
           }}
           onUpdateProfile={() => setReopenSetup(true)}
-          onRefresh={handleProfileComplete}
+          onRefresh={() => handleProfileComplete(true)}
           onLogout={handleLogout}
         />
       ) : (
@@ -229,6 +294,7 @@ function App(): React.JSX.Element {
         session.agreement_accepted !== true && (
           <AgreementGate
             token={session.token}
+            onLogout={handleLogout}
             onAccepted={() => {
               const next = { ...session, agreement_accepted: true };
               setSession(next);

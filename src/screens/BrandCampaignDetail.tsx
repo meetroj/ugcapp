@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
   LayoutAnimation,
   Linking,
   Modal,
@@ -25,6 +26,7 @@ import {
   TextInput,
   TouchableOpacity,
   UIManager,
+  useWindowDimensions,
   View,
 } from 'react-native';import { Text } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -74,7 +76,7 @@ import {
 import { errorMessage } from '../payoutRules';
 import WorkRevisionRequest from './WorkRevisionRequest';
 import Video from 'react-native-video';
-import { scale, fontScale, NAV_CLEARANCE } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale, NAV_CLEARANCE } from '../theme';
 
 type Props = {
   token: string;
@@ -296,16 +298,26 @@ function SummaryCell({
   label: string;
   value: string;
 }) {
+  // Three cells share the strip: under 420dp the icon would leave the value
+  // no room, so only the text shows (and it shrinks before it truncates).
+  const roomy = useWindowDimensions().width >= 420;
   return (
     <View style={styles.summaryCell}>
-      <View style={styles.summaryIcon}>
-        <Icon name={icon} color="#4C5BF3" size={15} />
-      </View>
+      {roomy && (
+        <View style={styles.summaryIcon}>
+          <Icon name={icon} color="#4C5BF3" size={15} />
+        </View>
+      )}
       <View style={styles.summaryCopy}>
         <Text style={styles.summaryLabel} numberOfLines={1}>
           {label}
         </Text>
-        <Text style={styles.summaryValue} numberOfLines={1}>
+        <Text
+          style={styles.summaryValue}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.75}
+        >
           {value}
         </Text>
       </View>
@@ -332,7 +344,12 @@ function CreatorFact({
         <Text style={styles.factLabel} numberOfLines={1}>
           {label}
         </Text>
-        <Text style={styles.factValue} numberOfLines={1}>
+        <Text
+          style={styles.factValue}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.75}
+        >
           {value}
         </Text>
       </View>
@@ -560,7 +577,7 @@ function BrandCampaignDetail({
             } catch (e) {
               Alert.alert(
                 'Could not publish',
-                e instanceof Error ? e.message : 'Please try again.',
+                errorMessage(e, 'Please try again.'),
               );
             } finally {
               setPublishBusy(false);
@@ -586,7 +603,7 @@ function BrandCampaignDetail({
               await load();
               Alert.alert('Hiring closed', 'Unused budget refunded to your wallet.');
             } catch (e) {
-              Alert.alert('Could not finish hiring', e instanceof Error ? e.message : 'Please try again.');
+              Alert.alert('Could not finish hiring', errorMessage(e, 'Please try again.'));
             } finally {
               setFinishingHiring(false);
             }
@@ -654,7 +671,7 @@ function BrandCampaignDetail({
               await declineBid(token, campaignId, creatorId);
               load();
             } catch (e) {
-              Alert.alert('Could not decline', e instanceof Error ? e.message : 'Please try again.');
+              Alert.alert('Could not decline', errorMessage(e, 'Please try again.'));
             } finally {
               setBidBusy('');
             }
@@ -833,7 +850,7 @@ function BrandCampaignDetail({
         setChangeNote('');
         load();
       } catch (e) {
-        Alert.alert('Could not submit', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Could not submit', errorMessage(e, 'Please try again.'));
       } finally {
         setScriptBusy(false);
       }
@@ -1034,7 +1051,9 @@ function BrandCampaignDetail({
           </View>
 
           <View style={styles.statusChip}>
-            <Text style={styles.statusText}>{status || 'draft'}</Text>
+            <Text style={styles.statusText} numberOfLines={1}>
+              {status || 'draft'}
+            </Text>
           </View>
         </View>
       </View>
@@ -1068,7 +1087,7 @@ function BrandCampaignDetail({
                 onPress={() => setTab(index)}
                 accessibilityRole="button"
               >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>
+                <Text style={[styles.tabText, active && styles.tabTextActive]} textBreakStrategy="simple">
                   {label}
                   {index === 2 && workShown.length > 0 ? ` (${workShown.length})` : ''}
                 </Text>
@@ -1078,9 +1097,16 @@ function BrandCampaignDetail({
           })}
         </View>
 
+        <KeyboardAvoidingView
+          style={styles.flexFill}
+          // 'padding' on both: Android is edge-to-edge, so `undefined` left the
+          // keyboard covering the brief, invite and deal-chat inputs.
+          behavior="padding"
+        >
         <ScrollView
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1757,7 +1783,7 @@ function BrandCampaignDetail({
                       label="Content Type"
                       value={text(
                         campaign.creator_content_type || campaign.video_format,
-                        'Reels',
+                        '-',
                       )}
                     />
                     <CreatorFact
@@ -1765,7 +1791,7 @@ function BrandCampaignDetail({
                       label="Level"
                       value={text(
                         campaign.creator_level || campaign.creator_level_label,
-                        'New',
+                        '-',
                       )}
                     />
                     <CreatorFact
@@ -2134,7 +2160,7 @@ function BrandCampaignDetail({
                         {/* Once the deal is complete the brand can rate the creator. */}
                         {!item.historical && itemDone && !!creatorKey && (
                           rated ? (
-                            <Text style={styles.ratedNote}>You rated {rated} stars</Text>
+                            <Text style={styles.ratedNote}>You rated {rated} star{rated === 1 ? '' : 's'}</Text>
                           ) : (
                             <TouchableOpacity
                               style={styles.reviewBtn}
@@ -2220,6 +2246,7 @@ function BrandCampaignDetail({
             </>
           )}
         </ScrollView>
+        </KeyboardAvoidingView>
       </View>
 
       <ReviewPlayer
@@ -2243,6 +2270,7 @@ function BrandCampaignDetail({
         animationType="slide"
         onRequestClose={() => setRevising(null)}
         statusBarTranslucent
+        supportedOrientations={['portrait', 'landscape']}
       >
         {!!revising && (
           <WorkRevisionRequest
@@ -2284,19 +2312,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   headerBtn: {
-    width: scale(36),
-    height: scale(36),
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
   // Spans the whole bar so the title centres on the screen, not on the gap
   // between the back arrow and the status chip.
   headerTitleWrap: {
-    position: 'absolute',
-    left: scale(52),
-    right: scale(52),
-    top: 0,
-    bottom: 0,
+    flex: 1,
+    minWidth: 0,
+    marginHorizontal: scale(6),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2307,13 +2333,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   statusChip: {
+    maxWidth: '38%',
+    flexShrink: 0,
     paddingHorizontal: scale(9),
     paddingVertical: scale(5),
     borderRadius: scale(8),
     backgroundColor: 'rgba(255,255,255,0.14)',
   },
   statusText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -2347,17 +2375,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  summaryCopy: { flex: 1 },
+  summaryCopy: { flex: 1, minWidth: 0 },
   summaryDivider: { width: 1, height: scale(30), backgroundColor: '#EDEEF6' },
   summaryLabel: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     color: '#9498B0',
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
   },
   summaryValue: {
     marginTop: scale(2),
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
@@ -2369,9 +2397,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#EDEEF6',
   },
-  tab: { flex: 1, paddingVertical: scale(11), alignItems: 'center' },
+  tab: { flex: 1, minHeight: 44, paddingVertical: scale(8), alignItems: 'center', justifyContent: 'center' },
   tabText: {
-    fontSize: fontScale(12),
+    textAlign: 'center',
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#9498B0',
@@ -2386,9 +2415,17 @@ const styles = StyleSheet.create({
     borderRadius: scale(1),
   },
 
+  flexFill: { flex: 1 },
   loading: { marginTop: scale(40) },
   // Clear the floating bottom nav + FAB, or the last card scrolls under them.
-  content: { padding: scale(16), paddingBottom: scale(30) + NAV_CLEARANCE },
+  // Capped and centred so a tablet gets a column, not a stretched phone.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingBottom: scale(30) + NAV_CLEARANCE,
+  },
   // Skeletons render outside the ScrollView, so they need their own padding.
   loadingContent: { padding: scale(16), gap: scale(12) },
 
@@ -2424,13 +2461,13 @@ const styles = StyleSheet.create({
   },
   draftSub: {
     marginTop: scale(4),
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     lineHeight: fontScale(18),
     color: '#5C6079',
   },
   publishBtn: {
     marginTop: scale(12),
-    height: scale(48),
+    minHeight: 48,
     borderRadius: scale(12),
     backgroundColor: '#15163F',
     alignItems: 'center',
@@ -2450,7 +2487,7 @@ const styles = StyleSheet.create({
     marginBottom: scale(6),
   },
   scriptSub: {
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     color: '#6B6236',
     lineHeight: fontScale(18),
     marginBottom: scale(12),
@@ -2464,7 +2501,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(12),
     paddingVertical: scale(10),
   },
-  scriptText: { fontSize: fontScale(13.5), color: '#2A2E4A', lineHeight: fontScale(20) },
+  scriptText: { fontSize: fontScale(14), color: '#2A2E4A', lineHeight: fontScale(20) },
   scriptInput: {
     marginTop: scale(12),
     minHeight: scale(72),
@@ -2472,13 +2509,14 @@ const styles = StyleSheet.create({
     borderColor: '#DDDDDD',
     borderRadius: scale(10),
     padding: scale(10),
-    fontSize: fontScale(13.5),
+    // 16 keeps iOS from zooming the screen when the field gets focus.
+    fontSize: 16,
     color: '#15163F',
     textAlignVertical: 'top',
   },
   scriptActions: { gap: scale(10), marginTop: scale(12) },
   scriptBtn: {
-    minHeight: scale(46),
+    minHeight: 46,
     paddingHorizontal: scale(14),
     paddingVertical: scale(12),
     borderRadius: scale(12),
@@ -2523,16 +2561,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4C4DD6',
   },
-  bidProposal: { marginTop: scale(5), fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#5C6079' },
-  bidMeta: { marginTop: scale(4), fontSize: fontScale(11.5), color: '#9498B0' },
+  bidProposal: { marginTop: scale(5), fontSize: fontScale(14), lineHeight: fontScale(18), color: '#5C6079' },
+  bidMeta: { marginTop: scale(4), fontSize: fontScale(13), color: '#9498B0' },
   bidActions: { flexDirection: 'row', gap: scale(10), marginTop: scale(10) },
-  bidBtn: { flex: 1, height: scale(44), borderRadius: scale(11), alignItems: 'center', justifyContent: 'center' },
+  bidBtn: { flex: 1, minHeight: 44, paddingVertical: scale(6), borderRadius: scale(11), alignItems: 'center', justifyContent: 'center' },
   bidDecline: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E4E5F2' },
-  bidDeclineText: { fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#6E7391' },
+  bidDeclineText: { textAlign: 'center', paddingHorizontal: scale(4), fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#6E7391' },
   bidAccept: { backgroundColor: '#15163F' },
-  bidAcceptText: { fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#FFFFFF' },
+  bidAcceptText: { textAlign: 'center', paddingHorizontal: scale(4), fontSize: fontScale(13), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#FFFFFF' },
   shipBtn: {
-    height: scale(50),
+    minHeight: 50,
     borderRadius: scale(14),
     backgroundColor: '#15163F',
     alignItems: 'center',
@@ -2544,7 +2582,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: scale(7),
-    height: scale(46),
+    minHeight: 46,
     borderRadius: scale(12),
     borderWidth: 1.5,
     borderColor: '#DCDDF6',
@@ -2588,7 +2626,7 @@ const styles = StyleSheet.create({
   stageLineDone: { backgroundColor: '#1FA971' },
   stageCopy: { flex: 1, paddingBottom: scale(16), paddingLeft: scale(10) },
   stageLabel: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#9498B0',
@@ -2598,7 +2636,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
   },
-  stageNote: { marginTop: scale(2), fontSize: fontScale(10), color: '#4C5BF3' },
+  stageNote: { marginTop: scale(2), fontSize: fontScale(12), color: '#4C5BF3' },
 
   // Collapse row on the Campaign Progress card.
   cardHead: {
@@ -2611,7 +2649,7 @@ const styles = StyleSheet.create({
   cardHeadRight: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
   // Current stage, shown only while the rail is folded away.
   cardHeadHint: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -2650,16 +2688,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  factCopy: { flex: 1 },
+  factCopy: { flex: 1, minWidth: 0 },
   factLabel: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     color: '#9498B0',
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
   },
   factValue: {
     marginTop: scale(2),
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#15163F',
@@ -2692,11 +2730,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#15163F',
   },
-  creatorMeta: { marginTop: scale(2), fontSize: fontScale(11), color: '#777B96' },
+  creatorMeta: { marginTop: scale(2), fontSize: fontScale(13), color: '#777B96' },
   creatorActions: { marginTop: scale(13), flexDirection: 'row', gap: scale(9) },
   ghostBtn: {
     flex: 1,
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(11),
     borderWidth: 1,
     borderColor: '#E2E4F0',
@@ -2706,14 +2744,14 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   ghostText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
   },
   solidBtn: {
     flex: 1,
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(11),
     backgroundColor: '#1B2A6B',
     flexDirection: 'row',
@@ -2722,7 +2760,7 @@ const styles = StyleSheet.create({
     gap: scale(6),
   },
   solidText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -2737,10 +2775,10 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     paddingHorizontal: scale(8),
   },
-  creatorTabs: { flexGrow: 0, marginBottom: scale(10) },
+  creatorTabs: { flexGrow: 0, flexShrink: 0, marginBottom: scale(10) },
   creatorTabsInner: { gap: scale(8) },
   creatorTab: {
-    minHeight: scale(44),
+    minHeight: 44,
     maxWidth: scale(180),
     paddingHorizontal: scale(14),
     borderRadius: scale(22),
@@ -2752,7 +2790,7 @@ const styles = StyleSheet.create({
   },
   creatorTabOn: { backgroundColor: '#15163F', borderColor: '#15163F' },
   creatorTabText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -2760,7 +2798,7 @@ const styles = StyleSheet.create({
   creatorTabTextOn: { color: '#FFFFFF' },
   retryBtn: {
     marginTop: scale(14),
-    minHeight: scale(44),
+    minHeight: 44,
     paddingHorizontal: scale(26),
     borderRadius: scale(12),
     backgroundColor: '#15163F',
@@ -2782,9 +2820,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorBannerText: { flex: 1, fontSize: fontScale(12), color: '#B3261E' },
+  errorBannerText: { flex: 1, fontSize: fontScale(14), color: '#B3261E' },
   errorBannerBtn: {
-    minHeight: scale(44),
+    minHeight: 44,
     minWidth: scale(60),
     paddingHorizontal: scale(12),
     borderRadius: scale(10),
@@ -2793,14 +2831,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   errorBannerBtnText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#B3261E',
   },
   changeList: { marginTop: scale(10), gap: scale(6) },
   changeHead: {
-    fontSize: fontScale(10.5),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     letterSpacing: 0.4,
@@ -2809,7 +2847,7 @@ const styles = StyleSheet.create({
   },
   changeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: scale(8) },
   changeSev: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#B26B00',
@@ -2819,7 +2857,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
     overflow: 'hidden',
   },
-  changeText: { flex: 1, fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#25274C' },
+  changeText: { flex: 1, fontSize: fontScale(14), lineHeight: fontScale(18), color: '#25274C' },
   bookingAsk: {
     marginTop: scale(4),
     fontSize: fontScale(15),
@@ -2831,7 +2869,7 @@ const styles = StyleSheet.create({
   btnOff: { opacity: 0.45 },
   dismissed: { opacity: 0.5 },
   invitedTag: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#1F8A4C',
@@ -2841,14 +2879,14 @@ const styles = StyleSheet.create({
     borderRadius: scale(8),
     overflow: 'hidden',
   },
-  linkBtn: { marginTop: scale(12), minHeight: scale(44), justifyContent: 'center' },
+  linkBtn: { marginTop: scale(12), minHeight: 44, justifyContent: 'center' },
   linkBtnText: {
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
   },
-  ratedNote: { marginTop: scale(11), fontSize: fontScale(12), color: '#B26B00' },
+  ratedNote: { marginTop: scale(11), fontSize: fontScale(14), color: '#B26B00' },
   chatMsg: {
     marginTop: scale(8),
     padding: scale(10),
@@ -2857,21 +2895,22 @@ const styles = StyleSheet.create({
   },
   chatMsgSystem: { backgroundColor: '#FFF8E6' },
   chatMsgCreator: { backgroundColor: '#EEF0FF' },
-  chatName: { fontSize: fontScale(10.5), color: '#777B96', marginBottom: scale(2) },
-  chatBody: { fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#25274C' },
+  chatName: { fontSize: fontScale(12), color: '#777B96', marginBottom: scale(2) },
+  chatBody: { fontSize: fontScale(14), lineHeight: fontScale(18), color: '#25274C' },
   chatInput: {
     marginTop: scale(12),
-    minHeight: scale(44),
+    minHeight: 44,
     maxHeight: scale(110),
     borderWidth: 1,
     borderColor: '#DDDDDD',
     borderRadius: scale(10),
     padding: scale(10),
-    fontSize: fontScale(16),
+    fontSize: 16,
     color: '#15163F',
     textAlignVertical: 'top',
   },
   hiredCreatorName: {
+    flexShrink: 1,
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '600',
@@ -2879,6 +2918,7 @@ const styles = StyleSheet.create({
   },
   hiredCreatorActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: scale(8),
   },
   deliverableRow: {
@@ -2887,7 +2927,7 @@ const styles = StyleSheet.create({
     gap: scale(8),
     marginBottom: scale(8),
   },
-  deliverableText: { flex: 1, fontSize: fontScale(12), color: '#3B3F5C' },
+  deliverableText: { flex: 1, fontSize: fontScale(14), color: '#3B3F5C' },
 
   // Each point gets clear separation: a hairline divider + generous gap, so the
   // About tab reads as a list rather than a compact wall of text.
@@ -2897,7 +2937,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F1F8',
   },
   detailLabel: {
-    fontSize: fontScale(10.5),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     letterSpacing: 0.4,
@@ -2906,7 +2946,7 @@ const styles = StyleSheet.create({
   },
   detailValue: {
     marginTop: scale(5),
-    fontSize: fontScale(13.5),
+    fontSize: fontScale(14),
     lineHeight: fontScale(20),
     color: '#25274C',
   },
@@ -2933,9 +2973,9 @@ const styles = StyleSheet.create({
   },
   playBtn: {
     position: 'absolute',
-    width: scale(42),
-    height: scale(42),
-    borderRadius: scale(21),
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: 'rgba(255,255,255,0.92)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2949,28 +2989,30 @@ const styles = StyleSheet.create({
   },
   workMeta: {
     marginTop: scale(3),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     color: '#777B96',
     textTransform: 'capitalize',
   },
   reviewBtn: {
     marginTop: scale(11),
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(11),
     backgroundColor: '#F4F5FA',
     alignItems: 'center',
     justifyContent: 'center',
   },
   reviewText: {
-    fontSize: fontScale(12),
+    textAlign: 'center',
+    paddingHorizontal: scale(6),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4C5BF3',
   },
   workActions: { marginTop: scale(11), gap: scale(9), flexDirection: 'row' },
-  workAction: { flex: 1, marginTop: 0, minHeight: scale(44) },
+  workAction: { flex: 1, marginTop: 0, minHeight: 44 },
   workApprove: {
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(11),
     backgroundColor: '#22A565',
     alignItems: 'center',
@@ -2978,7 +3020,9 @@ const styles = StyleSheet.create({
   },
   workApproveOff: { backgroundColor: '#6FBF8E' },
   workApproveText: {
-    fontSize: fontScale(12),
+    textAlign: 'center',
+    paddingHorizontal: scale(6),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -3002,7 +3046,7 @@ const styles = StyleSheet.create({
   },
   workHistory: {
     marginTop: scale(8),
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#B26B00',
@@ -3014,7 +3058,7 @@ const styles = StyleSheet.create({
   },
   workDownload: {
     marginTop: scale(11),
-    height: scale(44),
+    minHeight: 44,
     borderRadius: scale(11),
     backgroundColor: '#4C5BF3',
     flexDirection: 'row',
@@ -3023,7 +3067,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   workDownloadText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#FFFFFF',
@@ -3038,7 +3082,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },

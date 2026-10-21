@@ -120,6 +120,13 @@ test('sending: the note reaches the creator as the last item and a wallet charge
   const send = tree.root.findAllByType(TouchableOpacity).find((n: any) => content(n) === 'Send Changes');
   await act(async () => { await send.props.onPress(); });
 
+  // A paid round is confirmed before the wallet is charged: nothing is sent until the brand agrees.
+  expect(requestWorkRevision).not.toHaveBeenCalled();
+  const confirm = spy.mock.calls.find(call => call[0] === 'This is a paid revision')!;
+  expect(String(confirm[1])).toContain('₹500');
+  const pay = (confirm[2] as any[]).find(button => button.text === 'Send and pay');
+  await act(async () => { await pay.onPress(); });
+
   const [, id, body] = (requestWorkRevision as jest.Mock).mock.calls[0];
   expect(id).toBe('w1');
   expect(body.items).toHaveLength(2);

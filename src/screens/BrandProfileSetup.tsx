@@ -438,7 +438,7 @@ function BrandProfileSetup({ token, session, onDone, onLogout }: Props) {
           <Text style={styles.topTagText}>Brand onboarding</Text>
         </View>
         {!!onLogout && (
-          <TouchableOpacity onPress={onLogout} accessibilityRole="button">
+          <TouchableOpacity onPress={onLogout} accessibilityRole="button" hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Text style={styles.logout}>Log out</Text>
           </TouchableOpacity>
         )}
@@ -882,7 +882,8 @@ const styles = StyleSheet.create({
     backgroundColor: INK_SOFT,
     paddingHorizontal: scale(12),
     paddingVertical: scale(12),
-    fontSize: fontScale(15),
+    // 16 so iOS does not zoom on focus.
+    fontSize: 16,
     color: ACCENT_TEXT,
   },
   inputMultiline: { minHeight: scale(96), textAlignVertical: 'top' },
@@ -907,7 +908,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  selectText: { fontSize: fontScale(15), color: ACCENT_TEXT },
+  selectText: { flex: 1, minWidth: 0, fontSize: 16, color: ACCENT_TEXT },
   selectPlaceholder: { color: PLACEHOLDER },
 
   modalBackdrop: {

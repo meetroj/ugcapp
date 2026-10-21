@@ -28,7 +28,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ScrollViewInstance } from 'react-native';
 import { Text } from '../components/Text';
 import Video from 'react-native-video';
@@ -47,7 +49,7 @@ import {
 } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
 import { playableVideoUrl } from '../mediaPreview';
-import { scale, fontScale } from '../theme';
+import { scale, fontScale, CONTENT_MAX_WIDTH } from '../theme';
 
 type Props = {
   token: string;
@@ -487,6 +489,11 @@ function CreatorPublicProfile({
   const mountedRef = useRef(true);
   const toast = useToast();
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // The player Modal escapes WebShell's SafeAreaView, so it clears the notch itself.
+  const insets = useSafeAreaInsets();
+  // Tablet: the page is a centred column; the pinned footer lines up with it.
+  const { width: winWidth } = useWindowDimensions();
+  const footerGutter = Math.max(scale(16), (winWidth - CONTENT_MAX_WIDTH) / 2);
 
   const scrollRef = useRef<ScrollViewInstance>(null);
   // Section offsets, measured on layout so a tab tap can scroll to one.
@@ -757,6 +764,7 @@ function CreatorPublicProfile({
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
+        keyboardShouldPersistTaps="handled"
         onScroll={event => onScroll(event.nativeEvent.contentOffset.y)}
       >
         {/* Cover banner with the back arrow floating on it. */}
@@ -1180,7 +1188,7 @@ function CreatorPublicProfile({
 
       {/* Send Message stays pinned; this screen hides the bottom nav, so it is
           the only bar competing for the bottom edge. */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingHorizontal: footerGutter }]}>
         {/* Send a Brief stays reachable while scrolling, like the website's
             sticky header button. */}
         <TouchableOpacity
@@ -1225,7 +1233,7 @@ function CreatorPublicProfile({
             />
           )}
           <TouchableOpacity
-            style={styles.playerClose}
+            style={[styles.playerClose, { top: Math.max(insets.top, scale(24)) + scale(8) }]}
             onPress={() => setWatching(null)}
             accessibilityRole="button"
             accessibilityLabel="Close video"
@@ -1245,7 +1253,7 @@ const VIDEO_WIDTH = scale(150);
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#FFFFFF' },
   scroll: { flex: 1 },
-  content: { paddingBottom: scale(24) },
+  content: { paddingBottom: scale(24), width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
 
   banner: { height: scale(170), backgroundColor: '#DDE2F2' },
   bannerImg: { width: '100%', height: '100%' },
@@ -1354,7 +1362,7 @@ const styles = StyleSheet.create({
     color: '#858AA3',
   },
   briefBtn: {
-    height: scale(38),
+    minHeight: scale(44),
     paddingHorizontal: scale(16),
     borderRadius: scale(19),
     backgroundColor: '#15163F',
@@ -1401,7 +1409,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#EDEEF6',
   },
-  tab: { paddingBottom: scale(9), borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  // 12 above + 12 below the label gives a 44pt touch row.
+  tab: { paddingVertical: scale(12), borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabOn: { borderBottomColor: '#4C4DD6' },
   tabText: {
     fontSize: fontScale(14),

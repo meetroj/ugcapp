@@ -33,8 +33,9 @@ import {
   uploadMedia,
   type AuthUser,
 } from '../api';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 import { IMAGE_TOO_LARGE_MESSAGE, imageTooLarge } from '../profileImage';
+import { errorMessage } from '../payoutRules';
 import { profilePercent } from '../profileCompletion';
 
 type Props = {
@@ -214,8 +215,8 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
       setMe(results[0].value || {});
       setLoadError('');
     } else {
-      const reason: any = results[0].reason;
-      setLoadError(reason?.message || 'Could not load your profile.');
+      // A dropped connection reads as "offline" rather than a vague failure.
+      setLoadError(errorMessage(results[0].reason, 'Could not load your profile.'));
     }
     if (results[1].status === 'fulfilled') {
       setUnread(results[1].value);
@@ -288,7 +289,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
         // details, so its message is worth showing verbatim.
         Alert.alert(
           kind === 'banner' ? 'Banner not updated' : 'Photo not updated',
-          err instanceof Error ? err.message : 'Please try again.',
+          errorMessage(err, 'Please try again.'),
         );
       } finally {
         setUploading(null);
@@ -415,7 +416,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
       {/* Banner, with the avatar overlapping its bottom edge below. */}
       <View style={styles.bannerWrap}>
         {banner ? (
-          <Image source={{ uri: banner }} style={styles.banner} />
+          <Image source={{ uri: banner }} style={styles.banner} resizeMode="cover" />
         ) : (
           <View style={[styles.banner, styles.bannerFallback]} />
         )}
@@ -438,11 +439,13 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
         </TouchableOpacity>
       </View>
 
+      {/* Banner stays full width; everything below is a centred column on tablets. */}
+      <View style={styles.column}>
       <View style={styles.identity}>
         <View style={styles.avatarRow}>
           <View>
             {photo ? (
-              <Image source={{ uri: photo }} style={styles.avatar} />
+              <Image source={{ uri: photo }} style={styles.avatar} resizeMode="cover" />
             ) : (
               <View style={[styles.avatar, styles.avatarFallback]}>
                 <Text style={styles.avatarInitial}>
@@ -568,6 +571,7 @@ function CreatorProfile({ token, session, onNavigate, onLogout }: Props) {
           <Text style={[styles.chevron, styles.logoutLabel]}>›</Text>
         </TouchableOpacity>
       </View>
+      </View>
     </ScrollView>
   );
 }
@@ -580,6 +584,7 @@ const styles = StyleSheet.create({
   // NAV_CLEARANCE keeps the last row (Log Out) clear of the floating nav pill,
   // which is absolutely positioned and would otherwise cover it.
   content: { paddingBottom: scale(28) + NAV_CLEARANCE },
+  column: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   loader: {
     flex: 1,
     alignItems: 'center',
@@ -603,7 +608,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#101340',
   },
   bannerBtnText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',
@@ -671,9 +676,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1FA971',
   },
-  meta: { marginTop: scale(5), fontSize: fontScale(12.5), color: '#777B96' },
+  meta: { marginTop: scale(6), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#777B96' },
 
-  countRow: { marginTop: scale(10), flexDirection: 'row', gap: scale(22) },
+  countRow: { marginTop: scale(12), flexDirection: 'row', flexWrap: 'wrap', columnGap: scale(24), rowGap: scale(4) },
   countValue: {
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
@@ -699,9 +704,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorText: { flex: 1, fontSize: fontScale(12), color: '#C4373B' },
+  errorText: { flex: 1, fontSize: fontScale(14), color: '#C4373B' },
   errorRetry: {
-    fontSize: fontScale(12.5),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#C4373B',
@@ -716,15 +721,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#DADCFB',
   },
-  completeTop: { flexDirection: 'row', justifyContent: 'space-between' },
+  completeTop: { flexDirection: 'row', justifyContent: 'space-between', gap: scale(8) },
   completeText: {
-    fontSize: fontScale(13),
+    flexShrink: 1,
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#15163F',
   },
   completeCta: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -753,20 +759,21 @@ const styles = StyleSheet.create({
     borderColor: '#EDEEF6',
   },
   menuIcon: {
+    flexShrink: 0,
     width: scale(38),
     height: scale(38),
     borderRadius: scale(12),
     alignItems: 'center',
     justifyContent: 'center',
   },
-  menuText: { flex: 1, marginLeft: scale(12) },
+  menuText: { flex: 1, minWidth: 0, marginLeft: scale(12) },
   menuLabel: {
     fontSize: fontScale(14.5),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#15163F',
   },
-  menuCaption: { marginTop: scale(3), fontSize: fontScale(12), color: '#777B96' },
+  menuCaption: { marginTop: scale(3), fontSize: fontScale(13), color: '#777B96' },
   menuBadge: {
     minWidth: scale(24),
     height: scale(22),

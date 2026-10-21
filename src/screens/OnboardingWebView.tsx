@@ -16,7 +16,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   StyleSheet,
   TouchableOpacity,
   View,
@@ -24,6 +26,7 @@ import {
 import { Text } from '../components/Text';
 import { Alert } from '../components/AppAlert';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { verifySession, type AuthUser } from '../api';
 import { SITE_ORIGIN, isSiteUrl } from '../deepLink';
 import { scale, fontScale } from '../theme';
@@ -67,6 +70,9 @@ export default function OnboardingWebView({
   reopened = false,
   onCancel,
 }: Props) {
+  // This screen is mounted straight under the SafeAreaProvider (no
+  // SafeAreaView), so the notch / status bar / home bar are cleared here.
+  const insets = useSafeAreaInsets();
   const path =
     session.role === 'creator'
       ? '/profile-setup/creator'
@@ -89,10 +95,15 @@ export default function OnboardingWebView({
   useEffect(() => {
     const timer = setInterval(async () => {
       const fresh = await verifySession(session);
+      // null = the server rejected the token: sign out instead of polling forever.
+      if (fresh === null) {
+        onLogout();
+        return;
+      }
       if (onboardingFinished(fresh, reopened)) finish();
     }, 4000);
     return () => clearInterval(timer);
-  }, [session, finish, reopened]);
+  }, [session, finish, reopened, onLogout]);
 
   // manual = the Done button: say so when the form has not been submitted yet,
   // instead of silently doing nothing.
@@ -101,6 +112,10 @@ export default function OnboardingWebView({
       setChecking(true);
       const fresh = await verifySession(session);
       setChecking(false);
+      if (fresh === null) {
+        onLogout();
+        return;
+      }
       if (onboardingFinished(fresh, reopened)) finish();
       else if (manual) {
         Alert.alert(
@@ -109,7 +124,7 @@ export default function OnboardingWebView({
         );
       }
     },
-    [session, finish, reopened],
+    [session, finish, reopened, onLogout],
   );
 
   // Android back steps back through the form's pages; at the first page it
@@ -130,7 +145,17 @@ export default function OnboardingWebView({
   }, [reopened, onCancel]);
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
       <View style={styles.bar}>
         {reopened && onCancel ? (
           <TouchableOpacity
@@ -150,7 +175,7 @@ export default function OnboardingWebView({
             <Text style={styles.barLink}>Log out</Text>
           </TouchableOpacity>
         )}
-        <Text style={styles.barTitle}>
+        <Text style={styles.barTitle} numberOfLines={1}>
           {reopened ? 'Update your profile' : 'Complete your profile'}
         </Text>
         <TouchableOpacity
@@ -181,6 +206,13 @@ export default function OnboardingWebView({
           </TouchableOpacity>
         </View>
       ) : (
+        // Android is edge-to-edge (the keyboard does not resize the window), so
+        // pad by the keyboard height or the lower form fields sit behind it.
+        <KeyboardAvoidingView
+          style={styles.web}
+          behavior="padding"
+          enabled={Platform.OS === 'android'}
+        >
         <WebView
           key={attempt}
           ref={webRef}
@@ -218,6 +250,7 @@ export default function OnboardingWebView({
             return false;
           }}
         />
+        </KeyboardAvoidingView>
       )}
     </View>
   );
@@ -235,6 +268,8 @@ const styles = StyleSheet.create({
   barBtn: { minWidth: scale(64), minHeight: 44, justifyContent: 'center' },
   barBtnEnd: { alignItems: 'flex-end' },
   barTitle: {
+    flex: 1,
+    textAlign: 'center',
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
@@ -261,8 +296,8 @@ const styles = StyleSheet.create({
   },
   errorBody: {
     marginTop: scale(8),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: 'rgba(255,255,255,0.66)',
     textAlign: 'center',
   },

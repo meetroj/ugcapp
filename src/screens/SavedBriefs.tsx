@@ -33,7 +33,7 @@ import {
 } from '../api';
 import { isOpenForBids, isSelectedCreator, loadErrorText, ownBidOn } from '../briefs';
 import { BriefFlow, CampaignCard } from './BrowseCampaigns';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Campaign = Record<string, any> & { id: string };
 
@@ -237,7 +237,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   // The cards bring their own side margin; only the empty/error card needs the gutter.
-  content: { paddingVertical: scale(14), paddingBottom: scale(30) },
+  // Tablet: a centred, readable column (no-op on phones).
+  content: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center', paddingVertical: scale(14), paddingBottom: scale(30) },
   card: {
     marginTop: scale(30),
     marginHorizontal: scale(18),
@@ -256,8 +257,8 @@ const styles = StyleSheet.create({
   },
   body: {
     marginTop: scale(9),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
     textAlign: 'center',
   },

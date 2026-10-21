@@ -14,6 +14,7 @@ import { Text, TextInput } from '../components/Text';
 import { Alert } from '../components/AppAlert';
 import { respondToBooking } from '../api';
 import { bookingStage, validateCounter } from '../dealRoom';
+import { dateLabel } from '../briefs';
 import { fontScale, scale } from '../theme';
 
 type Props = {
@@ -117,7 +118,7 @@ export default function DealBooking({ deal, token, onDone }: Props) {
       </Text>
       <View style={styles.facts}>
         <Row label="Videos" value={String(campaign.video_count || 1)} />
-        <Row label="Delivery" value={String(campaign.delivery_date || '-')} />
+        <Row label="Delivery" value={dateLabel(campaign.delivery_date) || '-'} />
         <Row label="You'll be paid" value={inr(subtotal)} strong />
       </View>
 
@@ -150,7 +151,8 @@ export default function DealBooking({ deal, token, onDone }: Props) {
           <TextInput
             style={styles.input}
             value={price}
-            onChangeText={setPrice}
+            // Digits only: a stray letter would print "₹NaN" on the button.
+            onChangeText={text => setPrice(text.replace(/[^0-9.,]/g, ''))}
             keyboardType="numeric"
             placeholder={String(subtotal)}
             placeholderTextColor="#A9ADC2"
@@ -221,7 +223,7 @@ const styles = StyleSheet.create({
     paddingVertical: scale(3),
     borderRadius: scale(10),
     overflow: 'hidden',
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#4452F0',
@@ -234,7 +236,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#07074E',
   },
-  sub: { marginTop: scale(4), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#64748B' },
+  sub: { marginTop: scale(4), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#64748B' },
   facts: {
     marginTop: scale(12),
     marginBottom: scale(6),
@@ -243,14 +245,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EEF0F6',
   },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: scale(3) },
-  rowLabel: { fontSize: fontScale(13), color: '#64748B' },
-  rowValue: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#07074E' },
+  row: { flexDirection: 'row', justifyContent: 'space-between', gap: scale(12), paddingVertical: scale(3) },
+  rowLabel: { flexShrink: 0, fontSize: fontScale(14), color: '#64748B' },
+  rowValue: { flexShrink: 1, textAlign: 'right', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#07074E' },
   rowStrong: { fontSize: fontScale(16) },
   fieldLabel: {
     marginTop: scale(10),
     marginBottom: scale(5),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#2D3748',
@@ -267,11 +269,12 @@ const styles = StyleSheet.create({
     color: '#15163A',
   },
   multiline: { minHeight: scale(72), textAlignVertical: 'top' },
-  hint: { marginTop: scale(8), fontSize: fontScale(12), color: '#94A3B8' },
+  hint: { marginTop: scale(8), fontSize: fontScale(13), lineHeight: fontScale(18), color: '#64748B' },
   stack: { marginTop: scale(8), gap: scale(8) },
   actions: { flexDirection: 'row', gap: scale(8), marginTop: scale(12) },
   btn: {
     flex: 1,
+    minWidth: 0,
     minHeight: scale(46),
     paddingHorizontal: scale(12),
     borderRadius: scale(11),
@@ -285,10 +288,10 @@ const styles = StyleSheet.create({
   danger: { backgroundColor: '#D64545' },
   ghost: { backgroundColor: '#F1F2F9' },
   dangerGhost: { backgroundColor: '#FFFFFF', borderColor: '#FECACA' },
-  solidText: { color: '#FFFFFF', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700' },
-  ghostText: { color: '#4A5568', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700' },
-  dangerText: { color: '#B91C1C', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700' },
-  wait: { fontSize: fontScale(13), lineHeight: fontScale(20), color: '#475569' },
+  solidText: { color: '#FFFFFF', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', textAlign: 'center' },
+  ghostText: { color: '#4A5568', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', textAlign: 'center' },
+  dangerText: { color: '#B91C1C', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', textAlign: 'center' },
+  wait: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#475569' },
   waitBold: { fontFamily: 'Inter-Bold', fontWeight: '700', color: '#07074E' },
-  error: { marginTop: scale(10), fontSize: fontScale(13), color: '#C0392B' },
+  error: { marginTop: scale(10), fontSize: fontScale(14), color: '#C0392B' },
 });

@@ -34,7 +34,8 @@ import {
   splitHub,
   type HubTab,
 } from '../dealRoom';
-import { scale, fontScale } from '../theme';
+import { loadErrorText } from '../briefs';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -130,6 +131,14 @@ function MyDeals({
     if (initialTab) setTab(parseHubTab(initialTab));
   }, [initialTab]);
 
+  // A notification or link for another deal can arrive while this screen is
+  // already mounted (the URL changes, the state would not): open that deal too.
+  useEffect(() => {
+    if (!focusDealId) return;
+    setTab('active');
+    setPendingFocus(focusDealId);
+  }, [focusDealId]);
+
   // Returns the list it fetched so a caller can pick a deal straight out of
   // it; reading `items` after calling this would see the pre-fetch state.
   const load = useCallback(async (): Promise<Deal[]> => {
@@ -139,7 +148,8 @@ function MyDeals({
       setItems(fresh);
       return fresh;
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load your deals.');
+      // Says "You're offline" for a dropped connection instead of a vague error.
+      setError(loadErrorText(e, 'your deals'));
       return [];
     }
   }, [token]);
@@ -181,6 +191,8 @@ function MyDeals({
   if (openDeal) {
     return (
       <DealDetails
+        // Remount per deal so a second deep link never inherits the first deal's open sheets.
+        key={String(openDeal.deal_id)}
         deal={openDeal}
         token={token}
         unread={unread}
@@ -219,6 +231,17 @@ function MyDeals({
         unread={unread}
         onBack={() => setTab('active')}
         onMessages={onMessages}
+        onOpenThread={onOpenThread}
+        // The bid cards' "Deal Room" and "Browse Campaigns" buttons.
+        onNavigate={path => {
+          const id = path.match(/^\/my-deals\?campaign=([^&]+)/)?.[1];
+          if (id) {
+            setTab('active');
+            setPendingFocus(decodeURIComponent(id));
+          } else {
+            onBrowse?.();
+          }
+        }}
       />
     );
   }
@@ -235,6 +258,7 @@ function MyDeals({
         unread={unread}
       />
       <View style={styles.sheet}>
+        <View style={styles.column}>
         <View style={styles.tabs}>
           {HUB_TABS.map(item => {
             const on = tab === item.key;
@@ -249,7 +273,7 @@ function MyDeals({
                 accessibilityState={{ selected: on }}
                 accessibilityLabel={item.label}
               >
-                <Text style={[styles.tabText, on && styles.tabTextOn]} numberOfLines={1}>
+                <Text style={[styles.tabText, on && styles.tabTextOn]} numberOfLines={2}>
                   {item.label}
                   {count !== null && !loading ? ` (${count})` : ''}
                 </Text>
@@ -385,6 +409,7 @@ function MyDeals({
             })}
           </ScrollView>
         )}
+        </View>
       </View>
     </View>
   );
@@ -400,6 +425,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
+  // Tablet: a centred, readable column (no-op on phones).
+  column: { flex: 1, width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   tabs: {
     flexDirection: 'row',
     gap: scale(6),
@@ -419,17 +446,18 @@ const styles = StyleSheet.create({
   },
   tabOn: { backgroundColor: '#171A5C', borderColor: '#171A5C' },
   tabText: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#626784',
+    textAlign: 'center',
   },
   tabTextOn: { color: '#FFFFFF' },
   content: { padding: scale(14), paddingBottom: scale(28) },
   loading: { marginTop: scale(40) },
   errorBox: { margin: scale(12), alignItems: 'center' },
   error: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#C0392B',
@@ -457,8 +485,8 @@ const styles = StyleSheet.create({
   },
   emptyBody: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
     textAlign: 'center',
   },
@@ -482,8 +510,9 @@ const styles = StyleSheet.create({
     borderLeftWidth: scale(4),
   },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
-  cardLead: { flex: 1, marginLeft: scale(11) },
+  cardLead: { flex: 1, minWidth: 0, marginLeft: scale(11) },
   avatar: {
+    flexShrink: 0,
     width: scale(44),
     height: scale(44),
     borderRadius: scale(12),
@@ -507,7 +536,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(9),
     maxWidth: '100%',
   },
-  chipText: { fontSize: fontScale(10), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
+  chipText: { fontSize: fontScale(11), fontFamily: 'Inter-ExtraBold', fontWeight: '800' },
   chipInfo: { backgroundColor: '#EEF0FF' },
   chipInfoText: { color: '#3730A3' },
   chipWarn: { backgroundColor: '#FFF7ED' },
@@ -518,8 +547,8 @@ const styles = StyleSheet.create({
     borderRadius: scale(9),
     backgroundColor: '#F1F3FA',
   },
-  privText: { fontSize: fontScale(10), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#64748B' },
-  brand: { marginTop: scale(3), fontSize: fontScale(11), color: '#7E829D' },
+  privText: { fontSize: fontScale(11), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#64748B' },
+  brand: { marginTop: scale(3), fontSize: fontScale(13), color: '#7E829D' },
   meta: {
     marginTop: scale(13),
     paddingTop: scale(11),
@@ -529,10 +558,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   metaRight: { flex: 1, marginLeft: scale(16), alignItems: 'flex-end' },
-  metaLabel: { fontSize: fontScale(9), color: '#A0A3B5' },
+  metaLabel: { fontSize: fontScale(11), color: '#8A8EA6' },
   metaValue: {
     marginTop: scale(3),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#5B5CF6',

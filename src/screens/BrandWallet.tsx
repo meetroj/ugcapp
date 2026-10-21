@@ -20,11 +20,12 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '../components/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppHeader from '../components/AppHeader';
 import { SkeletonWallet } from '../components/Skeleton';
 import { getWallet, rechargeWallet, NetworkError, type WalletPaymentOrder } from '../api';
 import WalletCheckout from './WalletCheckout';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -165,6 +166,8 @@ function BrandWallet({
   prefill,
 }: Props) {
   const [wallet, setWallet] = useState<Wallet>({});
+  // The detail sheet is a Modal, which escapes WebShell's SafeAreaView.
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [shown, setShown] = useState(PAGE_SIZE);
@@ -467,7 +470,7 @@ function BrandWallet({
 
               <Text style={styles.hint}>
                 Minimum {rupees(minimum)} • Instant credit after payment
-                verification
+                verification. A payment receipt is emailed to you after each recharge.
               </Text>
             </View>
 
@@ -685,7 +688,12 @@ function BrandWallet({
       >
         <Pressable style={styles.sheetBackdrop} onPress={() => setDetail(null)} />
         {detail && (
-          <View style={styles.sheetCard} testID="wallet-detail">
+          <View
+            style={[styles.sheetCard, { paddingBottom: scale(20) + insets.bottom }]}
+            testID="wallet-detail"
+          >
+           {/* Scrolls in landscape / large text, where the rows are taller than the screen. */}
+           <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
             <Text
               style={[
                 styles.detailAmount,
@@ -726,6 +734,7 @@ function BrandWallet({
             >
               <Text style={styles.viewAllText}>Close</Text>
             </TouchableOpacity>
+           </ScrollView>
           </View>
         )}
       </Modal>
@@ -758,7 +767,14 @@ const styles = StyleSheet.create({
   },
   // Navy strip behind the shared app header, matching the other tabs.
   topBar: { backgroundColor: '#0E1330' },
-  content: { padding: scale(14), paddingBottom: scale(34) + NAV_CLEARANCE },
+  // Tablet: a centred column instead of cards stretched across 768pt.
+  content: {
+    padding: scale(14),
+    paddingBottom: scale(34) + NAV_CLEARANCE,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
 
   // ---- Hero ----
   // Deep indigo — darker than the tier/preset accents so the balance reads as
@@ -777,12 +793,16 @@ const styles = StyleSheet.create({
   },
   // Balance and pill on one line; `flex-end` sits the pill on the number's
   // baseline rather than floating it beside the cap height.
+  // Wraps so a long balance on a 320pt phone pushes the pill to its own line
+  // instead of squeezing it to an ellipsis.
   heroRow: {
     marginTop: scale(5),
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
-    gap: scale(10),
+    columnGap: scale(10),
+    rowGap: scale(8),
   },
   // `flexShrink` so a long balance shrinks the number's box rather than
   // pushing the pill off the card.
@@ -858,7 +878,8 @@ const styles = StyleSheet.create({
   },
   // `padding: 0` strips Android's default TextInput inset so the text sits
   // vertically centred in the 46pt row.
-  input: { flex: 1, padding: 0, fontSize: fontScale(14), color: '#15163F' },
+  // 16 so iOS does not zoom the screen when the field is focused.
+  input: { flex: 1, minWidth: 0, padding: 0, fontSize: 16, color: '#15163F' },
   presetRow: { marginTop: scale(9), flexDirection: 'row', gap: scale(8) },
   preset: {
     flex: 1,
@@ -972,7 +993,7 @@ const styles = StyleSheet.create({
   },
   txIconCredit: { backgroundColor: '#EEF0FE' },
   txIconDebit: { backgroundColor: '#FDECEC' },
-  txCopy: { flex: 1 },
+  txCopy: { flex: 1, minWidth: 0 },
   txType: {
     fontSize: fontScale(13),
     fontFamily: 'Inter-ExtraBold',
@@ -1085,6 +1106,10 @@ const styles = StyleSheet.create({
   filterTextActive: { color: '#FFFFFF' },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(14,19,48,0.5)' },
   sheetCard: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    maxHeight: '90%',
+    alignSelf: 'center',
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),

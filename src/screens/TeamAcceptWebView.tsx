@@ -8,7 +8,14 @@
  * so the invited person lands in the brand app without logging in again.
  */
 import React, { useCallback, useRef, useState } from 'react';
-import { Linking, StyleSheet, TouchableOpacity, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
@@ -62,7 +69,17 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
   );
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
       <View style={styles.bar}>
         <TouchableOpacity
           onPress={onClose}
@@ -73,7 +90,9 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
         >
           <Text style={styles.barLink}>Close</Text>
         </TouchableOpacity>
-        <Text style={styles.barTitle}>Join your team</Text>
+        <Text style={styles.barTitle} numberOfLines={1}>
+          Join your team
+        </Text>
         <View style={styles.barBtn} />
       </View>
 
@@ -95,6 +114,13 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
           </TouchableOpacity>
         </View>
       ) : (
+        // The accept form has a password field: keep it above the keyboard on
+        // Android's edge-to-edge window.
+        <KeyboardAvoidingView
+          style={styles.web}
+          behavior="padding"
+          enabled={Platform.OS === 'android'}
+        >
         <WebView
           key={attempt}
           source={{
@@ -120,6 +146,7 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
           setSupportMultipleWindows={false}
           overScrollMode="never"
         />
+        </KeyboardAvoidingView>
       )}
     </View>
   );
@@ -135,6 +162,8 @@ const styles = StyleSheet.create({
   },
   barBtn: { minWidth: scale(64), minHeight: 44, justifyContent: 'center', paddingHorizontal: scale(8) },
   barTitle: {
+    flex: 1,
+    textAlign: 'center',
     fontSize: fontScale(15),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
@@ -156,8 +185,8 @@ const styles = StyleSheet.create({
   },
   errorBody: {
     marginTop: scale(8),
-    fontSize: fontScale(13),
-    lineHeight: fontScale(19),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: 'rgba(255,255,255,0.66)',
     textAlign: 'center',
   },

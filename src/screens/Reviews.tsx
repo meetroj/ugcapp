@@ -13,6 +13,7 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -27,7 +28,7 @@ import {
   type AuthUser,
 } from '../api';
 import { loadErrorText } from '../briefs';
-import { colors, scale, fontScale } from '../theme';
+import { colors, CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Review = Record<string, any> & { id: string };
 
@@ -260,6 +261,8 @@ function Reviews({
   const [refreshing, setRefreshing] = useState(false);
   // Bumped by pull-to-refresh and Retry to re-run the load below.
   const [reloadKey, setReloadKey] = useState(0);
+  // At 320pt the star breakdown has no room beside the average, so it stacks under it.
+  const stacked = useWindowDimensions().width < 340;
 
   // A brand is rated by creators, a creator by brands, so each role reads its
   // own endpoint. Everything below this line is shared between the two.
@@ -360,6 +363,7 @@ function Reviews({
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
+        <View style={styles.headerLeft}>
         <TouchableOpacity
           onPress={onBack}
           style={styles.headerBtn}
@@ -369,7 +373,8 @@ function Reviews({
         >
           <Icon name="back" color={colors.white} size={22} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Reviews</Text>
+        </View>
+        <Text style={styles.headerTitle} numberOfLines={1}>Reviews</Text>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.headerBtn}
@@ -412,8 +417,8 @@ function Reviews({
         }
       >
         <View style={styles.card}>
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryLeft}>
+          <View style={[styles.summaryRow, stacked && styles.summaryStacked]}>
+            <View style={[styles.summaryLeft, stacked && styles.summaryLeftStacked]}>
               <View style={styles.summaryBadge}>
                 <Star fill={1} size={15} />
               </View>
@@ -431,7 +436,7 @@ function Reviews({
               </Text>
             </View>
 
-            <View style={styles.breakdown}>
+            <View style={[styles.breakdown, stacked && styles.breakdownStacked]}>
               {STAR_BUCKETS.map((bucket, index) => (
                 <View key={bucket} style={styles.breakdownRow}>
                   <Text style={styles.breakdownLabel}>
@@ -501,6 +506,7 @@ function Reviews({
           <Text style={styles.listTitle}>Recent Reviews</Text>
           {reviews.length > 3 && (
             <TouchableOpacity
+              style={styles.seeAllBtn}
               onPress={() => setShowAll(value => !value)}
               accessibilityRole="button"
             >
@@ -605,7 +611,7 @@ function ReviewCard({
           )}
         </View>
         <View style={styles.reviewCopy}>
-          <Text style={styles.reviewBrand}>{author}</Text>
+          <Text style={styles.reviewBrand} numberOfLines={1}>{author}</Text>
           <Stars value={Number(review.rating) || 0} />
         </View>
         {!!profilePath && <Text style={styles.viewProfile}>View profile ›</Text>}
@@ -631,8 +637,8 @@ const styles = StyleSheet.create({
     paddingBottom: scale(10),
   },
   headerBtn: {
-    width: scale(36),
-    height: scale(36),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -642,7 +648,9 @@ const styles = StyleSheet.create({
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center' },
+  // Both sides are two buttons wide so the title sits in the middle.
+  headerLeft: { width: scale(88), alignItems: 'flex-start' },
+  headerRight: { width: scale(88), flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   headerBadge: {
     position: 'absolute',
     top: 0,
@@ -669,7 +677,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(18),
     borderTopRightRadius: scale(18),
   },
-  content: { padding: scale(14), paddingBottom: scale(30) },
+  // Tablet: a centred, readable column (no-op on phones).
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(14),
+    paddingBottom: scale(30),
+  },
 
   card: {
     marginTop: scale(12),
@@ -687,7 +702,9 @@ const styles = StyleSheet.create({
 
   // --- rating summary ---
   summaryRow: { flexDirection: 'row' },
+  summaryStacked: { flexDirection: 'column' },
   summaryLeft: { width: scale(118) },
+  summaryLeftStacked: { width: '100%' },
   summaryBadge: {
     width: scale(28),
     height: scale(28),
@@ -698,7 +715,7 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     marginTop: scale(8),
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#7C819C',
@@ -715,10 +732,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#14153C',
   },
-  summaryCaption: { marginTop: scale(6), fontSize: fontScale(9), color: '#8A8FA8' },
-  breakdown: { flex: 1, justifyContent: 'center', gap: scale(7) },
+  summaryCaption: { marginTop: scale(6), fontSize: fontScale(11), color: '#7A7F9C' },
+  breakdown: { flex: 1, minWidth: 0, justifyContent: 'center', gap: scale(7) },
+  breakdownStacked: { flex: 0, width: '100%', marginTop: scale(14) },
   breakdownRow: { flexDirection: 'row', alignItems: 'center', gap: scale(7) },
-  breakdownLabel: { width: scale(42), fontSize: fontScale(9), color: '#6E7391' },
+  breakdownLabel: { width: scale(46), fontSize: fontScale(11), color: '#6E7391' },
   track: {
     flex: 1,
     height: scale(5),
@@ -728,9 +746,9 @@ const styles = StyleSheet.create({
   },
   trackFill: { height: scale(5), borderRadius: scale(3), backgroundColor: '#4C5BF3' },
   breakdownPercent: {
-    width: scale(56),
+    width: scale(62),
     textAlign: 'right',
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
@@ -741,6 +759,7 @@ const styles = StyleSheet.create({
   tile: {
     flexGrow: 1,
     flexBasis: '45%',
+    minWidth: 0,
     padding: scale(11),
     borderRadius: scale(12),
     borderWidth: 1,
@@ -758,7 +777,8 @@ const styles = StyleSheet.create({
   tileIconGold: { backgroundColor: '#FDF3DC' },
   tileIconBlue: { backgroundColor: '#EEF0FE' },
   tileTitle: {
-    fontSize: fontScale(10),
+    flexShrink: 1,
+    fontSize: fontScale(12),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
     color: '#5C6180',
@@ -770,8 +790,8 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#14153C',
   },
-  tileCaption: { marginTop: scale(3), fontSize: fontScale(9), color: '#8A8FA8' },
-  tileCaptionGreen: { marginTop: scale(3), fontSize: fontScale(9), color: '#17AC54' },
+  tileCaption: { marginTop: scale(3), fontSize: fontScale(11), color: '#7A7F9C' },
+  tileCaptionGreen: { marginTop: scale(3), fontSize: fontScale(11), color: '#12854A' },
 
   // --- review list ---
   listHead: {
@@ -787,8 +807,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#14153C',
   },
+  seeAllBtn: { minHeight: scale(44), paddingLeft: scale(12), justifyContent: 'center' },
   seeAll: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -803,7 +824,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  errorText: { flex: 1, fontSize: fontScale(12), color: '#B03030' },
+  errorText: { flex: 1, minWidth: 0, fontSize: fontScale(13), color: '#B03030' },
   retry: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
   retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
   empty: { marginTop: scale(24), alignItems: 'center' },
@@ -815,7 +836,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: scale(5),
-    fontSize: fontScale(11),
+    fontSize: fontScale(14),
     color: '#858AA3',
     textAlign: 'center',
   },
@@ -849,16 +870,18 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFF',
   },
-  reviewCopy: { flex: 1, marginLeft: scale(10) },
+  reviewCopy: { flex: 1, minWidth: 0, marginLeft: scale(10) },
   reviewBrand: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#14153C',
   },
   starRow: { marginTop: scale(3), flexDirection: 'row', gap: scale(2) },
   viewProfile: {
-    fontSize: fontScale(11),
+    flexShrink: 0,
+    marginLeft: scale(8),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C5BF3',
@@ -872,18 +895,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF0FE',
   },
   campaignChipText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#4C4DD6',
   },
   reviewBody: {
     marginTop: scale(9),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: '#5C6180',
   },
-  reviewDate: { marginTop: scale(8), fontSize: fontScale(9), color: '#9498B0' },
+  reviewDate: { marginTop: scale(8), fontSize: fontScale(11), color: '#7A7F9C' },
 });
 
 export default Reviews;

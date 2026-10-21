@@ -9,15 +9,15 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
-  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
-import { sendDealMessage } from '../api';
-import { fontScale, scale } from '../theme';
+import { markDealChatRead, sendDealMessage } from '../api';
+import { CONTENT_MAX_WIDTH, fontScale, scale } from '../theme';
 
 type Props = {
   visible: boolean;
@@ -33,6 +33,7 @@ type Props = {
 };
 
 export default function DealChat({ visible, token, dealId, title, messages, prefill = '', onClose, onSent }: Props) {
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -42,6 +43,17 @@ export default function DealChat({ visible, token, dealId, title, messages, pref
   useEffect(() => {
     if (visible) setText(current => current || prefill);
   }, [visible, prefill]);
+
+  // Opening the chat is what marks the brand's messages read on the server; refetch
+  // the deal afterwards so the "unread" caption on the deal clears.
+  useEffect(() => {
+    if (!visible || !dealId) return;
+    Promise.resolve()
+      .then(() => markDealChatRead(token, dealId))
+      .then(() => onSent())
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, dealId, token]);
 
   const send = async () => {
     const body = text.trim();
@@ -64,7 +76,8 @@ export default function DealChat({ visible, token, dealId, title, messages, pref
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* 'padding' on Android too: RN 0.87 is edge-to-edge, so adjustResize no longer lifts the composer. */}
+      <KeyboardAvoidingView style={styles.backdrop} behavior="padding">
         <View style={styles.sheet}>
           <View style={styles.head}>
             <Text style={styles.title} numberOfLines={1}>{title || 'Deal chat'}</Text>
@@ -97,7 +110,7 @@ export default function DealChat({ visible, token, dealId, title, messages, pref
             })}
           </ScrollView>
           {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { paddingBottom: Math.max(scale(10), insets.bottom + scale(4)) }]}>
             <TextInput
               style={styles.input}
               value={text}
@@ -128,32 +141,36 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,22,58,0.5)' },
   sheet: {
     height: '80%',
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
   head: { flexDirection: 'row', alignItems: 'center', paddingLeft: scale(16), borderBottomWidth: 1, borderBottomColor: '#EEF0F6' },
-  title: { flex: 1, fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163A' },
+  title: { flex: 1, minWidth: 0, fontSize: fontScale(15), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163A' },
   close: { width: scale(48), height: scale(48), alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: fontScale(26), color: '#15163A' },
   list: { flex: 1, backgroundColor: '#F5F6FB' },
   listBody: { padding: scale(12) },
-  empty: { marginTop: scale(30), textAlign: 'center', fontSize: fontScale(13), color: '#9296BA' },
-  system: { alignSelf: 'center', marginVertical: scale(6), paddingHorizontal: scale(12), textAlign: 'center', fontSize: fontScale(12), color: '#7E829D' },
+  empty: { marginTop: scale(30), textAlign: 'center', fontSize: fontScale(14), color: '#7A7F9C' },
+  system: { alignSelf: 'center', marginVertical: scale(6), paddingHorizontal: scale(12), textAlign: 'center', fontSize: fontScale(13), color: '#7E829D' },
   bubbleRow: { flexDirection: 'row', marginVertical: scale(3) },
   bubbleRowMine: { justifyContent: 'flex-end' },
   bubble: { maxWidth: '82%', paddingHorizontal: scale(12), paddingVertical: scale(8), borderRadius: scale(14) },
   mine: { backgroundColor: '#4452F0' },
   theirs: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECEDF6' },
-  who: { marginBottom: scale(2), fontSize: fontScale(11), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#7E829D' },
+  who: { marginBottom: scale(2), fontSize: fontScale(12), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#7E829D' },
   mineText: { fontSize: fontScale(14), lineHeight: fontScale(20), color: '#FFFFFF' },
   theirText: { fontSize: fontScale(14), lineHeight: fontScale(20), color: '#15163A' },
-  error: { paddingHorizontal: scale(14), paddingTop: scale(6), fontSize: fontScale(12), color: '#C0392B' },
+  error: { paddingHorizontal: scale(14), paddingTop: scale(6), fontSize: fontScale(13), color: '#C0392B' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', padding: scale(10), gap: scale(8), borderTopWidth: 1, borderTopColor: '#EEF0F6' },
   // 16px so iOS does not zoom the screen when the field is focused.
   input: {
     flex: 1,
+    minWidth: 0,
     minHeight: scale(46),
     maxHeight: scale(110),
     paddingHorizontal: scale(12),

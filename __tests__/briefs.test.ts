@@ -162,7 +162,7 @@ describe('bid status', () => {
     expect(tab('accepted').match('selected')).toBe(true);
     expect(tab('accepted').match('rejected')).toBe(false);
     expect(tab('rejected').match('rejected')).toBe(true);
-    expect(tab('shortlisted').match('shortlisted')).toBe(true);
+    expect(BID_TABS.map(t => t.key)).toEqual(['all', 'accepted', 'rejected']);
     expect(tab('all').match('anything')).toBe(true);
   });
 });

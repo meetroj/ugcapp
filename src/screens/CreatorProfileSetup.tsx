@@ -49,7 +49,7 @@ import {
   uploadMedia,
   type AuthUser,
 } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 import { useKeyboardVisible } from '../keyboard';
 
 type Props = {
@@ -2486,7 +2486,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   progressFill: { height: '100%', backgroundColor: ACCENT },
-  content: { paddingHorizontal: scale(16), paddingBottom: scale(24) },
+  // Capped and centred so the form is not stretched across a tablet.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    paddingHorizontal: scale(16),
+    paddingBottom: scale(24),
+  },
   card: {
     backgroundColor: CARD,
     borderRadius: scale(16),
@@ -2538,7 +2545,8 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     paddingHorizontal: scale(12),
     paddingVertical: scale(11),
-    fontSize: fontScale(14),
+    // 16 stops the iOS zoom-on-focus.
+    fontSize: 16,
     color: ACCENT_TEXT,
     backgroundColor: INK_SOFT,
   },
@@ -2594,6 +2602,9 @@ const styles = StyleSheet.create({
     padding: scale(6),
   },
   chip: {
+    maxWidth: '100%',
+    minHeight: scale(44),
+    justifyContent: 'center',
     paddingHorizontal: scale(12),
     paddingVertical: scale(8),
     borderRadius: scale(999),
@@ -2602,7 +2613,7 @@ const styles = StyleSheet.create({
     backgroundColor: INK_SOFT,
   },
   chipOn: { borderColor: ACCENT, backgroundColor: CHIP_ON },
-  chipText: { fontSize: fontScale(12.5), color: ACCENT_TEXT },
+  chipText: { fontSize: fontScale(13), color: ACCENT_TEXT },
   chipTextOn: { color: '#FFFFFF' },
   portfolioRow: {
     flexDirection: 'row',

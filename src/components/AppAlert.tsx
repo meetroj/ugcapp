@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Text } from './Text';
-import { bodyFont, displayFont, fontScale, scale } from '../theme';
+import { bodyFont, displayFont, fontScale, scale, touch } from '../theme';
 
 type Dialog = {
   id: number;
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
   message: { ...bodyFont(400), fontSize: fontScale(14), lineHeight: fontScale(22), color: '#737891', marginTop: scale(10) },
   actions: { flexDirection: 'row', gap: scale(10), marginTop: scale(24) },
   stacked: { flexDirection: 'column' },
-  button: { flexGrow: 1, flexBasis: 0, minHeight: scale(48), paddingHorizontal: scale(14), paddingVertical: scale(13), borderRadius: scale(14), borderWidth: 1, borderColor: '#E5E6F0', backgroundColor: '#F7F8FC', alignItems: 'center', justifyContent: 'center' },
+  button: { flexGrow: 1, flexBasis: 0, minHeight: touch(48), paddingHorizontal: scale(14), paddingVertical: scale(13), borderRadius: scale(14), borderWidth: 1, borderColor: '#E5E6F0', backgroundColor: '#F7F8FC', alignItems: 'center', justifyContent: 'center' },
   primary: { backgroundColor: '#4C5BF3', borderColor: '#4C5BF3' },
   danger: { backgroundColor: '#D34550', borderColor: '#D34550' },
   buttonText: { ...bodyFont(600), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#595F80', textAlign: 'center' },

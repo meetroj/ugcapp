@@ -1,5 +1,5 @@
 /**
- * My Bids like the website: every bid under All / Shortlisted / Accepted /
+ * My Bids like the website: every bid under All / Accepted /
  * Rejected with counts, a detail sheet, Deal Room for a won bid, Message Brand.
  */
 import React from 'react';
@@ -50,7 +50,7 @@ test('every bid is listed, with counts per tab, and a pending bid reads Pending'
   await mount();
   const t = all();
   expect(t).toContain('All (3)');
-  expect(t).toContain('Shortlisted (0)');
+  expect(t).not.toContain('Shortlisted');
   expect(t).toContain('Accepted (1)');
   expect(t).toContain('Rejected (1)');
   expect(t).toContain('Brief 1');
@@ -79,10 +79,11 @@ test('tabs filter the list', async () => {
 });
 
 test('an empty tab explains itself and offers Browse', async () => {
+  (getMyBids as jest.Mock).mockResolvedValue([row('1', 'pending')]);
   const onNavigate = jest.fn();
   await mount({ onNavigate });
-  await press('Shortlisted (0)');
-  expect(all()).toContain('No bids in “Shortlisted”');
+  await press('Rejected (0)');
+  expect(all()).toContain('No bids in “Rejected”');
   await press('Browse Campaigns');
   expect(onNavigate).toHaveBeenCalledWith('/browse-briefs');
 });

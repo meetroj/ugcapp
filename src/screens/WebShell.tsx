@@ -8,7 +8,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -107,6 +109,10 @@ const LEGACY_LINKS: Record<string, string> = {
   '/creator-dashboard': '/dashboard/creator',
   '/dashboard/creator/inbox': '/messages',
   '/dashboard/business/deals': '/dashboard/business/all-campaigns',
+  // Admin links older notifications still carry (same entries as the website).
+  '/admin/match-queue': '/dashboard/admin/campaigns',
+  '/admin/campaigns': '/dashboard/admin/campaigns',
+  '/dashboard/admin/flagged-messages': '/dashboard/admin/flagged',
 };
 
 /** First `?key=` value in a path or query string, decoded; undefined when absent. */
@@ -140,6 +146,12 @@ export function normalizePath(path: string, role?: string): string {
   // Re-run the result: '/deals?campaign=<id>' still has to become '/my-deals/<id>'.
   if (LEGACY_LINKS[pure]) return normalizePath(LEGACY_LINKS[pure] + query, role);
 
+  // Admins and staff (campaign_manager, support_staff) browse the website
+  // itself. The rewrites below point at native-only app routes ('/messages/<id>',
+  // '/campaigns/<id>') that the site does not have, so tapping a chat or
+  // campaign link there hit its 404 page.
+  if (role && role !== 'creator' && role !== 'business') return path;
+
   // ── Chat ──────────────────────────────────────────────────────────────────
   if (pure === '/chat') return '/messages';
   // The web's thread route is '/chat/<userId>'; the app's is '/messages/<id>'.
@@ -161,6 +173,15 @@ export function normalizePath(path: string, role?: string): string {
   // Notification deep links carry the deal: '/my-deals?campaign=<id>'.
   // The native list reads the id off the path, so move it there.
   if (pure === '/my-deals') {
+    // A brand has no deals hub: the website sends '/my-deals?campaign=<id>' to
+    // that campaign (and anything else to the campaign list). Without this the
+    // brand opened '/my-deals/<id>' in the WebView, which is a 404 page.
+    if (role === 'business') {
+      const campaignId = /[?&]campaign=([^&#]+)/.exec(query);
+      if (!campaignId) return '/dashboard/business/all-campaigns';
+      const focus = /[?&]creator=([^&#]+)/.exec(query);
+      return `/campaigns/${decodeURIComponent(campaignId[1])}${focus ? `?creator=${focus[1]}` : ''}`;
+    }
     const deal = /[?&](?:campaign|deal)=([^&]+)/.exec(query);
     if (deal) return `/my-deals/${decodeURIComponent(deal[1])}`;
   }
@@ -206,6 +227,35 @@ export function normalizePath(path: string, role?: string): string {
   const shipmentDetail = /^\/shipment\/([^/]+)$/.exec(pure);
   if (shipmentDetail && role === 'creator') return `/my-deals/${shipmentDetail[1]}`;
 
+  return path;
+}
+
+/**
+ * Role gate for in-app navigation, mirroring the website's ProtectedRoute: a
+ * creator never lands on a brand page and a brand never on a creator page
+ * (the website would bounce either to its landing page, which the app must not
+ * show). Returns the role's own home when the path is not theirs. Admins and
+ * staff are untouched: their whole app is the website.
+ */
+const BRAND_ONLY =
+  /^\/(?:dashboard\/business(?:\/|$)|brand-home|campaigns\/|shipment\/|creator\/(?!signup)[^/]+$)/;
+const CREATOR_ONLY =
+  /^\/(?:dashboard\/creator|browse-briefs|saved-briefs|my-bids|my-active-work|withdrawal|kyc|portfolio|work\/submit)(?:\/|$)/;
+
+const ADMIN_ONLY = /^\/dashboard\/admin(?:\/|$)/;
+
+export function roleGate(path: string, role?: string): string {
+  const pure = path.split(/[?#]/)[0];
+  // Neither role has an admin console; the website would bounce them to its
+  // landing page, which the app must not show.
+  if (role === 'creator' && ADMIN_ONLY.test(pure)) return '/dashboard/creator';
+  if (role === 'business' && ADMIN_ONLY.test(pure)) {
+    return '/dashboard/business/browse-creator';
+  }
+  if (role === 'creator' && BRAND_ONLY.test(pure)) return '/dashboard/creator';
+  if (role === 'business' && CREATOR_ONLY.test(pure)) {
+    return '/dashboard/business/browse-creator';
+  }
   return path;
 }
 
@@ -440,7 +490,9 @@ function WebShell({
     // The public profile is full-bleed: a cover banner at the top and a pinned
     // Send Message bar at the bottom, both of which the nav would sit on.
     showingCreatorPublic ||
-    showingFollowUs;
+    showingFollowUs ||
+    // Policy pages end in a card that the floating bar used to sit on top of.
+    showingLegal;
 
   // True whenever a native screen has replaced the WebView. The WebView is
   // unmounted in that case, so its own back history cannot be used.
@@ -503,7 +555,10 @@ function WebShell({
         }
         target = target.replace(/^https?:\/\/[^/]*/i, '') || '/';
       }
-      const path = normalizePath(target, session.role);
+      const path = roleGate(normalizePath(target, session.role), session.role);
+      // A new destination is a fresh attempt: a stale "Can't reach UGCad" from
+      // the previous web page must not greet the next one.
+      setErrored(false);
       // '/notifications' is a page on the website but an overlay in the app.
       // Opening the feed over whatever is on screen keeps the bell and a
       // website link behaving the same, and stops the desktop page loading in
@@ -545,6 +600,9 @@ function WebShell({
     goingBack.current = null;
     stackRef.current = stackRef.current.slice(0, -1);
     pathRef.current = previous;
+    // The error box belongs to the page we are leaving; without this, Back from
+    // it popped the stack but kept showing "Can't reach UGCad".
+    setErrored(false);
     setCurrentPath(previous);
     setWebPath(previous);
     return true;
@@ -752,6 +810,7 @@ function WebShell({
           token={token}
           session={session}
           unread={unread}
+          onBrowse={() => navigateTo('/browse-briefs')}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
           onOpenThread={openThread}
@@ -774,6 +833,7 @@ function WebShell({
         <Earnings
           token={token}
           unread={unread}
+          onBrowse={() => navigateTo('/browse-briefs')}
           onRequestWithdrawal={() => navigateTo('/withdrawal/new')}
           onMessages={() => navigateTo('/messages')}
           onNotifications={() => setFeedOpen(true)}
@@ -1045,6 +1105,15 @@ function WebShell({
           </TouchableOpacity>
         </ScrollView>
       ) : (
+        // RN 0.87 is edge-to-edge, so on Android the keyboard no longer resizes
+        // the window: pad the page by the keyboard height so a focused website
+        // field (admin forms, any web page) scrolls into view above it. Native
+        // screens manage their own keyboard, so only the WebView is wrapped.
+        <KeyboardAvoidingView
+          style={styles.web}
+          behavior="padding"
+          enabled={Platform.OS === 'android'}
+        >
         <WebView
           ref={webRef}
           source={{ uri: `${SITE_ORIGIN}${webPath}` }}
@@ -1078,6 +1147,7 @@ function WebShell({
             mobileDashboard ? MOBILE_APP_LAYOUT_SCRIPT : undefined
           }
         />
+        </KeyboardAvoidingView>
       )}
 
       {/* The spinner belongs to the WebView, so it only shows when the WebView
@@ -1436,7 +1506,7 @@ function AppBottomNav({
 
   return (
     <View
-      style={[styles.navDock, { paddingBottom: 10 + insets.bottom }]}
+      style={[styles.navDock, { paddingBottom: scale(10) + insets.bottom }]}
       pointerEvents="box-none"
     >
       <View
@@ -1501,6 +1571,8 @@ const styles = StyleSheet.create({
   },
   bottomNav: {
     width: '100%',
+    // A tablet gets a centred pill, not one stretched across 768pt.
+    maxWidth: scale(560),
     height: NAV_BAR_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',

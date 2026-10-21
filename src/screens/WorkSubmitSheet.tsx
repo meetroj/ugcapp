@@ -3,23 +3,55 @@
  * page): several files, a required work description, separate edited / raw
  * zones when the brief asks for an edited cut, files that can be removed
  * before sending, and the brand's requested changes on top of a revision.
- * Posts POST /api/work/submit (api.submitWork). The backend writes the same
- * per-version record /deals/{id}/content does.
+ * When the brief requires a caption / script or a thumbnail (the deal's
+ * content_submission.required_assets, as on the website's Content Submission
+ * card) those get their own upload tiles and go along as caption_url /
+ * thumbnail_url. Posts POST /api/work/submit (api.submitWork). The backend
+ * writes the same per-version record /deals/{id}/content does.
  */
 import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Text, TextInput } from '../components/Text';
 import { Alert } from '../components/AppAlert';
+import ChoiceSheet from '../components/ChoiceSheet';
 import UploadProgressBar from '../components/UploadProgressBar';
 import { submitWork, uploadMedia } from '../api';
 import { parseChange, stateKey, toChangeItems } from '../dealRoom';
-import { fontScale, scale } from '../theme';
+import { MB, afterSheetCloses, pickDocuments } from '../documentPicker';
+import { CONTENT_MAX_WIDTH, fontScale, scale } from '../theme';
 
 export type WorkEntry = { url: string; name: string; isVideo: boolean };
 type ZoneKey = 'files' | 'edited' | 'raw';
 type Kind = 'raw' | 'edited' | 'both' | 'single';
 type Zone = { key: ZoneKey; title: string; hint: string; media: 'video' | 'mixed' };
+type Slot = 'caption' | 'thumbnail';
+/** What the brief asks for beyond the video, and what has been uploaded for it. */
+export type ExtraAssets = {
+  needCaption: boolean;
+  needThumbnail: boolean;
+  caption: WorkEntry | null;
+  thumbnail: WorkEntry | null;
+};
+
+/** The server rejects images over 10 MB (validate_upload_payload); keep the same cap for both tiles. */
+const EXTRA_MAX_BYTES = 10 * MB;
+
+/** Caption / script and thumbnail flags from the deal (GET /deals/{id} content_submission.required_assets). */
+export function requiredExtras(deal: Record<string, any>): { caption: boolean; thumbnail: boolean } {
+  const required = deal?.content_submission?.required_assets;
+  return { caption: !!required?.caption_script, thumbnail: !!required?.thumbnail };
+}
 
 /**
  * Which upload zones a deal needs. The deal's edit_flow stage wins (raw first,
@@ -52,6 +84,7 @@ export function submitProblem(
   files: Record<ZoneKey, WorkEntry[]>,
   description: string,
   uploading: boolean,
+  extras?: ExtraAssets,
 ): string {
   if (uploading) return 'Please wait. A file is still uploading.';
   if (kind === 'both') {
@@ -64,6 +97,8 @@ export function submitProblem(
   } else if (!files.files.length) {
     return 'Please upload at least one file.';
   }
+  if (extras?.needCaption && !extras.caption) return 'This brief needs a caption or script. Upload it.';
+  if (extras?.needThumbnail && !extras.thumbnail) return 'This brief needs a thumbnail. Upload it.';
   if (!description.trim()) return 'Add a short work description.';
   return '';
 }
@@ -73,7 +108,15 @@ export function submitProblem(
  * watermark and plays in the brand's review), so the edited cut leads and, in
  * the free zone, videos go before images.
  */
-export function buildWorkPayload(kind: Kind, files: Record<ZoneKey, WorkEntry[]>, description: string) {
+export function buildWorkPayload(kind: Kind, files: Record<ZoneKey, WorkEntry[]>, description: string, extras?: ExtraAssets) {
+  return {
+    ...videoPayload(kind, files, description),
+    ...(extras?.caption ? { caption_url: extras.caption.url } : {}),
+    ...(extras?.thumbnail ? { thumbnail_url: extras.thumbnail.url } : {}),
+  };
+}
+
+function videoPayload(kind: Kind, files: Record<ZoneKey, WorkEntry[]>, description: string) {
   const urls = (list: WorkEntry[]) => list.map(e => e.url);
   const note = description.trim();
   if (kind === 'raw') return { work_files: urls(files.raw), raw_files: urls(files.raw), description: note };
@@ -108,6 +151,11 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
   const changes = revising ? toChangeItems(deal.revision_tracker) : [];
   const [files, setFiles] = useState<Record<ZoneKey, WorkEntry[]>>(EMPTY_FILES());
   const [description, setDescription] = useState('');
+  const [caption, setCaption] = useState<WorkEntry | null>(null);
+  const [thumbnail, setThumbnail] = useState<WorkEntry | null>(null);
+  const [thumbSource, setThumbSource] = useState(false);
+  const insets = useSafeAreaInsets();
+  const needs = requiredExtras(deal);
   const [uploading, setUploading] = useState('');
   const [percent, setPercent] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -164,9 +212,68 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
   const remove = (zone: ZoneKey, index: number) =>
     setFiles(prev => ({ ...prev, [zone]: prev[zone].filter((_, i) => i !== index) }));
 
+  /** Uploads one caption / script / thumbnail file (already type- and size-checked). */
+  const uploadExtra = async (slot: Slot, file: { uri: string; name: string; type: string; size: number }) => {
+    setUploading(file.name);
+    setPercent(0);
+    try {
+      const url = await uploadMedia(
+        token,
+        { uri: file.uri, fileName: file.name, type: file.type, fileSize: file.size },
+        'file',
+        setPercent,
+      );
+      if (!url) throw new Error('The upload did not return a file URL.');
+      (slot === 'caption' ? setCaption : setThumbnail)({ url, name: file.name, isVideo: false });
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Failed to upload file');
+    } finally {
+      setUploading('');
+      setPercent(null);
+    }
+  };
+
+  /** Caption / script: a PDF or image from Files. Thumbnail: an image from the photo library or Files. */
+  const pickExtra = async (slot: Slot, from: 'photos' | 'files') => {
+    if (busy) return;
+    setError('');
+    if (from === 'photos') {
+      let picked;
+      try {
+        picked = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
+      } catch {
+        setError('Could not open your gallery. Check the photo permission and try again.');
+        return;
+      }
+      if (picked.errorMessage) {
+        setError(picked.errorMessage);
+        return;
+      }
+      const asset = (picked.assets || []).find(a => a.uri);
+      if (!asset) return;
+      const name = asset.fileName || 'thumbnail.jpg';
+      if (asset.fileSize && asset.fileSize > EXTRA_MAX_BYTES) {
+        setError(`"${name}" is larger than 10 MB. Choose a smaller file.`);
+        return;
+      }
+      await uploadExtra(slot, { uri: asset.uri as string, name, type: asset.type || 'image/jpeg', size: asset.fileSize || 0 });
+      return;
+    }
+    try {
+      const [doc] = await pickDocuments({
+        types: slot === 'caption' ? ['pdf', 'image'] : ['image'],
+        maxBytes: EXTRA_MAX_BYTES,
+      });
+      if (doc) await uploadExtra(slot, doc);
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Could not open your files.');
+    }
+  };
+
   const submit = async () => {
     if (lock.current) return;
-    const problem = submitProblem(kind, files, description, !!uploading);
+    const extras: ExtraAssets = { needCaption: needs.caption, needThumbnail: needs.thumbnail, caption, thumbnail };
+    const problem = submitProblem(kind, files, description, !!uploading, extras);
     if (problem) {
       setError(problem);
       return;
@@ -179,7 +286,7 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
     setSubmitting(true);
     setError('');
     try {
-      await submitWork(token, campaignId, buildWorkPayload(kind, files, description));
+      await submitWork(token, campaignId, buildWorkPayload(kind, files, description, extras));
       Alert.alert(
         kind === 'raw' ? 'Raw video submitted' : kind === 'edited' ? 'Edited video submitted' : revising ? 'Revision submitted' : 'Work submitted',
         kind === 'raw'
@@ -189,6 +296,8 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
       );
       setFiles(EMPTY_FILES());
       setDescription('');
+      setCaption(null);
+      setThumbnail(null);
       onSubmitted();
       onClose();
     } catch (e) {
@@ -199,11 +308,31 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
     }
   };
 
+  /** A caption / script / thumbnail tile: the same dashed picker as the video zones, one file. */
+  const renderExtra = (slot: Slot, title: string, hint: string, entry: WorkEntry | null, onPick: () => void, onClear: () => void) => (
+    <View style={styles.zone}>
+      <Text style={[styles.zoneTitle, styles.zoneTitleFirst]}>{title}</Text>
+      <Text style={styles.hint}>{hint}</Text>
+      <TouchableOpacity style={styles.pick} onPress={onPick} disabled={busy} accessibilityRole="button" accessibilityLabel={`${entry ? 'Replace' : 'Add'} ${title}`} testID={`add-${slot}`}>
+        <Text style={styles.pickText}>{entry ? 'Replace file' : 'Choose file'}</Text>
+      </TouchableOpacity>
+      {!!entry && (
+        <View style={styles.file}>
+          <Text style={styles.fileName} numberOfLines={1}>{entry.name}</Text>
+          <TouchableOpacity style={styles.removeBtn} onPress={onClear} disabled={busy} accessibilityRole="button" accessibilityLabel={`Remove ${entry.name}`}>
+            <Text style={styles.removeText}>{'×'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-      <View style={styles.backdrop}>
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
+      {/* The description box is at the bottom of the sheet: lift the sheet with the keyboard. */}
+      <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.sheet}>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.body, { paddingBottom: scale(28) + insets.bottom }]}>
             <Text style={styles.title}>{revising ? 'Submit your revision' : 'Submit your work'}</Text>
             <Text style={styles.sub}>{`Campaign: ${deal.campaign?.title || ''}`}</Text>
 
@@ -226,7 +355,7 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
 
             {zones.map(zone => (
               <View key={zone.key} style={styles.zone}>
-                <Text style={styles.zoneTitle}>{zone.title}</Text>
+                <Text style={[styles.zoneTitle, styles.zoneTitleFirst]}>{zone.title}</Text>
                 <Text style={styles.hint}>{zone.hint}</Text>
                 <TouchableOpacity style={styles.pick} onPress={() => addFiles(zone)} disabled={busy} accessibilityRole="button" accessibilityLabel={`Add files to ${zone.title}`} testID={`add-${zone.key}`}>
                   <Text style={styles.pickText}>{files[zone.key].length ? 'Add more files' : 'Choose files'}</Text>
@@ -241,6 +370,10 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
                 ))}
               </View>
             ))}
+            {needs.caption &&
+              renderExtra('caption', 'Caption / script', 'A PDF or image of the caption or script this brief asks for. Up to 10 MB.', caption, () => pickExtra('caption', 'files'), () => setCaption(null))}
+            {needs.thumbnail &&
+              renderExtra('thumbnail', 'Thumbnail', 'The cover image for the video (JPG or PNG). Up to 10 MB.', thumbnail, () => setThumbSource(true), () => setThumbnail(null))}
             {!!uploading && <Text style={styles.hint}>{`Uploading ${uploading}`}</Text>}
             <UploadProgressBar percent={uploading ? percent : null} />
 
@@ -272,7 +405,16 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
             </View>
           </ScrollView>
         </View>
-      </View>
+        <ChoiceSheet
+          visible={thumbSource}
+          title="Add a thumbnail"
+          options={[
+            { label: 'Photo library', onPress: () => afterSheetCloses(() => pickExtra('thumbnail', 'photos')) },
+            { label: 'Files', onPress: () => afterSheetCloses(() => pickExtra('thumbnail', 'files')) },
+          ]}
+          onClose={() => setThumbSource(false)}
+        />
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -280,6 +422,10 @@ export default function WorkSubmitSheet({ visible, token, deal, onClose, onSubmi
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,22,58,0.5)' },
   sheet: {
+    width: '100%',
+    // A tablet keeps the sheet a phone-width column instead of stretching it edge to edge.
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     maxHeight: '92%',
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),
@@ -287,7 +433,7 @@ const styles = StyleSheet.create({
   },
   body: { padding: scale(18), paddingBottom: scale(28) },
   title: { fontSize: fontScale(17), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163A' },
-  sub: { marginTop: scale(4), fontSize: fontScale(13), color: '#6B7094' },
+  sub: { marginTop: scale(4), fontSize: fontScale(14), color: '#6B7094' },
   callout: {
     marginTop: scale(12),
     padding: scale(12),
@@ -297,10 +443,12 @@ const styles = StyleSheet.create({
     borderColor: '#FCD9A4',
   },
   calloutTitle: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#92400E' },
-  change: { marginTop: scale(5), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#7C4A09' },
+  change: { marginTop: scale(5), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#7C4A09' },
   zone: { marginTop: scale(14) },
   zoneTitle: { marginTop: scale(14), fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163A' },
-  hint: { marginTop: scale(3), fontSize: fontScale(12), color: '#9296BA' },
+  // Inside a zone the zone's own margin already spaces it.
+  zoneTitleFirst: { marginTop: 0 },
+  hint: { marginTop: scale(3), fontSize: fontScale(13), lineHeight: fontScale(18), color: '#9296BA' },
   pick: {
     marginTop: scale(8),
     minHeight: scale(48),
@@ -322,7 +470,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(10),
     backgroundColor: '#F5F6FB',
   },
-  fileName: { flex: 1, fontSize: fontScale(13), color: '#25274C' },
+  fileName: { flex: 1, minWidth: 0, fontSize: fontScale(14), color: '#25274C' },
   removeBtn: { width: scale(44), height: scale(44), alignItems: 'center', justifyContent: 'center' },
   removeText: { fontSize: fontScale(22), color: '#C0392B' },
   input: {
@@ -336,7 +484,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#15163A',
   },
-  error: { marginTop: scale(10), fontSize: fontScale(13), color: '#C0392B' },
+  error: { marginTop: scale(10), fontSize: fontScale(14), lineHeight: fontScale(20), color: '#C0392B' },
   actions: { flexDirection: 'row', gap: scale(8), marginTop: scale(16) },
   btn: { flex: 1, minHeight: scale(48), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
   ghost: { backgroundColor: '#F1F2F9' },

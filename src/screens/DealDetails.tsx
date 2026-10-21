@@ -16,8 +16,10 @@ import {
   AppState,
   RefreshControl,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -43,6 +45,7 @@ import {
   canEscalate,
   canMarkReceived,
   canReportDamage,
+  dealAmount,
   dealSteps,
   dealSubs,
   disputeOpen as isDisputeOpen,
@@ -62,7 +65,7 @@ import DeliveryAddress from './DeliveryAddress';
 import DeliveryReceipt from './DeliveryReceipt';
 import { HelpSheet, RateBrandSheet } from './DealSheets';
 import WorkSubmitSheet from './WorkSubmitSheet';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
 /** Loose shape: the backend returns a wide payload and fields vary by state. */
 export type Deal = Record<string, any>;
@@ -440,6 +443,11 @@ function DealDetails({
   const steps = dealSteps(ships);
   const hints = dealSubs(ships);
   const step = stepIndexFor(state, ships);
+  // The rail is wider than a phone: bring the current step into view instead of starting at step 1.
+  const railRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  useEffect(() => {
+    railRef.current?.scrollTo({ x: Math.max(0, (step - 1) * scale(86)), animated: false });
+  }, [step]);
   const reference = String(deal.deal_id || campaign.id || '')
     .toUpperCase()
     .slice(0, 14);
@@ -463,7 +471,8 @@ function DealDetails({
   );
   const progressPct = Math.round((doneCount / totalAssets) * 100);
 
-  const budget = escrow.held_amount ?? campaign.budget_max ?? campaign.budget;
+  // Escrow when funded, else the brief's budget or the bid (not "Rs. 0" for an unfunded deal).
+  const budget = dealAmount(deal) || campaign.budget;
 
   const timeline = useMemo(() => {
     const feed: any[] = Array.isArray(deal.activity_feed)
@@ -517,6 +526,26 @@ function DealDetails({
       throw new Error('The upload did not return a file URL.');
     }
     return url;
+  };
+
+  /** pickAndUpload for the Alert buttons: a failed upload must clear the busy
+   *  state and say so, not leave the progress bar stuck behind an unhandled rejection. */
+  const pickSafely = async (): Promise<string | null> => {
+    try {
+      return await pickAndUpload();
+    } catch (error) {
+      setSubmitting(false);
+      setUploadPercent(null);
+      Alert.alert(
+        'Upload failed',
+        (error as any)?.name === 'NetworkError'
+          ? "You're offline. Check your connection and try again."
+          : error instanceof Error && error.message
+          ? error.message
+          : 'Please try again.',
+      );
+      return null;
+    }
   };
 
   /**
@@ -625,7 +654,7 @@ function DealDetails({
         {
           text: 'Add photo',
           onPress: async () => {
-            const url = await pickAndUpload();
+            const url = await pickSafely();
             if (!url) return;
             runAction(
               'damage',
@@ -653,7 +682,7 @@ function DealDetails({
       {
         text: 'Choose file',
         onPress: async () => {
-          const url = await pickAndUpload();
+          const url = await pickSafely();
           if (!url) return;
           runAction(
             'evidence',
@@ -768,24 +797,27 @@ function DealDetails({
       .catch(() => {});
   }, [isPaid, token, campaignId, businessId, creator.id]);
 
-  const toggleFullBrief = async () => {
+  const loadFullBrief = async () => {
+    if (!token || !campaignId) return;
+    setBriefLoading(true);
+    setBriefError('');
+    try {
+      setFullBrief((await getCampaign(token, campaignId)) as Record<string, any>);
+    } catch (error) {
+      setBriefError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not load the full brief.',
+      );
+    } finally {
+      setBriefLoading(false);
+    }
+  };
+
+  const toggleFullBrief = () => {
     const next = !briefOpen;
     setBriefOpen(next);
-    if (next && !fullBrief && token && campaignId) {
-      setBriefLoading(true);
-      setBriefError('');
-      try {
-        setFullBrief((await getCampaign(token, campaignId)) as Record<string, any>);
-      } catch (error) {
-        setBriefError(
-          error instanceof Error && error.message
-            ? error.message
-            : 'Could not load the full brief.',
-        );
-      } finally {
-        setBriefLoading(false);
-      }
-    }
+    if (next && !fullBrief) loadFullBrief();
   };
 
   /** The one "what do I do next" button (MyDealsPage getPrimaryActionConfig). */
@@ -1086,8 +1118,19 @@ function DealDetails({
         </View>
       </View>
 
+      {/* Same keyboard handling as AuthLayout: Android pads by the measured
+          overlap (RN 0.87 is edge-to-edge, so adjustResize no longer shrinks
+          the window); iOS insets the scroll content instead. Without it the
+          counter-price and delivery-address fields sit under the keyboard. */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior="padding"
+        enabled={Platform.OS === 'android'}
+      >
       <ScrollView
         ref={scrollRef}
+        automaticallyAdjustKeyboardInsets
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => {
           setRefreshing(true);
           refreshDeal();
@@ -1115,7 +1158,7 @@ function DealDetails({
             </View>
 
             <View style={styles.summaryCopy}>
-              <Text style={styles.brandName}>{brand.name || 'Brand'}</Text>
+              <Text style={styles.brandName} numberOfLines={2}>{brand.name || 'Brand'}</Text>
               <Text style={styles.dealRef}>{reference}</Text>
               <View style={styles.statePill}>
                 <Text style={styles.stateText} numberOfLines={1}>
@@ -1163,6 +1206,7 @@ function DealDetails({
         {/* --- progress rail --- */}
         <View style={styles.card}>
           <ScrollView
+            ref={railRef}
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.railScroll}
@@ -1532,7 +1576,7 @@ function DealDetails({
                 <Text style={styles.errorText}>{briefError}</Text>
                 <TouchableOpacity
                   style={[styles.ghostBtn, styles.mt12]}
-                  onPress={() => { setBriefOpen(false); setTimeout(toggleFullBrief, 0); }}
+                  onPress={loadFullBrief}
                   accessibilityRole="button"
                 >
                   <Text style={styles.ghostBtnText}>Retry</Text>
@@ -1587,7 +1631,7 @@ function DealDetails({
                       onPress={handleConfirmReceipt}
                       accessibilityRole="button"
                     >
-                      <Glyph name="check" color="#FFFFFF" />
+                      <Glyph name="tick" color="#FFFFFF" />
                       <Text style={styles.primaryBtnText}>
                         Upload unboxing &amp; mark received
                       </Text>
@@ -1774,6 +1818,7 @@ function DealDetails({
           </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Text prompt for the actions that need a sentence. Android has no
           Alert.prompt, so without this the dispute and escalation buttons
@@ -1784,7 +1829,7 @@ function DealDetails({
         animationType="fade"
         onRequestClose={() => setPrompt(null)}
       >
-        <View style={styles.promptBackdrop}>
+        <KeyboardAvoidingView style={styles.promptBackdrop} behavior="padding">
           <View style={styles.promptSheet}>
             <Text style={styles.promptTitle}>{prompt?.title}</Text>
             <Text style={styles.promptMessage}>{prompt?.message}</Text>
@@ -1828,7 +1873,7 @@ function DealDetails({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {!!token && (
@@ -1887,19 +1932,19 @@ const styles = StyleSheet.create({
     paddingBottom: scale(14),
   },
   headerBtn: {
-    width: scale(38),
-    height: scale(38),
+    width: scale(44),
+    height: scale(44),
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitleBox: { flex: 1, alignItems: 'center' },
+  headerTitleBox: { flex: 1, minWidth: 0, alignItems: 'center' },
   headerTitle: {
     color: '#FFFFFF',
     fontSize: fontScale(16),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
   },
-  headerRef: { color: '#A7ADE0', fontSize: fontScale(11), marginTop: scale(2) },
+  headerRef: { color: '#A7ADE0', fontSize: fontScale(12), marginTop: scale(2) },
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   headerBadge: {
     position: 'absolute',
@@ -1926,7 +1971,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),
   },
-  content: { padding: scale(12), paddingBottom: scale(30) + NAV_CLEARANCE },
+  // Tablet: a centred, readable column (no-op on phones).
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(12),
+    paddingBottom: scale(30) + NAV_CLEARANCE,
+  },
 
   card: {
     marginBottom: scale(12),
@@ -1954,14 +2006,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#5B5CF6',
   },
-  summaryCopy: { flex: 1, marginLeft: scale(11) },
+  summaryCopy: { flex: 1, minWidth: 0, marginLeft: scale(11) },
   brandName: {
     fontSize: fontScale(17),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
   },
-  dealRef: { marginTop: scale(1), fontSize: fontScale(10), color: '#9295AA' },
+  dealRef: { marginTop: scale(1), fontSize: fontScale(11), color: '#8B8FA6' },
   statePill: {
     marginTop: scale(6),
     alignSelf: 'flex-start',
@@ -1984,19 +2036,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F2F8',
   },
   tagText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#5A6072',
   },
 
   divider: { height: 1, marginVertical: scale(13), backgroundColor: '#EEEFF6' },
-  factRow: { flexDirection: 'row', justifyContent: 'space-between', gap: scale(6) },
-  fact: { flex: 1 },
-  factLabel: { fontSize: fontScale(10), color: '#8B8FA6' },
+  // 2x2 so money and dates are not squeezed into a quarter of a 320pt card.
+  factRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: scale(12), rowGap: scale(12) },
+  fact: { flexBasis: '45%', flexGrow: 1, minWidth: 0 },
+  factLabel: { fontSize: fontScale(11), color: '#8B8FA6' },
   factValue: {
     marginTop: scale(4),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
@@ -2039,13 +2092,13 @@ const styles = StyleSheet.create({
   railLabelOn: { color: '#11123D' },
   railHint: {
     marginTop: scale(3),
-    fontSize: fontScale(9),
-    color: '#A6AABC',
+    fontSize: fontScale(10),
+    color: '#8B8FA6',
     textAlign: 'center',
   },
 
   tabBar: { paddingBottom: scale(10), gap: scale(6) },
-  tabBtn: { paddingHorizontal: scale(12), paddingVertical: scale(8) },
+  tabBtn: { minHeight: scale(44), justifyContent: 'center', paddingHorizontal: scale(12), paddingVertical: scale(8) },
   tabText: {
     fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
@@ -2083,9 +2136,9 @@ const styles = StyleSheet.create({
   },
   accordionSub: {
     marginTop: scale(3),
-    fontSize: fontScale(11),
-    lineHeight: fontScale(16),
-    color: '#8B8FA6',
+    fontSize: fontScale(12),
+    lineHeight: fontScale(17),
+    color: '#7A7F9C',
   },
   accordionBody: { paddingBottom: scale(13), paddingLeft: scale(49) },
   chevronOpen: { transform: [{ rotate: '180deg' }] },
@@ -2096,7 +2149,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(7),
   },
   badgePillText: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(10),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     textTransform: 'capitalize',
@@ -2117,12 +2170,12 @@ const styles = StyleSheet.create({
   groupTitle: {
     marginTop: scale(14),
     marginBottom: scale(4),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
   },
-  bodyText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#5A6072' },
+  bodyText: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#5A6072' },
   briefSection: { marginTop: scale(4) },
 
   kvRow: {
@@ -2133,10 +2186,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3F4F9',
     gap: scale(12),
   },
-  kvLabel: { flex: 1, fontSize: fontScale(12), color: '#8B8FA6' },
+  kvLabel: { flex: 1, minWidth: 0, fontSize: fontScale(13), color: '#7A7F9C' },
   kvValue: {
     flex: 1.2,
-    fontSize: fontScale(12),
+    minWidth: 0,
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '700',
     color: '#11123D',
@@ -2145,12 +2199,12 @@ const styles = StyleSheet.create({
 
   progressLabel: {
     marginTop: scale(12),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#11123D',
   },
-  progressCount: { marginTop: scale(3), fontSize: fontScale(11), color: '#8B8FA6' },
+  progressCount: { marginTop: scale(3), fontSize: fontScale(12), color: '#7A7F9C' },
   progressTrack: {
     marginTop: scale(9),
     height: scale(7),
@@ -2161,7 +2215,7 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: '#16A34A' },
   progressPct: {
     marginTop: scale(5),
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#12854A',
@@ -2185,6 +2239,7 @@ const styles = StyleSheet.create({
   },
   deliverTitle: {
     flex: 1,
+    minWidth: 0,
     fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
@@ -2206,10 +2261,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  uploadLabel: { marginTop: scale(11), fontSize: fontScale(10), color: '#9295AA' },
+  uploadLabel: { marginTop: scale(11), fontSize: fontScale(11), color: '#8B8FA6' },
   uploadDate: {
     marginTop: scale(2),
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#11123D',
@@ -2237,7 +2292,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F0F1F7',
   },
-  actionText: { flex: 1 },
+  actionText: { flex: 1, minWidth: 0 },
   actionLabel: {
     fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
@@ -2246,8 +2301,9 @@ const styles = StyleSheet.create({
   },
   actionCaption: {
     marginTop: scale(2),
-    fontSize: fontScale(11),
-    color: '#8A8FA8',
+    fontSize: fontScale(12),
+    lineHeight: fontScale(17),
+    color: '#7A7F9C',
   },
   actionChevron: { fontSize: fontScale(20), color: '#8A8FA8' },
   actionWarn: { color: '#C0392B' },
@@ -2273,8 +2329,8 @@ const styles = StyleSheet.create({
   },
   promptMessage: {
     marginTop: scale(6),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#5A6072',
   },
   promptInput: {
@@ -2285,7 +2341,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     padding: scale(12),
-    fontSize: fontScale(14),
+    fontSize: 16,
     color: '#15163F',
     textAlignVertical: 'top',
   },
@@ -2301,12 +2357,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: scale(7),
-    height: scale(42),
+    minHeight: scale(44),
     borderRadius: scale(10),
     backgroundColor: '#EEF0FE',
   },
   ghostBtnText: {
-    fontSize: fontScale(12),
+    flexShrink: 1,
+    fontSize: fontScale(13),
+    textAlign: 'center',
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#3D4FD8',
@@ -2338,16 +2396,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#3D4FD8',
   },
   tlLine: { flex: 1, width: scale(2), backgroundColor: '#E3E4EF' },
-  tlCopy: { flex: 1, paddingBottom: scale(18) },
+  tlCopy: { flex: 1, minWidth: 0, paddingBottom: scale(18) },
   tlTitle: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
     textTransform: 'capitalize',
   },
-  tlBody: { marginTop: scale(3), fontSize: fontScale(11), lineHeight: fontScale(16), color: '#5A6072' },
-  tlDate: { marginTop: scale(3), fontSize: fontScale(10), color: '#A0A3B5' },
+  tlBody: { marginTop: scale(3), fontSize: fontScale(13), lineHeight: fontScale(19), color: '#5A6072' },
+  tlDate: { marginTop: scale(3), fontSize: fontScale(11), color: '#8B8FA6' },
 
   escrowHead: {
     flexDirection: 'row',
@@ -2356,7 +2414,7 @@ const styles = StyleSheet.create({
   },
   securedPill: { flexDirection: 'row', alignItems: 'center', gap: scale(5) },
   securedText: {
-    fontSize: fontScale(11),
+    fontSize: fontScale(12),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
     color: '#16A34A',
@@ -2368,7 +2426,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#11123D',
   },
-  escrowHint: { marginTop: scale(3), fontSize: fontScale(11), color: '#8B8FA6' },
+  escrowHint: { marginTop: scale(3), fontSize: fontScale(13), color: '#7A7F9C' },
   escrowTrack: {
     marginTop: scale(14),
     height: scale(5),
@@ -2383,7 +2441,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  escrowStep: { fontSize: fontScale(10), color: '#8B8FA6' },
+  escrowStep: { fontSize: fontScale(11), color: '#7A7F9C' },
 
   txRow: {
     marginTop: scale(12),
@@ -2400,14 +2458,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   txTitle: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
   },
-  txDate: { marginTop: scale(2), fontSize: fontScale(10), color: '#9295AA' },
+  txDate: { marginTop: scale(2), fontSize: fontScale(12), color: '#7A7F9C' },
   txAmount: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#11123D',
@@ -2427,14 +2485,14 @@ const styles = StyleSheet.create({
 
   nextBtn: { marginBottom: scale(12) },
   shipCard: { marginTop: scale(12) },
-  errorText: { fontSize: fontScale(12), color: '#C0392B' },
+  errorText: { fontSize: fontScale(13), color: '#C0392B' },
   notice: {
     marginTop: scale(10),
     padding: scale(12),
     borderRadius: scale(12),
     backgroundColor: '#FFF4E0',
   },
-  noticeText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#8A5A00' },
+  noticeText: { fontSize: fontScale(13), lineHeight: fontScale(19), color: '#8A5A00' },
   revisionButtons: { marginTop: scale(12), gap: scale(8) },
   changeRow: { flexDirection: 'row', marginTop: scale(6) },
   changeTick: { width: scale(18), fontSize: fontScale(13), color: '#12854A' },

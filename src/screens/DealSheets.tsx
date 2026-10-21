@@ -4,11 +4,12 @@
  * ReviewModal -> POST /reviews once a deal is Paid - Complete).
  */
 import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, TextInput } from '../components/Text';
 import { Alert } from '../components/AppAlert';
 import { postReview } from '../api';
-import { fontScale, scale } from '../theme';
+import { CONTENT_MAX_WIDTH, fontScale, scale } from '../theme';
 
 // Same contacts as the website's HoverSideRail help dialog.
 export const SUPPORT_EMAIL = 'support@ugcad.io';
@@ -16,6 +17,7 @@ export const SUPPORT_PHONE = '+919000000000';
 export const SUPPORT_WHATSAPP = 'https://wa.me/919000000000';
 
 export function HelpSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
   const rows = [
     { label: 'Email', value: SUPPORT_EMAIL, url: `mailto:${SUPPORT_EMAIL}` },
     { label: 'Call', value: SUPPORT_PHONE, url: `tel:${SUPPORT_PHONE}` },
@@ -24,7 +26,7 @@ export function HelpSheet({ visible, onClose }: { visible: boolean; onClose: () 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(scale(28), insets.bottom + scale(12)) }]}>
           <Text style={styles.title}>Need help?</Text>
           <Text style={styles.sub}>Our team is here for you.</Text>
           {rows.map(row => (
@@ -61,6 +63,7 @@ type RateProps = {
 };
 
 export function RateBrandSheet({ visible, token, campaignId, businessId, brandName, onClose, onDone }: RateProps) {
+  const insets = useSafeAreaInsets();
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState('');
   const [busy, setBusy] = useState(false);
@@ -88,8 +91,9 @@ export function RateBrandSheet({ visible, token, campaignId, businessId, brandNa
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (!busy) onClose(); }}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+      {/* Lifts the sheet above the keyboard (padding works on Android too under edge-to-edge). */}
+      <KeyboardAvoidingView style={styles.backdrop} behavior="padding">
+        <View style={[styles.sheet, { paddingBottom: Math.max(scale(28), insets.bottom + scale(12)) }]}>
           <Text style={styles.title}>Rate the brand</Text>
           <Text style={styles.sub}>{`How was working with ${brandName || 'this brand'}?`}</Text>
           <View style={styles.stars}>
@@ -126,7 +130,7 @@ export function RateBrandSheet({ visible, token, campaignId, businessId, brandNa
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -134,6 +138,9 @@ export function RateBrandSheet({ visible, token, campaignId, businessId, brandNa
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,22,58,0.5)' },
   sheet: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     padding: scale(18),
     paddingBottom: scale(28),
     borderTopLeftRadius: scale(22),
@@ -141,7 +148,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   title: { fontSize: fontScale(17), fontFamily: 'ReadexPro-SemiBold', fontWeight: '800', color: '#15163A' },
-  sub: { marginTop: scale(4), marginBottom: scale(10), fontSize: fontScale(13), color: '#6B7094' },
+  sub: { marginTop: scale(4), marginBottom: scale(10), fontSize: fontScale(14), color: '#6B7094' },
   helpRow: {
     minHeight: scale(52),
     marginTop: scale(8),
@@ -151,9 +158,9 @@ const styles = StyleSheet.create({
     borderColor: '#EEF0F6',
     justifyContent: 'center',
   },
-  helpLabel: { fontSize: fontScale(12), color: '#9296BA' },
+  helpLabel: { fontSize: fontScale(13), color: '#7A7F9C' },
   helpValue: { fontSize: fontScale(15), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163A' },
-  note: { marginTop: scale(12), textAlign: 'center', fontSize: fontScale(12), color: '#9296BA' },
+  note: { marginTop: scale(12), textAlign: 'center', fontSize: fontScale(13), color: '#7A7F9C' },
   stars: { flexDirection: 'row', justifyContent: 'center', marginVertical: scale(8) },
   star: { width: scale(48), height: scale(48), alignItems: 'center', justifyContent: 'center' },
   starGlyph: { fontSize: fontScale(32), color: '#C7CBE0' },
@@ -168,9 +175,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#15163A',
   },
-  error: { marginTop: scale(8), fontSize: fontScale(13), color: '#C0392B' },
+  error: { marginTop: scale(8), fontSize: fontScale(14), color: '#C0392B' },
   actions: { flexDirection: 'row', gap: scale(8), marginTop: scale(14) },
-  btn: { flex: 1, minHeight: scale(48), marginTop: scale(4), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
+  btn: { flex: 1, minWidth: 0, minHeight: scale(48), marginTop: scale(4), borderRadius: scale(12), alignItems: 'center', justifyContent: 'center' },
   ghost: { backgroundColor: '#F1F2F9' },
   primary: { backgroundColor: '#4452F0' },
   ghostText: { color: '#4A5568', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700' },

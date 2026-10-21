@@ -118,7 +118,7 @@ function NotificationFeed({
   // useWindowDimensions, not Dimensions.get: the panel is sized from the
   // viewport height, and a one-off read would keep the old height after a
   // rotation or a split-screen resize.
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   // Belt and braces: if the provider reports no inset (which some Android
   // modal configurations do), fall back to the measured status-bar height so
   // the panel still clears the clock instead of sitting under it.
@@ -126,6 +126,13 @@ function NotificationFeed({
     insets.top,
     Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
   );
+  // Panel height cap, and the list's share of it (the header takes the rest).
+  // The list used to be a fixed 460, which in landscape was taller than the
+  // panel and clipped the last notifications.
+  const panelMax = height - topInset - insets.bottom - 24;
+  const listMax = Math.max(scale(120), Math.min(scale(460), panelMax - scale(50)));
+  // On a tablet the dropdown stays a 520pt panel centred under the header.
+  const sideGap = Math.max(scale(10), (width - 520) / 2);
 
   const load = useCallback(() => {
     setFailed('');
@@ -218,7 +225,9 @@ function NotificationFeed({
             // insets come off it to keep the bottom clear of the nav bar.
             {
               top: topInset + 8,
-              maxHeight: height - topInset - insets.bottom - 24,
+              left: sideGap,
+              right: sideGap,
+              maxHeight: panelMax,
               opacity: slide,
               transform: [
                 {
@@ -248,6 +257,7 @@ function NotificationFeed({
                   <TouchableOpacity
                     onPress={markAll}
                     accessibilityRole="button"
+                    hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }}
                   >
                     <Text style={styles.markAll}>Mark all read</Text>
                   </TouchableOpacity>
@@ -267,7 +277,7 @@ function NotificationFeed({
             {loading ? (
               // Matches the row below: a small status dot, then the title and
               // body lines, so the panel does not resize once items land.
-              <View style={styles.list}>
+              <View style={[styles.list, { maxHeight: listMax }]}>
                 {[0, 1, 2, 3, 4].map(index => (
                   <View key={index} style={styles.item}>
                     <SkeletonBlock width={8} height={8} radius={4} />
@@ -302,7 +312,7 @@ function NotificationFeed({
               </View>
             ) : (
               <ScrollView
-                style={styles.list}
+                style={[styles.list, { maxHeight: listMax }]}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
                   <RefreshControl
@@ -418,18 +428,18 @@ const styles = StyleSheet.create({
   },
   markAll: {
     color: '#C3C8E4',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
   },
   // "Mark all read" and the close cross share the right end of the header.
   headRight: { flexDirection: 'row', alignItems: 'center', gap: scale(12) },
-  closeBtn: { alignItems: 'center', justifyContent: 'center' },
+  closeBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   state: { padding: scale(28), alignItems: 'center', gap: scale(8) },
-  stateText: { color: '#777B96', fontSize: fontScale(13) },
+  stateText: { color: '#777B96', fontSize: fontScale(14), textAlign: 'center' },
   retry: {
     color: '#4A5BE0',
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
   },
@@ -445,11 +455,11 @@ const styles = StyleSheet.create({
   itemUnread: { backgroundColor: '#F5F6FF' },
   dot: { width: scale(8), height: scale(8), borderRadius: scale(8), marginTop: scale(5) },
   skeletonGap: { marginTop: scale(8) },
-  itemText: { flex: 1 },
+  itemText: { flex: 1, minWidth: 0 },
   itemTop: { flexDirection: 'row', alignItems: 'center', gap: scale(6) },
   itemTitle: {
     flex: 1,
-    fontSize: fontScale(13.5),
+    fontSize: fontScale(14),
     color: '#15163F',
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '600',
@@ -467,8 +477,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4A5BE0',
   },
-  itemBody: { fontSize: fontScale(12), color: '#777B96', marginTop: scale(3), lineHeight: fontScale(16) },
-  itemTime: { fontSize: fontScale(10.5), color: '#9BA0BC', marginTop: scale(5) },
+  itemBody: { fontSize: fontScale(13), color: '#777B96', marginTop: scale(3), lineHeight: fontScale(18) },
+  itemTime: { fontSize: fontScale(12), color: '#9BA0BC', marginTop: scale(5) },
 });
 
 export default NotificationFeed;

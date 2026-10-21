@@ -30,7 +30,7 @@ import {
   type AuthUser,
 } from '../api';
 import AppHeader from '../components/AppHeader';
-import { NAV_CLEARANCE, scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 import {
   MIN_WITHDRAWAL_AMOUNT,
   WITHDRAWAL_FILTERS,
@@ -53,6 +53,8 @@ type Props = {
   onMessages?: () => void;
   /** Opens the notification feed from the header bell. */
   onNotifications?: () => void;
+  /** Opens Browse Campaigns; the empty Money In state offers it as the next step. */
+  onBrowse?: () => void;
   /** Unread count for the header chat badge. */
   unread?: number;
 };
@@ -182,9 +184,15 @@ function StatTile({
   return (
     <View style={styles.statTile}>
       <View style={[styles.statGlyph, { backgroundColor: tint }]}>{glyph}</View>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statCaption}>{caption}</Text>
+      <Text style={styles.statLabel} numberOfLines={2}>
+        {label}
+      </Text>
+      <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>
+        {value}
+      </Text>
+      <Text style={styles.statCaption} numberOfLines={1}>
+        {caption}
+      </Text>
     </View>
   );
 }
@@ -259,6 +267,7 @@ function Earnings({
   onRequestWithdrawal,
   onMessages,
   onNotifications,
+  onBrowse,
   unread = 0,
 }: Props) {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -419,7 +428,11 @@ function Earnings({
           <View style={styles.balanceTop}>
             <View style={styles.flex}>
               <Text style={styles.balanceLabel}>Available Balance</Text>
-              <Text style={styles.balanceValue}>
+              <Text
+                style={styles.balanceValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
                 {fig(overview?.balance)}
               </Text>
               <Text style={styles.balanceHint}>Ready to withdraw</Text>
@@ -442,7 +455,11 @@ function Earnings({
 
             <View style={styles.pendingBlock}>
               <Text style={styles.pendingLabel}>Pending Release</Text>
-              <Text style={styles.pendingValue}>
+              <Text
+                style={styles.pendingValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
                 {fig(overview?.pending_release)}
               </Text>
               <Text style={styles.pendingHint}>In escrow</Text>
@@ -580,6 +597,15 @@ function Earnings({
                 <Text style={styles.retryText}>Clear filters</Text>
               </TouchableOpacity>
             ) : null}
+            {tab === 'in' && onBrowse ? (
+              <TouchableOpacity
+                style={styles.emptyAction}
+                onPress={onBrowse}
+                accessibilityRole="button"
+              >
+                <Text style={styles.retryText}>Browse campaigns</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : (
           <View style={styles.txList}>
@@ -639,7 +665,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: scale(24),
     borderTopRightRadius: scale(24),
   },
-  content: { padding: scale(14), paddingBottom: scale(28) + NAV_CLEARANCE },
+  // Centred column on tablets; phones are narrower than the cap so nothing changes.
+  content: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+    padding: scale(16),
+    paddingBottom: scale(24) + NAV_CLEARANCE,
+  },
   flex: { flex: 1 },
 
   balanceCard: {
@@ -662,7 +695,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
   },
-  balanceHint: { marginTop: scale(4), fontSize: fontScale(11), color: '#A7ADE0' },
+  balanceHint: { marginTop: scale(4), fontSize: fontScale(12), color: '#A7ADE0' },
   walletBadge: {
     width: scale(38),
     height: scale(38),
@@ -671,11 +704,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.16)',
   },
+  // Wraps at 320dp, where the button and the pending figure do not fit side by side.
   balanceBottom: {
-    marginTop: scale(18),
+    marginTop: scale(16),
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
+    gap: scale(12),
   },
   withdrawButton: {
     flexDirection: 'row',
@@ -692,8 +728,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#2C2FB4',
   },
-  pendingBlock: { alignItems: 'flex-end' },
-  pendingLabel: { fontSize: fontScale(11), color: '#B9BEEA' },
+  pendingBlock: { alignItems: 'flex-end', flexShrink: 1, minWidth: 0 },
+  pendingLabel: { fontSize: fontScale(12), color: '#B9BEEA' },
   pendingValue: {
     marginTop: scale(4),
     fontSize: fontScale(20),
@@ -701,11 +737,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
   },
-  pendingHint: { marginTop: scale(2), fontSize: fontScale(10), color: '#A7ADE0' },
+  pendingHint: { marginTop: scale(2), fontSize: fontScale(11), color: '#A7ADE0' },
 
-  statRow: { marginTop: scale(14), flexDirection: 'row', gap: scale(10) },
+  statRow: { marginTop: scale(16), flexDirection: 'row', gap: scale(8) },
   statTile: {
     flex: 1,
+    minWidth: 0,
     padding: scale(11),
     borderRadius: scale(14),
     backgroundColor: '#FFFFFF',
@@ -732,9 +769,11 @@ const styles = StyleSheet.create({
     color: '#12854A',
   },
   statCal: { fontSize: fontScale(13), color: '#C07A12' },
+  // Two lines reserved so the three values line up even when one label wraps.
   statLabel: {
-    marginTop: scale(9),
-    fontSize: fontScale(10),
+    marginTop: scale(8),
+    minHeight: fontScale(11) * 2.6,
+    fontSize: fontScale(11),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#7E829D',
@@ -746,10 +785,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#11123D',
   },
-  statCaption: { marginTop: scale(3), fontSize: fontScale(9), color: '#A0A3B5' },
+  statCaption: { marginTop: scale(4), fontSize: fontScale(11), color: '#A0A3B5' },
 
   tabs: {
-    marginTop: scale(16),
+    marginTop: scale(24),
     padding: scale(4),
     flexDirection: 'row',
     borderRadius: scale(12),
@@ -778,8 +817,8 @@ const styles = StyleSheet.create({
   },
 
   listHeader: {
-    marginTop: scale(18),
-    marginBottom: scale(10),
+    marginTop: scale(24),
+    marginBottom: scale(12),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -798,7 +837,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FDECEC',
   },
   errorText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#B3261E',
@@ -823,7 +862,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E9EBEF',
   },
-  feeNoteText: { fontSize: fontScale(12), lineHeight: fontScale(18), color: '#4A5568' },
+  feeNoteText: { fontSize: fontScale(14), lineHeight: fontScale(20), color: '#4A5568' },
   feeNoteBold: { fontFamily: 'Inter-Bold', fontWeight: '700', color: '#07074E' },
   filters: { marginTop: scale(12) },
   search: {
@@ -833,7 +872,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E7E8F4',
-    fontSize: fontScale(14),
+    // 16 stops the iOS zoom-on-focus.
+    fontSize: 16,
     color: '#181943',
   },
   filterChips: { gap: scale(8), paddingTop: scale(10) },
@@ -873,8 +913,8 @@ const styles = StyleSheet.create({
   },
   emptyBody: {
     marginTop: scale(6),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#8B8FA6',
     textAlign: 'center',
   },
@@ -904,16 +944,18 @@ const styles = StyleSheet.create({
   txDetailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: scale(12),
     paddingTop: scale(8),
   },
-  txDetailLabel: { fontSize: fontScale(11), color: '#8B8FA6' },
+  txDetailLabel: { flexShrink: 1, fontSize: fontScale(12), color: '#8B8FA6' },
   txDetailValue: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     fontFamily: 'Inter-SemiBold',
     fontWeight: '600',
     color: '#181943',
   },
   txLogo: {
+    flexShrink: 0,
     width: scale(40),
     height: scale(40),
     borderRadius: scale(20),
@@ -928,16 +970,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#5B5CF6',
   },
-  txCopy: { flex: 1, marginLeft: scale(11) },
+  txCopy: { flex: 1, minWidth: 0, marginLeft: scale(12) },
   txTitle: {
     fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#181943',
   },
-  txSubtitle: { marginTop: scale(2), fontSize: fontScale(11), color: '#8B8FA6' },
-  txDate: { marginTop: scale(3), fontSize: fontScale(10), color: '#A0A3B5' },
-  txRight: { alignItems: 'flex-end' },
+  txSubtitle: { marginTop: scale(2), fontSize: fontScale(12), color: '#8B8FA6' },
+  txDate: { marginTop: scale(3), fontSize: fontScale(11), color: '#A0A3B5' },
+  txRight: { alignItems: 'flex-end', flexShrink: 0, marginLeft: scale(8) },
   txAmount: {
     fontSize: fontScale(13),
     fontFamily: 'ReadexPro-SemiBold',
@@ -952,7 +994,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(6),
   },
   txBadgeText: {
-    fontSize: fontScale(9),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     textTransform: 'capitalize',

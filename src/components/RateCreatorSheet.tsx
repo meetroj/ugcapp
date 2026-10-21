@@ -9,12 +9,13 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
-  Platform,
+  ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { Text, TextInput } from './Text';
+import { errorMessage } from '../payoutRules';
 import { fontScale, scale } from '../theme';
 
 type Props = {
@@ -57,7 +58,7 @@ export default function RateCreatorSheet({
     try {
       await onSubmit(stars, review.trim());
     } catch (err: any) {
-      setError(String(err?.message || 'Could not submit your review.'));
+      setError(errorMessage(err, 'Could not submit your review.'));
     } finally {
       lock.current = false;
       setBusy(false);
@@ -69,14 +70,26 @@ export default function RateCreatorSheet({
       visible={visible}
       transparent
       animationType="fade"
+      statusBarTranslucent
+      supportedOrientations={['portrait', 'landscape']}
       onRequestClose={() => {
         if (!busy) onClose();
       }}
     >
       <KeyboardAvoidingView
         style={styles.backdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // 'padding' on both: Android is edge-to-edge, so `undefined` left the
+        // keyboard covering the review box.
+        behavior="padding"
       >
+        {/* Scrolls so the field and buttons stay reachable in landscape or
+            with the keyboard open on a short phone. */}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollBody}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
         <View style={styles.sheet}>
           <Text style={styles.title}>
             How was working with {creatorName || 'this creator'}?
@@ -137,6 +150,7 @@ export default function RateCreatorSheet({
             </TouchableOpacity>
           </View>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -146,6 +160,10 @@ const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(11,12,38,0.5)',
+  },
+  scroll: { flex: 1 },
+  scrollBody: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: scale(22),
@@ -162,11 +180,11 @@ const styles = StyleSheet.create({
     fontFamily: 'ReadexPro-Medium',
     color: '#25274C',
   },
-  body: { marginTop: scale(5), fontSize: fontScale(12), color: '#858AA3' },
-  stars: { flexDirection: 'row', marginTop: scale(10), marginBottom: scale(4) },
+  body: { marginTop: scale(5), fontSize: fontScale(14), color: '#858AA3' },
+  stars: { flexDirection: 'row', flexWrap: 'wrap', marginTop: scale(10), marginBottom: scale(4) },
   starHit: {
-    minWidth: scale(44),
-    minHeight: scale(44),
+    minWidth: 44,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -180,15 +198,16 @@ const styles = StyleSheet.create({
     borderColor: '#E2E4F0',
     backgroundColor: '#FBFBFE',
     padding: scale(12),
-    fontSize: fontScale(16),
+    // 16 keeps iOS from zooming the screen when the field gets focus.
+    fontSize: 16,
     color: '#25274C',
     textAlignVertical: 'top',
   },
-  error: { marginTop: scale(8), fontSize: fontScale(12), color: '#B3261E' },
+  error: { marginTop: scale(8), fontSize: fontScale(14), color: '#B3261E' },
   actions: { flexDirection: 'row', gap: scale(10), marginTop: scale(14) },
   skip: {
     flex: 1,
-    height: scale(46),
+    minHeight: 46,
     borderRadius: scale(12),
     borderWidth: 1,
     borderColor: '#D9DCF3',
@@ -196,14 +215,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   skipText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#5C6180',
   },
   send: {
     flex: 1.4,
-    height: scale(46),
+    minHeight: 46,
     borderRadius: scale(12),
     backgroundColor: '#3D4FD8',
     alignItems: 'center',
@@ -211,7 +230,7 @@ const styles = StyleSheet.create({
   },
   sendOff: { opacity: 0.6 },
   sendText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#FFFFFF',

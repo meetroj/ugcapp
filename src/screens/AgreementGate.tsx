@@ -22,7 +22,7 @@ import {
 } from 'react-native';
 import { Text } from '../components/Text';
 import { acceptAgreement, getAgreement } from '../api';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Section = { n: string; heading: string; body: string };
 type Agreement = {
@@ -62,32 +62,42 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function AgreementGate({
   token,
   onAccepted,
+  onLogout,
 }: {
   token: string;
   onAccepted: () => void;
+  /** Escape hatch when the agreement cannot load: the gate has no other exit. */
+  onLogout?: () => void;
 }) {
   const [data, setData] = useState<Agreement | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [atBottom, setAtBottom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  // Bumped by Retry to re-run the load.
+  const [attempt, setAttempt] = useState(0);
+  // The parent passes a fresh inline callback on every render; reading it
+  // through a ref keeps the load from re-running (and flashing) each time.
+  const acceptedRef = useRef(onAccepted);
+  acceptedRef.current = onAccepted;
   // Measured sizes of the scroll area, to spot an agreement short enough that
   // there is nothing to scroll (the scroll event would then never fire).
   const sizes = useRef({ content: 0, view: 0 });
 
   useEffect(() => {
     let live = true;
+    setError('');
     getAgreement(token)
       .then(res => {
         if (!live) return;
-        if (res?.accepted) onAccepted();
+        if (res?.accepted) acceptedRef.current();
         else setData(res as Agreement);
       })
       .catch(() => live && setError('Could not load the agreement. Check your connection.'));
     return () => {
       live = false;
     };
-  }, [token, onAccepted]);
+  }, [token, attempt]);
 
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -118,19 +128,40 @@ export default function AgreementGate({
     setError('');
     try {
       await acceptAgreement(token);
-      onAccepted();
+      acceptedRef.current();
     } catch {
       setError('Could not record your acceptance. Please try again.');
       setSubmitting(false);
     }
-  }, [token, onAccepted]);
+  }, [token]);
 
   if (!data) {
     return (
       <Shell>
-        <View style={[styles.card, { paddingVertical: scale(40) }]}>
-          <ActivityIndicator color="#4C5BF3" />
-          {!!error && <Text style={styles.err}>{error}</Text>}
+        <View style={[styles.card, styles.loadCard]}>
+          {error ? (
+            <>
+              <Text style={styles.errCentre}>{error}</Text>
+              <TouchableOpacity
+                style={[styles.agree, styles.loadBtn]}
+                onPress={() => setAttempt(n => n + 1)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.agreeText}>Retry</Text>
+              </TouchableOpacity>
+              {!!onLogout && (
+                <TouchableOpacity
+                  style={styles.logoutBtn}
+                  onPress={onLogout}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.logoutText}>Log out</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <ActivityIndicator color="#4C5BF3" />
+          )}
         </View>
       </Shell>
     );
@@ -177,7 +208,11 @@ export default function AgreementGate({
           ))}
 
           {!expanded && (
-            <TouchableOpacity style={styles.viewAll} onPress={viewAll}>
+            <TouchableOpacity
+              style={styles.viewAll}
+              onPress={viewAll}
+              accessibilityRole="button"
+            >
               <Text style={styles.viewAllText}>View full agreement ↓</Text>
             </TouchableOpacity>
           )}
@@ -230,8 +265,26 @@ const styles = StyleSheet.create({
     borderRadius: scale(20),
     overflow: 'hidden',
     maxHeight: '80%',
-    alignSelf: 'stretch',
+    // Capped and centred so a tablet gets a card, not a full-width sheet.
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
+  loadCard: {
+    paddingVertical: scale(32),
+    paddingHorizontal: scale(20),
+    alignItems: 'center',
+    gap: scale(14),
+  },
+  loadBtn: { alignSelf: 'stretch' },
+  logoutBtn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: scale(16) },
+  logoutText: {
+    fontSize: fontScale(14),
+    fontFamily: 'Inter-Bold',
+    fontWeight: '700',
+    color: '#5C6180',
+  },
+  errCentre: { color: '#C0392B', fontSize: fontScale(14), textAlign: 'center' },
   head: {
     paddingHorizontal: scale(20),
     paddingTop: scale(18),
@@ -245,12 +298,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#12142E',
   },
-  sub: { marginTop: scale(5), fontSize: fontScale(12), color: '#6B7280' },
+  sub: { marginTop: scale(5), fontSize: fontScale(13), color: '#6B7280' },
   body: { flexGrow: 0 },
   bodyContent: { padding: scale(20) },
   intro: {
-    fontSize: fontScale(12.5),
-    lineHeight: fontScale(20),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: '#374151',
     marginBottom: scale(16),
   },
@@ -263,12 +316,14 @@ const styles = StyleSheet.create({
     marginBottom: scale(5),
   },
   secBody: {
-    fontSize: fontScale(12.5),
-    lineHeight: fontScale(20),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(21),
     color: '#374151',
   },
   viewAll: {
     marginTop: scale(8),
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: scale(12),
     borderRadius: scale(11),
     borderWidth: 1,
@@ -277,7 +332,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   viewAllText: {
-    fontSize: fontScale(13),
+    fontSize: fontScale(14),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
     color: '#3B41A8',
@@ -285,13 +340,13 @@ const styles = StyleSheet.create({
   hint: {
     marginTop: scale(14),
     textAlign: 'center',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#9AA0B4',
   },
   err: {
     paddingHorizontal: scale(20),
     color: '#C0392B',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
   },
   footer: {
     paddingHorizontal: scale(20),
@@ -301,6 +356,7 @@ const styles = StyleSheet.create({
   },
   agree: {
     height: scale(46),
+    minHeight: 44,
     borderRadius: scale(12),
     backgroundColor: '#4C5BF3',
     alignItems: 'center',

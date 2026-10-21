@@ -29,7 +29,7 @@ import {
   stripBrandOnlyLines,
   type BidTabKey,
 } from '../briefs';
-import { scale, fontScale } from '../theme';
+import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Props = {
   token: string;
@@ -87,18 +87,21 @@ function MyBids({ token, onBack, onMessages, unread, onNavigate, onOpenThread }:
   const [detailLoading, setDetailLoading] = useState(false);
   const mounted = useRef(false);
   const requestId = useRef(0);
+  // True once a load has succeeded: a failed 10 s background poll then keeps the list instead of flashing an error.
+  const loaded = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (quiet = false) => {
     const current = ++requestId.current;
     const isCurrent = () => mounted.current && current === requestId.current;
     try {
       const fresh = await getMyBids(token);
       if (isCurrent()) {
+        loaded.current = true;
         setError('');
         setItems(fresh);
       }
     } catch (e) {
-      if (isCurrent()) setError(loadErrorText(e, 'your bids'));
+      if (isCurrent() && !(quiet && loaded.current)) setError(loadErrorText(e, 'your bids'));
     } finally {
       if (isCurrent()) {
         setLoading(false);
@@ -111,10 +114,10 @@ function MyBids({ token, onBack, onMessages, unread, onNavigate, onOpenThread }:
     mounted.current = true;
     load();
     const interval = setInterval(() => {
-      if (AppState.currentState === 'active') load();
+      if (AppState.currentState === 'active') load(true);
     }, 10000);
     const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active') load();
+      if (state === 'active') load(true);
     });
     return () => {
       mounted.current = false;
@@ -192,6 +195,7 @@ function MyBids({ token, onBack, onMessages, unread, onNavigate, onOpenThread }:
         unread={unread}
       />
       <View style={styles.sheet}>
+        <View style={styles.column}>
         {loading ? (
           <View style={styles.content}>
             <SkeletonList count={4} lines={2} />
@@ -325,6 +329,7 @@ function MyBids({ token, onBack, onMessages, unread, onNavigate, onOpenThread }:
             </ScrollView>
           </>
         )}
+        </View>
       </View>
 
       <BottomSheet
@@ -429,6 +434,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: scale(22),
     overflow: 'hidden',
   },
+  // Tablet: a centred, readable column (no-op on phones).
+  column: { flex: 1, width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   tabScroll: { flexGrow: 0 },
   tabs: { paddingHorizontal: scale(14), paddingTop: scale(12), gap: scale(8) },
   tab: {
@@ -454,7 +461,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: scale(10),
   },
-  error: { flex: 1, fontSize: fontScale(12), fontFamily: 'Inter-SemiBold', fontWeight: '600', color: '#B03030' },
+  error: { flex: 1, minWidth: 0, fontSize: fontScale(13), fontFamily: 'Inter-SemiBold', fontWeight: '600', color: '#B03030' },
   retry: { minHeight: scale(44), minWidth: scale(60), alignItems: 'center', justifyContent: 'center' },
   retryText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#B03030' },
   empty: { marginTop: scale(50), paddingHorizontal: scale(28), alignItems: 'center' },
@@ -467,8 +474,8 @@ const styles = StyleSheet.create({
   },
   emptyBody: {
     marginTop: scale(8),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(18),
+    fontSize: fontScale(14),
+    lineHeight: fontScale(20),
     color: '#7E829D',
     textAlign: 'center',
   },
@@ -493,20 +500,22 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   title: {
     flex: 1,
+    minWidth: 0,
     fontSize: fontScale(14),
     fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
     color: '#181943',
   },
-  brand: { marginTop: scale(4), fontSize: fontScale(12), color: '#7E829D' },
+  brand: { marginTop: scale(4), fontSize: fontScale(13), color: '#7E829D' },
   chip: {
+    flexShrink: 0,
     marginLeft: scale(9),
     paddingHorizontal: scale(9),
     paddingVertical: scale(4),
     borderRadius: scale(9),
   },
   chipText: {
-    fontSize: fontScale(10),
+    fontSize: fontScale(11),
     fontFamily: 'Inter-ExtraBold',
     fontWeight: '800',
   },
@@ -519,7 +528,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   metaRight: { alignItems: 'flex-end' },
-  metaLabel: { fontSize: fontScale(10), color: '#A0A3B5' },
+  metaLabel: { fontSize: fontScale(11), color: '#8A8EA6' },
   metaValue: {
     marginTop: scale(3),
     fontSize: fontScale(13),
@@ -571,7 +580,7 @@ const styles = StyleSheet.create({
     borderRadius: scale(14),
     overflow: 'hidden',
     backgroundColor: '#F1F3FA',
-    fontSize: fontScale(12),
+    fontSize: fontScale(13),
     color: '#585C7E',
   },
 });

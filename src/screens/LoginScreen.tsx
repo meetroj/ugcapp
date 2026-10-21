@@ -1,3 +1,4 @@
+import { Alert } from '../components/AppAlert';
 /** "Welcome back" screen: email + password, Google alternative. */
 import React, { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
@@ -47,7 +48,12 @@ export function LoginForm({
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
-    if (!email.trim() || !password || loading) return;
+    if (loading) return;
+    // Saying nothing on an empty form read as a dead button.
+    if (!email.trim() || !password) {
+      Alert.alert('Enter your details', 'Enter your email and password to log in.');
+      return;
+    }
     // No length rule here: the website only checks length at sign-up, and an
     // older account may have a shorter password that must still be able to log in.
     setLoading(true);
@@ -77,6 +83,8 @@ export function LoginForm({
         textContentType="password"
         value={password}
         onChangeText={setPassword}
+        // Enter on the keyboard logs in, like pressing Enter on the website.
+        onSubmitEditing={submit}
       />
 
       {/* Sits above the button, where it is found when the password has just
@@ -87,6 +95,7 @@ export function LoginForm({
           <TouchableOpacity
             onPress={onForgotPassword}
             accessibilityRole="button"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
           >
             <Text style={styles.forgotText}>Forgot password?</Text>
           </TouchableOpacity>
@@ -118,7 +127,7 @@ export function LoginForm({
 const styles = StyleSheet.create({
   forgotRow: { alignItems: 'flex-end', marginBottom: scale(14) },
   forgotText: {
-    fontSize: fontScale(12),
+    fontSize: fontScale(14),
     color: colors.brand,
     fontFamily: 'Inter-Bold',
     fontWeight: '700',

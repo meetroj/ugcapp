@@ -137,6 +137,20 @@ test('draft and rejected cards can be deleted after confirming, others cannot', 
   alert.mockRestore();
 });
 
+test('deleting a rejected brief is worded as a brief, not a draft', async () => {
+  (getCampaigns as jest.Mock).mockResolvedValue(campaigns);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render();
+  const trash = tree.root.findAllByType(TouchableOpacity).filter(
+    (node: any) => node.props.accessibilityLabel === 'Delete rejected brief Rejected brief',
+  )[0];
+  await act(async () => { trash.props.onPress(); });
+  const [title, , buttons] = alert.mock.calls[0];
+  expect(title).toBe('Delete this brief?');
+  expect(buttons![1].text).toBe('Delete brief');
+  alert.mockRestore();
+});
+
 test('a failed delete says why and keeps the card', async () => {
   (getCampaigns as jest.Mock).mockResolvedValue(campaigns);
   const offline = Object.assign(new Error('Offline'), { name: 'NetworkError' });

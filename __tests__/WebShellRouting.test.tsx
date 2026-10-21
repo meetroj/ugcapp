@@ -148,8 +148,13 @@ describe('normalizePath', () => {
   });
 
   test('deep-link queries survive', () => {
+    // A brand has no deals hub, so its '/my-deals' links go to the campaign
+    // list (see normalizePath); only a creator keeps the tab query.
+    expect(normalizePath('/my-deals?tab=requested', 'creator')).toBe('/my-deals?tab=requested');
+    expect(normalizePath('/my-deals?tab=requested', 'business')).toBe(
+      '/dashboard/business/all-campaigns',
+    );
     for (const path of [
-      '/my-deals?tab=requested',
       '/browse-briefs?open=c1&q=shoes',
       '/dashboard/business/wallet?view=history',
       '/dashboard/business/post-brief?draft=d1',
