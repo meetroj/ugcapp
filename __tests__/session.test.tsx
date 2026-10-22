@@ -215,24 +215,25 @@ describe('hardware back', () => {
     });
   }
 
-  test('steps back through native screens instead of closing the app', () => {
+  test('Back from a tab goes Home, not back through every tab visited', () => {
     const {tree, back} = mountShell();
 
     tapTab(tree, 'Campaigns');
     tapTab(tree, 'Earnings');
 
-    // Two pushes, so two back presses are handled by us...
+    // Tabs are top-level: one Back returns Home...
     let first!: boolean;
     ReactTestRenderer.act(() => {
       first = back();
     });
     expect(first).toBe(true);
 
+    // ...and from Home the next Back lets Android exit.
     let second!: boolean;
     ReactTestRenderer.act(() => {
       second = back();
     });
-    expect(second).toBe(true);
+    expect(second).toBe(false);
   });
 
   test('returns false at the root so Android can exit', () => {

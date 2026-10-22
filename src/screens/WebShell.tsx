@@ -599,6 +599,19 @@ function WebShell({
     [session.role, media.open],
   );
 
+  /**
+   * Bottom-bar tabs are top-level destinations, not steps: switching tabs starts a
+   * fresh history, so phone Back from a tab goes Home (then exits) instead of
+   * walking back through every tab visited.
+   */
+  const switchTab = useCallback(
+    (target: string) => {
+      navigateTo(target);
+      stackRef.current = [];
+    },
+    [navigateTo],
+  );
+
   /** Opens a chat thread, remembering the name the list already knows. */
   const openThread = useCallback(
     (userId: string, name: string) => {
@@ -833,6 +846,7 @@ function WebShell({
           openId={queryParam(currentPath, 'open')}
           initialQuery={queryParam(currentPath, 'q')}
           onNavigate={navigateTo}
+          registerBack={registerBack}
           token={token}
           session={session}
           unread={unread}
@@ -1221,7 +1235,7 @@ function WebShell({
         <AppBottomNav
           role={session.role as 'creator' | 'business'}
           currentPath={purePath}
-          onNavigate={navigateTo}
+          onNavigate={switchTab}
         />
       )}
     </SafeAreaView>
