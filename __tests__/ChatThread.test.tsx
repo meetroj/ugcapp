@@ -357,6 +357,10 @@ test('View details on a private brief opens its details in the chat, not another
   expect(text).toContain('Description');
   // The whole brief, grouped like the full brief page: product, deliverables, usage rights, timeline.
   for (const part of ['Product', 'Deliverables', 'Usage rights', 'Timeline', 'Women 20-35', '3 months']) expect(text).toContain(part);
+  // Headings use the heaviest font so they read as bold on Android too.
+  const { StyleSheet } = require('react-native');
+  const heading = tree.root.findAll((n: any) => n.props.children === 'Deliverables' && n.props.style)[0];
+  expect(StyleSheet.flatten(heading.props.style)).toMatchObject({ fontFamily: 'Inter-ExtraBold', fontWeight: '800' });
 });
 
 test('View details takes a creator to the deal room', async () => {

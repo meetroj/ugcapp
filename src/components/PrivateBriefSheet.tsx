@@ -115,11 +115,13 @@ const styles = StyleSheet.create({
   value: { flex: 1, textAlign: 'right', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163F' },
   section: { marginTop: scale(20) },
   // Section headings are bold and dark so each group reads as its own block.
+  // Inter-ExtraBold is the heaviest font we ship (ReadexPro stops at SemiBold, and Android
+  // ignores fontWeight on a custom family), so this is what makes the headings read as bold.
   heading: {
-    fontSize: fontScale(16),
-    fontFamily: 'ReadexPro-SemiBold',
-    fontWeight: '900',
-    color: '#15163F',
+    fontSize: fontScale(17),
+    fontFamily: 'Inter-ExtraBold',
+    fontWeight: '800',
+    color: '#0E0F2E',
     marginBottom: scale(10),
   },
   body: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#4A4E6B' },
