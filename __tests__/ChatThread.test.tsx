@@ -339,7 +339,7 @@ test('after accepting an invitation the creator can ask for the brief', async ()
 
 test('View details on a private brief opens its details in the chat, not another deal', async () => {
   (getConversations as jest.Mock).mockResolvedValue([{ user_id: 'other-1', role: 'business', associated_campaign_id: 'RUNNING-DEAL' }]);
-  (getCampaign as jest.Mock).mockResolvedValue({ id: 'camp-1', title: 'Love is in the air tee', brand_name: 'Sleek soul', per_video_budget: 2000, free_revisions: 2, brief_text: 'Show the tee.' });
+  (getCampaign as jest.Mock).mockResolvedValue({ id: 'camp-1', title: 'Love is in the air tee', brand_name: 'Sleek soul', per_video_budget: 2000, free_revisions: 2, brief_text: 'Show the tee.', product_name: 'Tee', target_audience: 'Women 20-35', usage_platforms: ['Instagram'], rights_duration: '3 months', deliverable_items: [{ type: 'Reel', quantity: 1, duration: '30 seconds', aspect_ratios: ['9:16'], raw_required: true }], revision_limit: 2 });
   (getMessages as jest.Mock).mockResolvedValue([{
     id: 'inv', item_type: 'action_card', type: 'private_invitation', sender_id: 'other-1', status: 'open', deal_id: 'camp-1',
     available_actions: ['accept', 'reject', 'counter'], fields: { campaign_name: 'Love is in the air tee', deliverable_summary: '1 x Reel', budget: 2000 },
@@ -354,6 +354,9 @@ test('View details on a private brief opens its details in the chat, not another
   expect(text).toContain('Sleek soul');
   expect(text).toContain('₹2,000');
   expect(text).toContain('Show the tee.');
+  expect(text).toContain('Description');
+  // The whole brief, grouped like the full brief page: product, deliverables, usage rights, timeline.
+  for (const part of ['Product', 'Deliverables', 'Usage rights', 'Timeline', 'Women 20-35', '3 months']) expect(text).toContain(part);
 });
 
 test('View details takes a creator to the deal room', async () => {

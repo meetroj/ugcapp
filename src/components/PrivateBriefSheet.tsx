@@ -8,7 +8,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import BottomSheet from './BottomSheet';
 import { Text } from './Text';
 import { getCampaign } from '../api';
-import { stripBrandOnlyLines } from '../briefs';
+import { briefSections, stripBrandOnlyLines } from '../briefs';
 import { fontScale, scale } from '../theme';
 
 type Row = [string, string];
@@ -23,22 +23,15 @@ const day = (value: unknown) => {
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
-/** Label / value pairs for the sheet; blank values are dropped. Exported for tests. */
-export function briefRows(card: Record<string, any>, campaign: Record<string, any> | null): Row[] {
+/** The headline rows at the top of the sheet; blank values are dropped. Exported for tests. */
+export function summaryRows(card: Record<string, any>, campaign: Record<string, any> | null): Row[] {
   const f = card.fields || {};
   const c = campaign || {};
-  const items: any[] = Array.isArray(c.deliverable_items) ? c.deliverable_items : [];
-  const deliverables = items.length
-    ? items.map(i => `${i.quantity || 1} x ${i.type || 'Video'}${i.duration ? ` (${i.duration})` : ''}`).join(', ')
-    : f.deliverable_summary;
   const rows: Row[] = [
     ['Brand', c.brand_name || c.business_name || card.sender_nickname],
     ['Price', inr(f.budget || c.per_video_budget || c.budget_max || c.budget_min)],
-    ['Deliverables', deliverables],
-    ['Format', [c.aspect_ratio, c.duration_seconds ? `${c.duration_seconds}s` : ''].filter(Boolean).join(' · ')],
-    ['Raw video due', day(c.draft_delivery_by)],
-    ['Final delivery', day(c.deadline || c.due_date)],
-    ['Free revisions', c.free_revisions != null ? String(c.free_revisions) : ''],
+    // Before the full brief has loaded (or if it cannot), the card's own summary stands in.
+    ...(campaign ? [] : [['Deliverables', f.deliverable_summary] as Row]),
     ['Respond by', day(f.response_deadline || f.expires_at)],
   ].map(([k, v]) => [k, String(v ?? '').trim()] as Row);
   return rows.filter(([, v]) => !!v);
@@ -74,25 +67,35 @@ export default function PrivateBriefSheet({
 
   const f = card?.fields || {};
   const title = String(campaign?.title || f.campaign_name || 'Private brief');
-  const brief = stripBrandOnlyLines(
-    [campaign?.campaign_hook, campaign?.brief_text, campaign?.key_message].filter(Boolean).join('\n\n'),
-  ).trim();
+  const description = stripBrandOnlyLines(String(campaign?.brief_text || '')).trim();
+  const sections = campaign ? briefSections(campaign) : [];
 
   return (
     <BottomSheet visible={visible && !!card} title={title} onClose={onClose}>
       {loading && <ActivityIndicator style={styles.spinner} color="#4C4DD6" />}
-      {card && briefRows(card, campaign).map(([label, value]) => (
+      {card && summaryRows(card, campaign).map(([label, value]) => (
         <View key={label} style={styles.row} testID={`brief-row-${label}`}>
           <Text style={styles.label}>{label}</Text>
           <Text style={styles.value}>{value}</Text>
         </View>
       ))}
-      {!!brief && (
-        <View style={styles.block}>
-          <Text style={styles.label}>Brief</Text>
-          <Text style={styles.body}>{brief}</Text>
+      {!!description && (
+        <View style={styles.section}>
+          <Text style={styles.heading}>Description</Text>
+          <Text style={styles.body}>{description}</Text>
         </View>
       )}
+      {sections.map(section => (
+        <View key={section.title} style={styles.section} testID={`brief-section-${section.title}`}>
+          <Text style={styles.heading}>{section.title}</Text>
+          {section.rows.map(([label, value]) => (
+            <View key={label} style={styles.dataRow}>
+              <Text style={styles.dataKey}>{label}</Text>
+              <Text style={styles.dataValue}>{value}</Text>
+            </View>
+          ))}
+        </View>
+      ))}
       <Text style={styles.hint}>Use Accept or Decline on the card to answer this brief.</Text>
     </BottomSheet>
   );
@@ -110,7 +113,18 @@ const styles = StyleSheet.create({
   },
   label: { fontSize: fontScale(12.5), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#8A8FAA' },
   value: { flex: 1, textAlign: 'right', fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#15163F' },
-  block: { paddingVertical: scale(12) },
-  body: { marginTop: scale(6), fontSize: fontScale(14), lineHeight: fontScale(21), color: '#4A4E6B' },
-  hint: { marginTop: scale(10), fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#8A8FAA' },
+  section: { marginTop: scale(20) },
+  // Section headings are bold and dark so each group reads as its own block.
+  heading: {
+    fontSize: fontScale(16),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '900',
+    color: '#15163F',
+    marginBottom: scale(10),
+  },
+  body: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#4A4E6B' },
+  dataRow: { flexDirection: 'row', marginBottom: scale(10) },
+  dataKey: { width: scale(118), flexShrink: 0, fontSize: fontScale(13), color: '#858AA3' },
+  dataValue: { flex: 1, minWidth: 0, fontSize: fontScale(14), lineHeight: fontScale(20), color: '#262847' },
+  hint: { marginTop: scale(18), fontSize: fontScale(12.5), lineHeight: fontScale(18), color: '#8A8FAA' },
 });
