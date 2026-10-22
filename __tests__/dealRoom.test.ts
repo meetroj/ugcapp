@@ -296,3 +296,8 @@ describe('full brief rows', () => {
     expect(byLabel.Tone).toBeUndefined();
   });
 });
+
+test('a private brief the creator has not answered yet offers no Submit button', () => {
+  const awaiting = { current_state: 'Awaiting Creator Response', primary_next_action: 'Accept or decline the brief', can_submit_content: false };
+  expect(primaryAction(awaiting)).toMatchObject({ type: 'passive', disabled: true, label: 'Accept or decline the brief' });
+});
