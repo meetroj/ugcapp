@@ -297,7 +297,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 3LCA4AA483;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = ugcapp/Info.plist;
@@ -306,7 +306,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.12;
+				MARKETING_VERSION = 1.2.15;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -330,7 +330,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 3LCA4AA483;
 				INFOPLIST_FILE = ugcapp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -338,7 +338,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.12;
+				MARKETING_VERSION = 1.2.15;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",

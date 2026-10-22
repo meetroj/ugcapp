@@ -250,10 +250,13 @@ export default function BrowseCampaigns({
   onNavigate,
   openId,
   initialQuery = '',
+  registerBack,
 }: {
   token: string;
   session: AuthUser;
   onNavigate?: (path: string) => void;
+  /** Lets WebShell's hardware Back close an open campaign before leaving this tab. */
+  registerBack?: (fn: (() => boolean) | null) => void;
   /** Opens the notification feed from the header bell. */
   onNotifications?: () => void;
   /** Opens Messages from the header chat icon. */
@@ -272,6 +275,14 @@ export default function BrowseCampaigns({
   // The creator's own bids by campaign id, so a brief already bid on says so.
   const [bids, setBids] = useState<Record<string, OwnBid>>({});
   const [selected, setSelected] = useState<Campaign | null>(null);
+  useEffect(() => {
+    if (!registerBack || !selected) return undefined;
+    registerBack(() => {
+      setSelected(null);
+      return true;
+    });
+    return () => registerBack(null);
+  }, [registerBack, selected]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // Why the list failed to load ('' = fine); keeps "nothing matches" apart from "could not load".
