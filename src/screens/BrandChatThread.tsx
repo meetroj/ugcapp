@@ -17,6 +17,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  useWindowDimensions,
   StyleSheet,
   TouchableOpacity,
   View,
@@ -507,6 +508,16 @@ function BrandChatThread({
   // The "Photo or video / PDF" chooser opened by the clip button.
   const [attachMenu, setAttachMenu] = useState(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  // The offer form: where each field sits, so a focused one can be scrolled above the keyboard.
+  const cardScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const cardFieldY = useRef<Record<string, number>>({});
+  const { height: windowHeight } = useWindowDimensions();
+  const focusCardField = useCallback((key: string) => {
+    // After the keyboard has finished opening (the sheet re-sizes while it does).
+    setTimeout(() => {
+      cardScrollRef.current?.scrollTo({ y: Math.max(0, (cardFieldY.current[key] ?? 0) - scale(8)), animated: true });
+    }, 250);
+  }, []);
   const insets = useSafeAreaInsets();
 
   /**
@@ -1442,15 +1453,15 @@ function BrandChatThread({
         onRequestClose={closeCard}
       >
         <View style={styles.sheetBackdrop}>
+          {/* The dock is what the keyboard pushes up; the sheet inside keeps its own height
+              (shrinking only if it must) instead of being squeezed by the keyboard padding. */}
+          <KeyboardAvoidingView behavior="padding" style={styles.sheetDock}>
           <TouchableOpacity
             style={styles.sheetDismiss}
             onPress={closeCard}
             accessibilityLabel="Close"
           />
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.sheetWrap}
-          >
+          <View style={[styles.sheetWrap, { maxHeight: windowHeight * 0.88 }]}>
             <View
               style={[
                 styles.sheet,
@@ -1473,6 +1484,8 @@ function BrandChatThread({
               </View>
 
               <ScrollView
+                ref={cardScrollRef}
+                style={styles.sheetScroll}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.sheetBody}
@@ -1483,7 +1496,13 @@ function BrandChatThread({
                     cardType && ACTION_CARD_LIMITS[cardType]?.[field.key];
 
                   return (
-                    <View key={field.key} style={styles.formField}>
+                    <View
+                      key={field.key}
+                      style={styles.formField}
+                      onLayout={e => {
+                        cardFieldY.current[field.key] = e.nativeEvent.layout.y;
+                      }}
+                    >
                       <View style={styles.formLabelRow}>
                         <Text style={styles.formLabel}>{field.label}</Text>
                         {/* Escalations need 100–500 characters; show the count
@@ -1547,6 +1566,7 @@ function BrandChatThread({
                                 [field.key]: maskDate(next),
                               }))
                             }
+                            onFocus={() => focusCardField(field.key)}
                             placeholder="DD-MM-YYYY"
                             placeholderTextColor="#A9ADC2"
                             keyboardType="number-pad"
@@ -1587,6 +1607,7 @@ function BrandChatThread({
                               [field.key]: next,
                             }))
                           }
+                          onFocus={() => focusCardField(field.key)}
                           placeholder={field.label}
                           placeholderTextColor="#A9ADC2"
                           keyboardType={
@@ -1619,6 +1640,7 @@ function BrandChatThread({
                 </TouchableOpacity>
               </ScrollView>
             </View>
+          </View>
           </KeyboardAvoidingView>
         </View>
       </Modal>
@@ -2022,10 +2044,13 @@ const styles = StyleSheet.create({
   /* ---- card composer sheet ---- */
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(14,19,48,0.42)' },
   // Tapping the dimmed area above the sheet closes it.
+  sheetDock: { flex: 1, justifyContent: 'flex-end' },
   sheetDismiss: { flex: 1 },
   // A tablet keeps the card sheet a phone-width column, centred.
-  sheetWrap: { maxHeight: '88%', width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
+  // flexShrink: the sheet only gives up height when the keyboard leaves less room than it needs.
+  sheetWrap: { flexShrink: 1, width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   sheet: {
+    flexShrink: 1,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: scale(22),
     borderTopRightRadius: scale(22),
@@ -2057,6 +2082,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  sheetScroll: { flexShrink: 1 },
   sheetBody: { paddingTop: scale(6), paddingBottom: scale(10) },
 
   formField: { marginBottom: scale(13) },

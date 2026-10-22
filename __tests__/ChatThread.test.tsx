@@ -153,6 +153,22 @@ test('countering sends the offer deal_id, a real date, and closes the original',
   expect(respondToActionCard).toHaveBeenCalledWith('t', 'card-1', 'counter');
 });
 
+test('the counter form keeps its size with the keyboard open and scrolls a focused field into view', async () => {
+  (getMessages as jest.Mock).mockResolvedValue([offer]);
+  const { tree } = await mount(brand, { title: 'Asha' });
+  await press(byText(tree, 'Counter'));
+  const { KeyboardAvoidingView, StyleSheet } = require('react-native');
+  // The keyboard pushes the whole dock up ('padding' on both platforms, not 'height', which
+  // squeezed the sheet to a sliver); the sheet itself only shrinks if it must.
+  const docks = tree.root.findAllByType(KeyboardAvoidingView).filter((n: any) => StyleSheet.flatten(n.props.style)?.justifyContent === 'flex-end');
+  expect(docks.length).toBeGreaterThan(0);
+  expect(docks[docks.length - 1].props.behavior).toBe('padding');
+  // Every typed field reports focus so the sheet can scroll it above the keyboard.
+  for (const placeholder of ['Reason', 'DD-MM-YYYY']) {
+    expect(typeof input(tree, placeholder).props.onFocus).toBe('function');
+  }
+});
+
 test('a counter without a delivery date is refused before sending', async () => {
   const { tree } = await mount(creator, { title: 'Levis' });
   await press(byLabel(tree, 'Send a Counter Offer'));
