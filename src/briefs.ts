@@ -226,7 +226,7 @@ export const DEFAULT_FILTERS: BrowseFilters = {
   search: '',
   budget: 'any',
   delivery: 'any',
-  sort: 'recommended',
+  sort: 'newest', // the latest briefs on top
 };
 
 /** How many of budget / delivery are narrowing the list (search is shown separately). */

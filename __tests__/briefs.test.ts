@@ -67,7 +67,7 @@ describe('browse filters', () => {
   const ids = (rows: any[]) => rows.map(r => r.id);
 
   test('budget buckets use the website boundaries', () => {
-    const by = (budget: any) => ids(filterBriefs(list, { ...DEFAULT_FILTERS, budget }));
+    const by = (budget: any) => ids(filterBriefs(list, { ...DEFAULT_FILTERS, sort: 'recommended', budget }));
     expect(by('0-2000')).toEqual(['1']);
     expect(by('2000-5000')).toEqual(['2', '3']);
     expect(by('5000-10000')).toEqual(['5']);
@@ -75,7 +75,7 @@ describe('browse filters', () => {
   });
 
   test('delivery buckets keep briefs that state no deadline', () => {
-    const by = (delivery: any) => ids(filterBriefs(list, { ...DEFAULT_FILTERS, delivery }));
+    const by = (delivery: any) => ids(filterBriefs(list, { ...DEFAULT_FILTERS, sort: 'recommended', delivery }));
     expect(by('3')).toEqual(['1', '5']);
     expect(by('5')).toEqual(['1', '2', '5']);
     expect(by('7')).toEqual(['1', '2', '3', '5']);
@@ -89,7 +89,9 @@ describe('browse filters', () => {
   });
 
   test('sorts: recommended keeps server order, highest payout and newest reorder', () => {
-    expect(ids(filterBriefs(list, DEFAULT_FILTERS))).toEqual(['1', '2', '3', '4', '5']);
+    expect(ids(filterBriefs(list, { ...DEFAULT_FILTERS, sort: 'recommended' }))).toEqual(['1', '2', '3', '4', '5']);
+    // The default view is newest first.
+    expect(DEFAULT_FILTERS.sort).toBe('newest');
     expect(ids(filterBriefs(list, { ...DEFAULT_FILTERS, sort: 'highest' }))).toEqual(['4', '5', '3', '2', '1']);
     expect(ids(filterBriefs(list, { ...DEFAULT_FILTERS, sort: 'newest' })).slice(0, 3)).toEqual(['2', '3', '1']);
   });
