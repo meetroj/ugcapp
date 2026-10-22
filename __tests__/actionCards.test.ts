@@ -283,6 +283,10 @@ test('Open the deal goes to the right screen for each role', () => {
   expect(cardDealPath('creator', { deal_id: 'DEAL-1234' })).toBe('/my-deals/DEAL-1234');
   expect(cardDealPath('creator', { campaign_id: 'c-1' })).toBe('/my-deals/c-1');
   expect(cardDealPath('creator', {}, 'c-9')).toBe('/my-deals/c-9');
+  // An unanswered offer / private brief never borrows the thread's other, running deal.
+  expect(cardDealPath('creator', { type: 'private_invitation' }, 'c-9')).toBeNull();
+  expect(cardDealPath('creator', { type: 'counter_offer' }, 'c-9')).toBeNull();
+  expect(cardDealPath('creator', { type: 'private_invitation', deal_id: 'c-5' }, 'c-9')).toBe('/my-deals/c-5');
   expect(cardDealPath('creator', {})).toBeNull();
   // Brand: the campaign screen needs a campaign id, never a DEAL- code.
   expect(cardDealPath('business', { deal_id: 'c-2' })).toBe('/campaigns/c-2');

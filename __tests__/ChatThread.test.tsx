@@ -335,10 +335,10 @@ test('after accepting an invitation the creator can ask for the brief', async ()
   );
 });
 
-test('Open the deal takes a creator to the deal room', async () => {
+test('View details takes a creator to the deal room', async () => {
   (getMessages as jest.Mock).mockResolvedValue([{ ...offer, sender_id: 'brand-9', available_actions: [] }]);
   const { tree, onNavigate } = await mount(creator, { title: 'Levis' });
-  await press(byText(tree, 'Open the deal'));
+  await press(byText(tree, 'View details'));
   expect(onNavigate).toHaveBeenCalledWith('/my-deals/DEAL-77');
 });
 

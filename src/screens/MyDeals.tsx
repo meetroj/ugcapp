@@ -171,8 +171,17 @@ function MyDeals({
     if (!pendingFocus || !items.length) return;
     const hit = findDeal(items, pendingFocus);
     setPendingFocus(undefined);
-    if (hit) setOpenDeal(hit);
-  }, [items, pendingFocus]);
+    if (hit) {
+      setOpenDeal(hit);
+      return;
+    }
+    // Not in the list we already hold: a brief delivered after it was fetched (a private brief
+    // the creator has not answered yet). Fetch again once instead of dropping onto the list.
+    load().then(fresh => {
+      const again = findDeal(fresh, pendingFocus);
+      if (again) setOpenDeal(again);
+    });
+  }, [items, pendingFocus, load]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

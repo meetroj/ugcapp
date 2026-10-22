@@ -557,7 +557,7 @@ export function conversationPreview(row: PeerRow): string {
 }
 
 /**
- * Where "Open the deal" on a card goes. A creator opens the deal room (it
+ * Where "View details" (a creator) / "Open the campaign" (a brand) on a card goes. A creator opens the deal room (it
  * accepts a campaign id or a DEAL- code); a brand opens the campaign, which
  * needs a real campaign id, so a DEAL- code falls back to the thread's own
  * campaign. Null when the card names nothing to open.
@@ -569,7 +569,10 @@ export function cardDealPath(
 ): string | null {
   const named = String(card.campaign_id || card.deal_id || '');
   if (role === 'creator') {
-    const id = named || String(threadCampaignId || '');
+    // An offer / private brief that names no deal yet must NOT fall back to the thread's
+    // deal: that is some other, already-running deal between the same two people.
+    const isOffer = ['private_invitation', 'custom_offer', 'counter_offer'].includes(String(card.type));
+    const id = named || (isOffer ? '' : String(threadCampaignId || ''));
     return id ? `/my-deals/${id}` : null;
   }
   const campaign = String(card.campaign_id || '');

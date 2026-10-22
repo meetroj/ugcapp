@@ -1169,7 +1169,7 @@ function BrandChatThread({
                     onPostBrief={session.role === 'business' ? openPrivateBrief : undefined}
                     onNeedBrief={session.role === 'creator' ? requestBrief : undefined}
                     needBriefBusy={requestingBrief}
-                    dealLabel={session.role === 'creator' ? 'Open the deal' : 'Open the campaign'}
+                    dealLabel={session.role === 'creator' ? 'View details' : 'Open the campaign'}
                     onOpenDeal={dealPath ? () => onNavigate(dealPath) : undefined}
                   />
                 );
