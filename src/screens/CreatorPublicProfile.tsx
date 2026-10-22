@@ -495,8 +495,9 @@ function CreatorPublicProfile({
   useEffect(() => () => { mountedRef.current = false; }, []);
   // The player Modal escapes WebShell's SafeAreaView, so it clears the notch itself.
   const insets = useSafeAreaInsets();
-  // Back and save sit just under the status bar (not a fixed 44px down the banner).
-  const buttonsTop = Math.max(insets.top, scale(24)) + scale(6);
+  // Back and save hug the top of the banner. The screen already sits inside WebShell's safe
+  // area, so the status bar inset must NOT be added here again (that pushed them down).
+  const buttonsTop = scale(10);
   // Tablet: the page is a centred column; the pinned footer lines up with it.
   const { width: winWidth } = useWindowDimensions();
   const footerGutter = Math.max(scale(16), (winWidth - CONTENT_MAX_WIDTH) / 2);
