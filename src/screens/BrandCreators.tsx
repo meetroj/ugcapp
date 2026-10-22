@@ -1137,7 +1137,6 @@ function BrandCreators({
               <Text style={styles.approvedBackText}>Back to All Creators</Text>
             </TouchableOpacity>
             <Text style={styles.approvedTitle}>Preferred Creators by the UGCAD Team</Text>
-            <Text style={styles.approvedSub}>Every creator on UGCAD is team approved. These are the ones our team prefers most.</Text>
           </View>
         ) : (
           <TouchableOpacity style={styles.approvedLink} onPress={() => setApprovedOnly(true)}
@@ -1450,7 +1449,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#15163F',
   },
-  approvedSub: { marginTop: scale(4), fontSize: fontScale(12), color: '#5C6079' },
 
   loading: { marginTop: scale(40) },
   content: { padding: scale(16), paddingTop: 0, paddingBottom: scale(30) + NAV_CLEARANCE },

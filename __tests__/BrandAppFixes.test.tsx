@@ -166,6 +166,7 @@ describe('brand Creators tab', () => {
       expect(content(tree.toJSON())).not.toContain('Approved by Our UGCAD Team');
       await act(async () => { press((n: any) => content(n) === 'Meet Our Preferred Creators').props.onPress(); });
       expect(content(tree.toJSON())).toContain('Preferred Creators by the UGCAD Team');
+      expect(content(tree.toJSON())).not.toContain('Every creator on UGCAD');
       expect(content(tree.toJSON())).not.toContain('Approved by Our UGCAD Team');
       await act(async () => { tree.unmount(); });
       tree = null;
