@@ -1144,7 +1144,7 @@ function BrandCreators({
             accessibilityRole="button">
             <Icon name="verified" color="#1FA971" size={17} />
             <Text style={styles.approvedLinkText} numberOfLines={1}>Meet Our Preferred Creators</Text>
-            <Icon name="chevron" color="#4C4DD6" size={15} />
+            <Icon name="chevron" color="#FFFFFF" size={15} />
           </TouchableOpacity>
         )}
 
@@ -1375,19 +1375,31 @@ const styles = StyleSheet.create({
   },
 
   // "Meet Our Preferred Creators" link and the collection's heading.
+  // Same pill as the website on phones: dark indigo, white text, pushed to the right.
   approvedLink: {
+    alignSelf: 'flex-end',
+    maxWidth: '92%',
     marginHorizontal: scale(16),
     marginBottom: scale(12),
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(14),
+    borderRadius: scale(12),
+    backgroundColor: '#07074E',
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(6),
+    shadowColor: '#07074E',
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   approvedLinkText: {
     flexShrink: 1,
     fontSize: fontScale(13),
     fontFamily: 'Inter-Bold',
     fontWeight: '700',
-    color: '#4C4DD6',
+    color: '#FFFFFF',
   },
   approvedHead: { marginHorizontal: scale(16), marginBottom: scale(14) },
   approvedBack: { flexDirection: 'row', alignItems: 'center', gap: scale(4), alignSelf: 'flex-start' },

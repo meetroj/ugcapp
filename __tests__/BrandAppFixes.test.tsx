@@ -149,6 +149,14 @@ describe('brand Creators tab', () => {
     tree.root.findAll((n: any) => predicate(n) && typeof n.props.onPress === 'function')[0];
   const byLabel = (label: string) => press((n: any) => n.props.accessibilityLabel === label);
 
+  test('the preferred-creators link is a dark pill on the right, like the website on phones', async () => {
+    directory = [{ id: 'a', name: 'Deshna', budget_range: '2000', ugcad_approved: true }];
+    await mount();
+    const { StyleSheet } = require('react-native');
+    const style = StyleSheet.flatten(press((n: any) => content(n) === 'Meet Our Preferred Creators').props.style);
+    expect(style).toMatchObject({ alignSelf: 'flex-end', backgroundColor: '#07074E' });
+  });
+
   test('the link and the collection heading say "Preferred", on every platform', async () => {
     directory = [{ id: 'a', name: 'Deshna', budget_range: '2000', ugcad_approved: true }];
     for (const os of ['ios', 'android'] as const) {

@@ -9,7 +9,10 @@
  * from both emulators and physical devices. Without this split a shipped APK
  * would try to reach the developer's own machine and fail on every device.
  */
-export const BACKEND_URL = __DEV__
+// Set true only when a backend is running on this PC (port 8000); otherwise debug
+// builds fail to log in with "Can't reach the server".
+const USE_LOCAL_BACKEND = false;
+export const BACKEND_URL = __DEV__ && USE_LOCAL_BACKEND
   ? 'http://localhost:8000'
   : 'https://app.ugcad.io';
 
