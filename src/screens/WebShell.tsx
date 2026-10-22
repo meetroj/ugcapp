@@ -4,7 +4,7 @@ import { publishLiveUpdate, useLiveEffect, useLiveUpdates } from "../liveUpdates
  * All UI comes from the website; this file only adds the native behaviour
  * a browser tab can't provide (back button, external links, offline, refresh).
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -26,7 +26,8 @@ import {
 } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
-import { getChatUnreadCount, type AuthUser } from '../api';
+import { getChatUnreadCount, getUnreadCount, type AuthUser } from '../api';
+import { HeaderCountsContext } from '../components/HeaderCounts';
 import { chatPeerName } from '../actionCards';
 import CreatorHome from './CreatorHome';
 import AppProfileMenu from './AppProfileMenu';
@@ -324,6 +325,9 @@ function WebShell({
 
   // Unread chat messages, for the header badge on screens that show one.
   const [unread, setUnread] = useState(0);
+  // Unread notifications, for the bell badge on every top bar (see HeaderCounts).
+  const [notifUnread, setNotifUnread] = useState(0);
+  const headerCounts = useMemo(() => ({ notifications: notifUnread }), [notifUnread]);
   // Display name for the thread opened from a list, keyed by the user it
   // belongs to so a deep link to another thread never shows the wrong name.
   const [chatTitle, setChatTitle] = useState<{ id: string; name: string } | null>(
@@ -357,6 +361,19 @@ function WebShell({
     getChatUnreadCount(token)
       .then(count => {
         if (active) setUnread(count);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [token, purePath]);
+  // Same cadence as the message badge: every live tick, every screen change, and when the
+  // notification panel marks something read (it publishes a live update).
+  useLiveEffect(() => {
+    let active = true;
+    getUnreadCount(token)
+      .then(count => {
+        if (active) setNotifUnread(count);
       })
       .catch(() => {});
     return () => {
@@ -630,6 +647,14 @@ function WebShell({
     [goBack],
   );
 
+  // A native screen that shows a detail in place (Active Work, My Deals) is one
+  // history step the stack cannot see; it registers a handler here so hardware
+  // Back closes that detail before the stack walks to the previous page.
+  const screenBack = useRef<(() => boolean) | null>(null);
+  const registerBack = useCallback((fn: (() => boolean) | null) => {
+    screenBack.current = fn;
+  }, []);
+
   const webBack = useCallback(() => {
     goingBack.current = pathRef.current;
     // Safety net: if the WebView reports no navigation (e.g. nothing to go back to),
@@ -655,6 +680,7 @@ function WebShell({
         setFeedOpen(false);
         return true;
       }
+      if (screenBack.current?.()) return true;
       if (errored) {
         return goBack();
       }
@@ -778,6 +804,7 @@ function WebShell({
   }, []);
 
   return (
+    <HeaderCountsContext.Provider value={headerCounts}>
     <SafeAreaView
       style={styles.root}
       edges={['top', 'right', 'bottom', 'left']}
@@ -821,6 +848,7 @@ function WebShell({
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
           onOpenThread={openThread}
+          registerBack={registerBack}
         />
       ) : showingKyc ? (
         <KycVerification
@@ -1048,6 +1076,7 @@ function WebShell({
           onBack={backTo('/app/profile')}
           onMessages={() => navigateTo('/messages')}
           onOpenThread={openThread}
+          registerBack={registerBack}
         />
       ) : showingKycSubmit ? (
         <KycSubmit
@@ -1196,6 +1225,7 @@ function WebShell({
         />
       )}
     </SafeAreaView>
+    </HeaderCountsContext.Provider>
   );
 }
 

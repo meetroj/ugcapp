@@ -30,6 +30,7 @@ import {
 import { loadErrorText } from '../briefs';
 import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
+import { itemTime, newestFirst } from '../newestFirst';
 type Work = Record<string, any> & { id: string };
 type Tab = 'Requests' | 'Active' | 'Completed' | 'Cancelled';
 
@@ -107,9 +108,12 @@ function ActiveWork({
   onMessages,
   onOpenThread,
   onBrowse,
+  registerBack,
   unread = 0,
 }: {
   token: string;
+  /** Lets WebShell's hardware Back close an open deal before leaving this screen. */
+  registerBack?: (fn: (() => boolean) | null) => void;
   /**
    * Still accepted from WebShell, but no longer read: the deals endpoint
    * derives the creator from the token itself.
@@ -211,6 +215,16 @@ function ActiveWork({
     };
   }, [loadDeals]);
 
+  // Hardware Back from an open deal returns to this list, not the page before it.
+  useEffect(() => {
+    if (!registerBack || !openDeal) return undefined;
+    registerBack(() => {
+      setOpenDeal(null);
+      return true;
+    });
+    return () => registerBack(null);
+  }, [registerBack, openDeal]);
+
   useEffect(() => {
     if (autoTabbed.current || loading) return;
     const pending = works.some(work =>
@@ -247,7 +261,7 @@ function ActiveWork({
     }),
     [works],
   );
-  const visible = [...groups[tab]];
+  const visible = newestFirst(groups[tab], w => itemTime(w, 'campaign'));
 
   // Detail view replaces the list in place — no navigator is installed, and
   // this keeps the WebShell route (/my-active-work) unchanged.

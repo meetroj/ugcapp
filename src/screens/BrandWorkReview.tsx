@@ -56,6 +56,7 @@ import {
 import { errorMessage } from '../payoutRules';
 import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
+import { itemTime, newestFirst } from '../newestFirst';
 type Props = {
   token: string;
   onBack: () => void;
@@ -370,9 +371,10 @@ function BrandWorkReview({
     [downloading, startDownload, token],
   );
 
-  const pendingShown = tab === 'all' || tab === 'pending_review' ? items : [];
-  const othersShown =
-    tab === 'all' ? others : others.filter(row => row.status === tab);
+  const pendingShown = newestFirst(tab === 'all' || tab === 'pending_review' ? items : []);
+  const othersShown = newestFirst(
+    tab === 'all' ? others : others.filter(row => row.status === tab),
+  );
 
   // One list over both sources, pending first, so the footer counts every row.
   const combined = [

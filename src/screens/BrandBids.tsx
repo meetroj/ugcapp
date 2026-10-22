@@ -49,6 +49,7 @@ import {
 } from '../brandHiring';
 import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
+import { newestFirst } from '../newestFirst';
 type Props = {
   token: string;
   onBack: () => void;
@@ -130,7 +131,7 @@ function BrandBids({
   // Shortlisted bids (campaign:creator keys). Like the website this is a
   // session-only marker, the backend has no shortlist-a-bid endpoint.
   const [shortlist, setShortlist] = useState<string[]>([]);
-  const [sort, setSort] = useState<BidSort>('match');
+  const [sort, setSort] = useState<BidSort>('newest');
   const [sortOpen, setSortOpen] = useState(false);
   // Campaign ids the user collapsed. Everything starts expanded, as in the design.
   const [collapsed, setCollapsed] = useState<string[]>([]);
@@ -143,7 +144,7 @@ function BrandBids({
       // Only live briefs that still have a slot to fill and received
       // applications are worth a group (the website lists the same set).
       setCampaigns(
-        list
+        newestFirst(list)
           .map((campaign, index) => ({
             ...campaign,
             id: String(campaign.id ?? index),

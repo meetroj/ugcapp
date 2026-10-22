@@ -9,7 +9,7 @@ import { useLiveEffect } from "../liveUpdates";
  * Requested Deals (direct bookings waiting for the creator's answer) and
  * My Bids. Declined and cancelled deals are not listed under Active.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
   RefreshControl,
@@ -37,9 +37,12 @@ import {
 import { loadErrorText } from '../briefs';
 import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
+import { itemTime, newestFirst } from '../newestFirst';
 type Props = {
   token: string;
   onBack: () => void;
+  /** Lets WebShell's hardware Back close an open deal first (see closeDeal). */
+  registerBack?: (fn: (() => boolean) | null) => void;
   /** Header chat button; also used by the detail view. */
   onMessages?: () => void;
   /**
@@ -114,8 +117,28 @@ function MyDeals({
   focusDealId,
   initialTab,
   onBrowse,
+  registerBack,
 }: Props) {
   const [openDeal, setOpenDeal] = useState<Deal | null>(null);
+  // True when the deal was opened by a notification / link rather than a list tap.
+  // Back then returns to the page the link came from, not to the bare deals list.
+  const viaLink = useRef(false);
+  const closeDeal = useCallback(() => {
+    if (viaLink.current) {
+      viaLink.current = false;
+      onBack();
+    } else {
+      setOpenDeal(null);
+    }
+  }, [onBack]);
+  useEffect(() => {
+    if (!registerBack || !openDeal) return undefined;
+    registerBack(() => {
+      closeDeal();
+      return true;
+    });
+    return () => registerBack(null);
+  }, [registerBack, openDeal, closeDeal]);
   const [tab, setTab] = useState<HubTab>(parseHubTab(initialTab));
   // A deep link names the deal before the list exists, so the open is deferred
   // until the fetch lands. Cleared once used so closing the detail returns to
@@ -172,6 +195,7 @@ function MyDeals({
     const hit = findDeal(items, pendingFocus);
     setPendingFocus(undefined);
     if (hit) {
+      viaLink.current = true;
       setOpenDeal(hit);
       return;
     }
@@ -179,7 +203,10 @@ function MyDeals({
     // the creator has not answered yet). Fetch again once instead of dropping onto the list.
     load().then(fresh => {
       const again = findDeal(fresh, pendingFocus);
-      if (again) setOpenDeal(again);
+      if (again) {
+        viaLink.current = true;
+        setOpenDeal(again);
+      }
     });
   }, [items, pendingFocus, load]);
 
@@ -205,7 +232,7 @@ function MyDeals({
         deal={openDeal}
         token={token}
         unread={unread}
-        onBack={() => setOpenDeal(null)}
+        onBack={closeDeal}
         onChat={() => {
           // Chat with the brand on this deal; the inbox is the fallback when
           // the payload carries no brand id.
@@ -256,7 +283,7 @@ function MyDeals({
   }
 
   const { active, requested } = splitHub(items);
-  const rows = tab === 'requested' ? requested : active;
+  const rows = newestFirst(tab === 'requested' ? requested : active, d => itemTime(d, 'campaign'));
 
   return (
     <View style={styles.screen}>
@@ -345,7 +372,10 @@ function MyDeals({
                   key={deal.deal_id || `deal-${index}`}
                   style={[styles.card, { borderLeftColor: requestCard ? '#4452f0' : meta.color }]}
                   activeOpacity={0.85}
-                  onPress={() => setOpenDeal(deal)}
+                  onPress={() => {
+                    viaLink.current = false;
+                    setOpenDeal(deal);
+                  }}
                   accessibilityRole="button"
                 >
                   <View style={styles.cardTop}>

@@ -31,6 +31,7 @@ import {
 } from '../briefs';
 import { CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
+import { itemTime, newestFirst } from '../newestFirst';
 type Props = {
   token: string;
   onBack: () => void;
@@ -142,7 +143,7 @@ function MyBids({ token, onBack, onMessages, unread, onNavigate, onOpenThread }:
 
   const activeTab = BID_TABS.find(t => t.key === tab) || BID_TABS[0];
   const rows = useMemo(
-    () => items.filter(item => activeTab.match(bidStatusOf(item))),
+    () => newestFirst(items.filter(item => activeTab.match(bidStatusOf(item))), b => itemTime(b, 'my_bid')),
     [items, activeTab],
   );
 

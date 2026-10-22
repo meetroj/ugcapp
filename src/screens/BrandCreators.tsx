@@ -1045,6 +1045,11 @@ function BrandCreators({
       (!approvedOnly || !!creator.ugcad_approved) &&
       (!savedOnly || savedIds.has(creator.id)) &&
       (category === 'all' || categoriesOf(creator).includes(category)));
+    if (savedOnly) {
+      // savedIds keeps save order (oldest first), so the latest save goes on top.
+      const order = [...savedIds];
+      pool.sort((a, b) => order.indexOf(b.id) - order.indexOf(a.id));
+    }
     if (!needle) return pool;
     return pool.filter(creator =>
       [
@@ -1458,13 +1463,16 @@ const styles = StyleSheet.create({
   // `row`, no right padding so the third tile runs off the edge exactly as the
   // real reels do, and the same bottom clearance as `content`.
   skeleton: {
+    marginHorizontal: -scale(16),
     paddingLeft: scale(16),
     paddingBottom: scale(30) + NAV_CLEARANCE,
     gap: GRID_GAP,
   },
 
   // The two rows stack vertically; each scrolls on its own axis.
-  rows: { gap: GRID_GAP },
+  // The scroll content already pads 16 each side, and each row pads 16 again, which left a 32px gap
+  // on the left. Bleed the rows to the screen edge so the row's own 16 is the only left margin.
+  rows: { gap: GRID_GAP, marginHorizontal: -scale(16) },
   // Padding sits on the content, not the ScrollView, so tiles can travel the
   // full width and still start clear of the edge.
   row: { paddingHorizontal: scale(16), gap: GRID_GAP },

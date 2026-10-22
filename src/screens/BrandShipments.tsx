@@ -24,6 +24,7 @@ import { ApiError, NetworkError, getCampaigns, getShipment } from '../api';
 import { isMockShipment, needsShipment, shipmentStatus } from '../shipmentStatus';
 import { CONTENT_MAX_WIDTH, NAV_CLEARANCE, scale, fontScale } from '../theme';
 
+import { itemTime, newestFirst } from '../newestFirst';
 type Props = {
   token: string;
   onBack: () => void;
@@ -46,6 +47,8 @@ type Row = {
   hasCreator: boolean;
   /** null while loading or when the campaign has no shipment yet. */
   shipment: Record<string, any> | null;
+  /** ms timestamp used to list the newest first. */
+  at?: number;
 };
 
 /** Tabs mirror the shipment lifecycle. */
@@ -197,6 +200,7 @@ function BrandShipments({
               ? 1
               : 0,
             shipment,
+            at: Math.max(itemTime(shipment), itemTime(campaign)),
           } as Row;
         }),
       );
@@ -223,7 +227,7 @@ function BrandShipments({
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return rows.filter(row => {
+    return newestFirst(rows, row => row.at || 0).filter(row => {
       if (tab !== 'all' && statusOf(row).key !== tab) return false;
       if (!needle) return true;
       return (

@@ -56,3 +56,11 @@ test('an empty category result explains itself', async () => {
   act(() => option('food').props.onPress());
   expect(shown()).toEqual(['Bilal']);
 });
+
+test('the creator rows bleed past the content padding, so the left gap is one margin, not two', async () => {
+  await act(async () => { tree = Renderer.create(<BrandCreators token="t" onNavigate={() => {}} />); });
+  const { StyleSheet } = require('react-native');
+  const { scale } = require('../src/theme');
+  const row = tree.root.findAll(node => node.props.testID === 'creator-directory-row-0')[0];
+  expect(StyleSheet.flatten(row.parent!.props.style).marginHorizontal).toBe(-scale(16));
+});

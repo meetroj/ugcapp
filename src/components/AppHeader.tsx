@@ -14,7 +14,7 @@
  * Sits on the navy backdrop the tab screens paint behind their rounded content
  * sheet, so it has no background of its own.
  */
-import React from 'react';
+import React, { useContext } from 'react';
 import {
   Image,
   StyleSheet,
@@ -24,6 +24,7 @@ import {
 import { Text } from './Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { scale, fontScale, MIN_TOUCH } from '../theme';
+import { HeaderCountsContext } from './HeaderCounts';
 
 // Hit area grown to MIN_TOUCH around the 34dp buttons (more on a 320pt phone,
 // where scale() shrinks them). Horizontal slop is capped so the two action
@@ -109,7 +110,7 @@ function AppHeader({
   profilePhoto,
   onNotifications,
   onMessages,
-  notificationCount = 0,
+  notificationCount,
   unreadMessages = 0,
 }: {
   /** Omit (or pass an empty string) for a bar with no centred title. */
@@ -130,6 +131,9 @@ function AppHeader({
   /** Red bubble on the message icon; hidden at 0. */
   unreadMessages?: number;
 }) {
+  // A screen can pass its own number; otherwise the bell shows the shell's unread notifications.
+  const counts = useContext(HeaderCountsContext);
+  const bell = notificationCount ?? counts.notifications;
   // With no back arrow and no title, the logo is the only centre content, so
   // it takes the centred slot instead of sitting flush left.
   const centeredLogo = !onBack && !title;
@@ -213,10 +217,10 @@ function AppHeader({
           hitSlop={{ top: HIT_Y, bottom: HIT_Y, left: HIT_X, right: HIT_X }}
         >
           <NotificationIcon />
-          {notificationCount > 0 && (
+          {bell > 0 && (
             <View style={styles.badge}>
               <Text style={styles.badgeText}>
-                {notificationCount > 9 ? '9+' : notificationCount}
+                {bell > 9 ? '9+' : bell}
               </Text>
             </View>
           )}

@@ -8,6 +8,8 @@
  * select_creator / selected_creator_ids).
  */
 
+import { newestFirst } from './newestFirst';
+
 type Rec = Record<string, any>;
 
 const money = (value: unknown) =>
@@ -89,9 +91,10 @@ export const bidPrice = (bid: Rec): number | null => {
   return Number.isFinite(value) ? value : null;
 };
 
-export type BidSort = 'match' | 'price-low' | 'price-high' | 'delivery-fast';
+export type BidSort = 'newest' | 'match' | 'price-low' | 'price-high' | 'delivery-fast';
 
 export const BID_SORTS: { key: BidSort; label: string }[] = [
+  { key: 'newest', label: 'Newest first' },
   { key: 'match', label: 'Best match' },
   { key: 'price-low', label: 'Price: Low to High' },
   { key: 'price-high', label: 'Price: High to Low' },
@@ -101,6 +104,7 @@ export const BID_SORTS: { key: BidSort; label: string }[] = [
 /** Returns a sorted copy; bids with no value for the sort key go last. */
 export function sortBids<T extends Rec>(bids: T[], sort: BidSort): T[] {
   if (sort === 'match') return bids;
+  if (sort === 'newest') return newestFirst(bids);
   const value = (bid: T) => (sort === 'delivery-fast' ? bidDays(bid) : bidPrice(bid));
   return [...bids].sort((a, b) => {
     const av = value(a);
