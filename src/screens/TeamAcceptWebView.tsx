@@ -20,6 +20,7 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/Text';
 import { Alert } from '../components/AppAlert';
+import { isOwnStorageUrl, useMediaOpener } from '../components/MediaViewer';
 import { verifySession, type AuthUser } from '../api';
 import { SITE_ORIGIN, isSiteUrl } from '../deepLink';
 import { scale, fontScale } from '../theme';
@@ -47,6 +48,7 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const busy = useRef(false);
+  const media = useMediaOpener();
 
   const onMessage = useCallback(
     async (raw: string) => {
@@ -133,6 +135,11 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
           onHttpError={() => setFailed(true)}
           onShouldStartLoadWithRequest={req => {
             if (isSiteUrl(req.url)) return true;
+            // Our own documents and pictures open in the app's viewer.
+            if (isOwnStorageUrl(req.url)) {
+              media.open(req.url);
+              return false;
+            }
             Linking.openURL(req.url).catch(() =>
               Alert.alert('Could not open the link'),
             );
@@ -148,6 +155,7 @@ export default function TeamAcceptWebView({ token, onSession, onClose }: Props) 
         />
         </KeyboardAvoidingView>
       )}
+      {media.node}
     </View>
   );
 }

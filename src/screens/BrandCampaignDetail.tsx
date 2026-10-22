@@ -17,7 +17,6 @@ import {
   Image,
   KeyboardAvoidingView,
   LayoutAnimation,
-  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -47,6 +46,7 @@ import {
   getCampaignWork,
   getCreatorReviews,
   getShortlist,
+  getWorkDownloadLink,
   inviteShortlistedCreator,
   postReview,
   requestNewShortlist,
@@ -74,6 +74,8 @@ import {
   workStatusOf,
 } from '../brandHiring';
 import { errorMessage } from '../payoutRules';
+import { ToastBar, useToast } from '../components/Toast';
+import { useMediaDownload } from '../mediaDownload';
 import WorkRevisionRequest from './WorkRevisionRequest';
 import Video from 'react-native-video';
 import { CONTENT_MAX_WIDTH, scale, fontScale, NAV_CLEARANCE } from '../theme';
@@ -163,6 +165,24 @@ const rupees = (value: unknown) =>
   `Rs. ${(Number(value) || 0).toLocaleString('en-IN', {
     maximumFractionDigits: 0,
   })}`;
+
+/**
+ * The campaign's total budget. A saved draft often carries only the per-video
+ * figure, so fall back to that times creators x deliverables instead of Rs. 0.
+ */
+export function campaignBudget(campaign: Record<string, any>): number {
+  const total = Number(campaign.budget || campaign.total_budget) || 0;
+  if (total > 0) return total;
+  // Live campaigns keep the old reading (budget_max); only a draft is derived.
+  if (String(campaign.status) !== 'draft') return Number(campaign.budget_max) || 0;
+  const perVideo = Number(campaign.per_video_budget || campaign.budget_max) || 0;
+  const quantity = (Array.isArray(campaign.deliverable_items)
+    ? campaign.deliverable_items
+    : []
+  ).reduce((sum: number, item: any) => sum + Math.max(1, Number(item?.quantity) || 1), 0);
+  const creators = Math.max(1, Number(campaign.creators_wanted) || 1);
+  return perVideo * Math.max(1, quantity) * creators;
+}
 
 function formatDate(value: unknown): string {
   if (!value) return '';
@@ -412,6 +432,9 @@ function BrandCampaignDetail({
   const [bidBusy, setBidBusy] = useState('');
   const [finishingHiring, setFinishingHiring] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
+  // Downloads stay in the app: Android's download manager / the iOS share sheet.
+  const { message: toast, show: showToast } = useToast();
+  const { start: startDownload, node: downloadNode } = useMediaDownload(showToast);
   // Ops-curated shortlist (briefs posted with "Request matches").
   const [shortlist, setShortlist] = useState<Record<string, any> | null>(null);
   const [shortlistBusy, setShortlistBusy] = useState(false);
@@ -560,7 +583,30 @@ function BrandCampaignDetail({
     [runApprove, campaign],
   );
 
+  // Reopens the draft in the brief wizard (?draft= resumes it; Save/Publish
+  // there update this same campaign instead of creating a copy).
+  const editDraft = useCallback(
+    () =>
+      onNavigate(
+        `/dashboard/business/post-brief?draft=${encodeURIComponent(campaignId)}`,
+      ),
+    [campaignId, onNavigate],
+  );
+
   const handlePublish = useCallback(() => {
+    // A half-filled draft (no budget yet) cannot be published: send the brand
+    // to finish it rather than letting the server refuse with a bare error.
+    if (campaign && !campaignBudget(campaign)) {
+      Alert.alert(
+        'Finish your brief first',
+        'This draft has no budget yet. Edit it to complete the brief, then publish.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Edit Draft', onPress: editDraft },
+        ],
+      );
+      return;
+    }
     Alert.alert(
       'Publish this campaign?',
       'It goes to our team for review, then to creators. Your wallet is charged the budget + fees on publish.',
@@ -586,7 +632,7 @@ function BrandCampaignDetail({
         },
       ],
     );
-  }, [campaignId, load, token]);
+  }, [campaign, campaignId, editDraft, load, token]);
 
   const handleFinishHiring = useCallback((hired: number, remaining: number) => {
     Alert.alert(
@@ -935,6 +981,7 @@ function BrandCampaignDetail({
   }
 
   const status = String(campaign.status || '').replace(/_/g, ' ');
+  const isDraft = String(campaign.status) === 'draft';
   // Short human-facing code for the strip: the backend's own code when it
   // sends one, otherwise CMP- plus the tail of the id.
   const campaignCode =
@@ -1064,16 +1111,18 @@ function BrandCampaignDetail({
           <View style={styles.summaryDivider} />
           <SummaryCell
             icon="calendar"
-            label="Launched on"
+            label={isDraft ? 'Created on' : 'Launched on'}
             value={formatDate(campaign.created_at) || '-'}
           />
           <View style={styles.summaryDivider} />
           <SummaryCell
             icon="wallet"
             label="Total Budget"
-            value={rupees(
-              campaign.budget || campaign.total_budget || campaign.budget_max,
-            )}
+            value={
+              isDraft && !campaignBudget(campaign)
+                ? 'Not set yet'
+                : rupees(campaignBudget(campaign))
+            }
           />
         </View>
 
@@ -1200,12 +1249,21 @@ function BrandCampaignDetail({
                 );
               })}
               {/* A draft can't reach creators until it's published for review. */}
-              {String(campaign.status) === 'draft' && (
+              {isDraft && (
                 <View style={styles.draftCard}>
                   <Text style={styles.draftTitle}>This campaign is a draft</Text>
                   <Text style={styles.draftSub}>
-                    Publish it to send it to our team for review, then on to creators.
+                    Edit it to finish the brief, or publish it to send it to our team for review, then on to creators.
                   </Text>
+                  <TouchableOpacity
+                    style={styles.editDraftBtn}
+                    onPress={editDraft}
+                    disabled={publishBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit draft"
+                  >
+                    <Text style={styles.editDraftBtnText}>Edit Draft</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.publishBtn}
                     onPress={handlePublish}
@@ -1642,6 +1700,9 @@ function BrandCampaignDetail({
                 );
               })()}
 
+              {/* A draft has not been sent anywhere yet, so there is no progress
+                  to show: the rail appears once it is published. */}
+              {!isDraft && (
               <View style={styles.card}>
                 {/* Tapping the row (or the arrow) folds the stage rail away, so
                   the creator and deliverables cards come up without a scroll. */}
@@ -1723,6 +1784,7 @@ function BrandCampaignDetail({
                     );
                   })}
               </View>
+              )}
 
               {!!creatorName && (
                 <View style={styles.card}>
@@ -2045,6 +2107,7 @@ function BrandCampaignDetail({
                             paused={!isPlaying}
                             resizeMode="cover"
                             repeat
+                            ignoreSilentSwitch="ignore"
                           />
                         ) : (
                           <View style={styles.workMediaFallback} />
@@ -2105,15 +2168,22 @@ function BrandCampaignDetail({
                         {approved ? (
                           <TouchableOpacity
                             style={styles.workDownload}
-                            onPress={() => {
-                              const unavailable = () =>
-                                Alert.alert(
-                                  'Could not open',
-                                  'The download link is unavailable.',
-                                );
-                              const url = downloadUrlOf(item);
-                              if (!url) return unavailable();
-                              Linking.openURL(url).catch(unavailable);
+                            onPress={async () => {
+                              // The server's "save as" link first (like Work Review);
+                              // the stored file URL only if it cannot be had.
+                              let url: string | null = null;
+                              try {
+                                const link = await getWorkDownloadLink(token, String(item.id));
+                                url = text(link?.url) || null;
+                              } catch {
+                                url = null;
+                              }
+                              url = url || downloadUrlOf(item);
+                              if (!url) {
+                                Alert.alert('Could not download', 'The download link is unavailable.');
+                                return;
+                              }
+                              await startDownload(url);
                             }}
                             accessibilityRole="button"
                           >
@@ -2284,6 +2354,8 @@ function BrandCampaignDetail({
           />
         )}
       </Modal>
+      {downloadNode}
+      <ToastBar message={toast} />
     </View>
   );
 }
@@ -2464,6 +2536,22 @@ const styles = StyleSheet.create({
     fontSize: fontScale(14),
     lineHeight: fontScale(18),
     color: '#5C6079',
+  },
+  editDraftBtn: {
+    marginTop: scale(12),
+    minHeight: 48,
+    borderRadius: scale(12),
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#4C4DD6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editDraftBtnText: {
+    fontSize: fontScale(14),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#4C4DD6',
   },
   publishBtn: {
     marginTop: scale(12),

@@ -21,13 +21,17 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonList } from '../components/Skeleton';
 import {
   BACKEND_URL,
+  getBusinessReviews,
   getCampaign,
   getMe,
+  getMyDeals,
   getPublicProfile,
   getReviews,
   type AuthUser,
 } from '../api';
 import { loadErrorText } from '../briefs';
+import { isState } from '../dealRoom';
+import { RateBrandSheet } from './DealSheets';
 import { colors, CONTENT_MAX_WIDTH, scale, fontScale } from '../theme';
 
 type Review = Record<string, any> & { id: string };
@@ -70,6 +74,50 @@ function formatDate(value: unknown): string {
 }
 
 type ReviewerEntry = [string, Record<string, unknown>];
+
+/** A completed deal whose brand this creator has not rated yet. */
+type Unrated = { campaignId: string; businessId: string; brand: string; title: string };
+
+/**
+ * Completed (paid) deals the creator has not rated the brand on. A creator is
+ * only ever asked from inside the deal, so a dismissed pop-up was never offered
+ * again; this lists them where reviews live. A brand whose reviews can't be read
+ * is skipped (a blind "Rate" could hit the one-review-per-deal rule) and any
+ * failure just means no list.
+ */
+export async function loadUnratedDeals(token: string, creatorId: string): Promise<Unrated[]> {
+  try {
+    const done = (await getMyDeals(token))
+      .filter(deal => isState(deal, 'Paid - Complete'))
+      .map(deal => {
+        const brand = (deal.brand || {}) as Record<string, any>;
+        return {
+          campaignId: String(deal.campaign?.id || ''),
+          businessId: String(deal.campaign?.business_id || brand.id || ''),
+          brand: String(brand.name || 'Brand'),
+          title: String(deal.campaign?.title || ''),
+        };
+      })
+      .filter(deal => deal.campaignId && deal.businessId);
+    const rated = new Map<string, Set<string>>();
+    await Promise.all(
+      Array.from(new Set(done.map(deal => deal.businessId))).map(async id => {
+        try {
+          const list = await getBusinessReviews(token, id);
+          rated.set(
+            id,
+            new Set(list.filter(r => r.reviewer_id === creatorId).map(r => String(r.campaign_id))),
+          );
+        } catch {
+          /* unknown: not offered */
+        }
+      }),
+    );
+    return done.filter(deal => rated.has(deal.businessId) && !rated.get(deal.businessId)!.has(deal.campaignId));
+  } catch {
+    return [];
+  }
+}
 
 /** "Arushi" from "Arushi Mehta": a creator's full name is not shown to brands. */
 const firstName = (value: unknown) =>
@@ -261,6 +309,9 @@ function Reviews({
   const [refreshing, setRefreshing] = useState(false);
   // Bumped by pull-to-refresh and Retry to re-run the load below.
   const [reloadKey, setReloadKey] = useState(0);
+  // Creator only: completed deals still waiting for a rating of the brand.
+  const [unrated, setUnrated] = useState<Unrated[]>([]);
+  const [rating, setRating] = useState<Unrated | null>(null);
   // At 320pt the star breakdown has no room beside the average, so it stacks under it.
   const stacked = useWindowDimensions().width < 340;
 
@@ -315,6 +366,17 @@ function Reviews({
       setRefreshing(false);
     });
 
+    return () => {
+      active = false;
+    };
+  }, [isBrand, session.user_id, token, reloadKey]);
+
+  useLiveEffect(() => {
+    if (isBrand) return;
+    let active = true;
+    loadUnratedDeals(token, String(session.user_id)).then(list => {
+      if (active) setUnrated(list);
+    });
     return () => {
       active = false;
     };
@@ -502,6 +564,30 @@ function Reviews({
           </View>
         </View>
 
+        {unrated.length > 0 && (
+          <View style={styles.rateBox}>
+            <Text style={styles.listTitle}>Rate your brands</Text>
+            {unrated.map(item => (
+              <View key={item.campaignId} style={styles.rateRow}>
+                <View style={styles.rateText}>
+                  <Text style={styles.rateBrand} numberOfLines={1}>{item.brand}</Text>
+                  {!!item.title && (
+                    <Text style={styles.rateTitle} numberOfLines={1}>{item.title}</Text>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.rateBtn}
+                  onPress={() => setRating(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Rate ${item.brand}`}
+                >
+                  <Text style={styles.rateBtnText}>Rate</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
         <View style={styles.listHead}>
           <Text style={styles.listTitle}>Recent Reviews</Text>
           {reviews.length > 3 && (
@@ -537,8 +623,9 @@ function Reviews({
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No reviews yet</Text>
             <Text style={styles.emptyText}>
-              Ratings from {isBrand ? 'creators' : 'brands'} appear here once a
-              campaign is completed.
+              {isBrand
+                ? 'Creators rate your brand after each completed deal. Their reviews show here.'
+                : 'Brands rate you after each completed deal. Their reviews show here. You can rate them too, from Rate your brands.'}
             </Text>
           </View>
         )}
@@ -552,6 +639,17 @@ function Reviews({
           />
         ))}
       </ScrollView>
+      {!!rating && (
+        <RateBrandSheet
+          visible
+          token={token}
+          campaignId={rating.campaignId}
+          businessId={rating.businessId}
+          brandName={rating.brand}
+          onClose={() => setRating(null)}
+          onDone={() => setUnrated(list => list.filter(item => item.campaignId !== rating.campaignId))}
+        />
+      )}
     </View>
   );
 }
@@ -807,6 +905,26 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#14153C',
   },
+  rateBox: {
+    marginTop: scale(18),
+    padding: scale(12),
+    borderRadius: scale(14),
+    backgroundColor: '#EEF0FE',
+  },
+  rateRow: { marginTop: scale(10), flexDirection: 'row', alignItems: 'center' },
+  rateText: { flex: 1, minWidth: 0 },
+  rateBrand: { fontSize: fontScale(14), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#14153C' },
+  rateTitle: { marginTop: scale(2), fontSize: fontScale(12), color: '#7A7F9C' },
+  rateBtn: {
+    minHeight: scale(44),
+    minWidth: scale(72),
+    marginLeft: scale(10),
+    borderRadius: scale(12),
+    backgroundColor: '#4C5BF3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rateBtnText: { fontSize: fontScale(13), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#FFFFFF' },
   seeAllBtn: { minHeight: scale(44), paddingLeft: scale(12), justifyContent: 'center' },
   seeAll: {
     fontSize: fontScale(13),

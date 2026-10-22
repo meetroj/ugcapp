@@ -55,6 +55,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
 };
 
 type Campaign = Record<string, any> & { id: string };
@@ -117,6 +119,7 @@ function BrandBids({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
 }: Props) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tab, setTab] = useState('all');
@@ -382,6 +385,7 @@ function BrandBids({
         onBack={onBack}
         onNotifications={onNotifications}
         onMessages={onMessages}
+        unreadMessages={unread}
       />
 
       <View style={styles.sheet}>

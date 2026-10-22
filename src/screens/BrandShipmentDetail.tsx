@@ -11,7 +11,6 @@ import { Alert } from '../components/AppAlert';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Linking,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,6 +23,7 @@ import {
 import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { SkeletonBanner, SkeletonList } from '../components/Skeleton';
+import { useMediaOpener } from '../components/MediaViewer';
 import { launchImageLibrary } from 'react-native-image-picker';
 import {
   ApiError,
@@ -487,13 +487,16 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
     }
   }, [campaignId, checks, courier, creatorId, expected, load, saving, slip, token, tracking]);
 
-  const openUrl = useCallback((url: unknown) => {
-    const target = resolveMediaUrl(url);
-    if (!target) return;
-    Linking.openURL(target).catch(() =>
-      Alert.alert('Unable to open', 'Could not open this file. Try again later.'),
-    );
-  }, []);
+  // Label, slip and unboxing video open in the app (Android saves a PDF to Downloads),
+  // never in the phone's browser.
+  const media = useMediaOpener();
+  const openUrl = useCallback(
+    (url: unknown) => {
+      const target = resolveMediaUrl(url);
+      if (target) media.open(target);
+    },
+    [media.open],
+  );
 
   const banner = bannerFor(shipment);
   const note = noteFor(shipment);
@@ -1092,6 +1095,7 @@ function BrandShipmentDetail({ token, campaignId, creatorId, onBack }: Props) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      {media.node}
     </View>
   );
 }

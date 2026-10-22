@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   RefreshControl,
   ScrollView,
@@ -34,6 +33,7 @@ import AppHeader from '../components/AppHeader';
 import BottomSheet from '../components/BottomSheet';
 import { Alert } from '../components/AppAlert';
 import { ToastBar, useToast } from '../components/Toast';
+import { mediaKindOf, useMediaOpener } from '../components/MediaViewer';
 import {
   BROWSE_PAGE,
   BUDGET_OPTIONS,
@@ -53,6 +53,7 @@ import {
   loadErrorText,
   maxCampaignBid,
   moodImagesOf,
+  isPrivateBrief,
   ownBidOn,
   parseDeliveryDays,
   pctLabel,
@@ -381,10 +382,14 @@ export default function BrowseCampaigns({
       setSelected(found);
       return;
     }
-    // Not in the open list (closed, filled or private): fetch it so a shared
+    // Not in the open list (closed or filled; a private brief goes to its deal): fetch it so a shared
     // link never lands on a bare list. BriefFlow shows it as closed if it is.
     getCampaign(token, openId)
-      .then(one => setSelected({ ...one, id: openId }))
+      .then(one => {
+        // A private brief is answered from the deal (accept / decline / counter), not bid on.
+        if (isPrivateBrief(one)) onNavigate?.(`/my-deals/${openId}`);
+        else setSelected({ ...one, id: openId });
+      })
       .catch(error => toast.show(loadErrorText(error, 'that campaign')));
   }, [openId, open, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1015,6 +1020,8 @@ function CampaignDetails({
   const sections = briefSections(campaign);
   const moods = moodImagesOf(campaign, BACKEND_URL);
   const videos = referenceVideosOf(campaign, BACKEND_URL);
+  // Pictures and videos open in the app; never the phone's browser.
+  const media = useMediaOpener();
   return (
     <View style={styles.subScreen}>
       <Header
@@ -1117,7 +1124,7 @@ function CampaignDetails({
               {moods.map((uri, index) => (
                 <TouchableOpacity
                   key={`${uri}-${index}`}
-                  onPress={() => Linking.openURL(uri).catch(() => {})}
+                  onPress={() => media.open(uri, 'image')}
                   accessibilityRole="button"
                   accessibilityLabel={`Open mood board image ${index + 1}`}
                 >
@@ -1133,7 +1140,13 @@ function CampaignDetails({
               <TouchableOpacity
                 key={`${uri}-${index}`}
                 style={styles.linkRow}
-                onPress={() => Linking.openURL(uri).catch(() => {})}
+                // A video file plays in the app player; any other link (a YouTube
+                // reference) opens in the in-app page viewer.
+                onPress={() => {
+                  // A pasted link may lack its scheme ("youtube.com/...").
+                  const link = /^https?:\/\//i.test(uri) ? uri : `https://${uri}`;
+                  media.open(link, mediaKindOf(link) === 'video' ? 'video' : 'page');
+                }}
                 accessibilityRole="link"
                 accessibilityLabel={`Open reference video ${index + 1}`}
               >
@@ -1183,6 +1196,7 @@ function CampaignDetails({
           </TouchableOpacity>
         </View>
       )}
+      {media.node}
     </View>
   );
 }

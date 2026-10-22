@@ -30,6 +30,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
 };
 
 type Row = {
@@ -131,6 +133,7 @@ function BrandShipments({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
 }: Props) {
   const [rows, setRows] = useState<Row[]>([]);
   const [tab, setTab] = useState('all');
@@ -246,6 +249,7 @@ function BrandShipments({
           onBack={onBack}
           onNotifications={onNotifications}
           onMessages={onMessages}
+        unreadMessages={unread}
         />
       </View>
 

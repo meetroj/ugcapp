@@ -41,6 +41,11 @@ describe('who can bid', () => {
     expect(biddable([brief({ visibility: 'private', selected_creator: 'me' })], 'other')).toHaveLength(0);
   });
 
+  test('a private brief is never open for bids, even with no creator recorded on it', () => {
+    expect(isOpenForBids(brief({ visibility: 'private' }))).toBe(false);
+    expect(biddable([brief({ visibility: 'private' }), brief({})], 'me')).toHaveLength(1);
+  });
+
   test('a multi-creator brief stays open while slots remain, but not for a hired creator', () => {
     const c = brief({ creators_wanted: 3, selected_creators: ['a', 'me'] });
     expect(isOpenForBids(c)).toBe(true);

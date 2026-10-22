@@ -1,17 +1,15 @@
 /**
  * Legal documents — native rendering of the policy pages that Privacy &
- * Security links to (/privacy-policy, /terms, /community-guidelines,
- * /cookie-policy). These were the last routes that dropped a user onto the
- * website, so the copy lives here as structured sections instead.
+ * Security links to (/privacy-policy, /terms, /creator-brand-agreement,
+ * /community-guidelines, /cookie-policy). The full text is shown in the app, so
+ * nobody is sent to the website to read it.
  *
- * The text is the same copy the website shows in Settings (LEGAL_DOCS in
- * ugcad-frontend/src/pages/ProfileSettings.js); keep the two in step. Only the
- * privacy policy has a page on the website to link out to (/privacy), so the
- * other three documents have no "read full text" button.
+ * The text is the same copy the website shows (src/legalContent.ts here,
+ * ugcad-frontend/src/data/legalContent.js there; both generated from the
+ * owner's legal Google Doc): keep the two in step.
  */
 import React from 'react';
 import {
-  Linking,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -19,10 +17,12 @@ import {
 } from 'react-native';import { Text } from '../components/Text';
 import Svg, { Path } from 'react-native-svg';
 import { CONTENT_COLUMN, scale, fontScale } from '../theme';
+import { LEGAL_CONTENT, type LegalBlock, type LegalContentDoc } from '../legalContent';
 
 export type LegalDocId =
   | '/privacy-policy'
   | '/terms'
+  | '/creator-brand-agreement'
   | '/community-guidelines'
   | '/cookie-policy';
 
@@ -31,156 +31,43 @@ type Props = {
   onBack: () => void;
 };
 
-type Section = { heading: string; body: string };
+const COOKIE_SECTIONS: [string, string][] = [
+  ['What are cookies', 'Cookies are small text files stored on your device that help websites work and remember your preferences.'],
+  ['Essential cookies', 'Required for the platform to function - keeping you signed in, securing your session and enabling core features. These cannot be turned off.'],
+  ['Preference cookies', 'Remember choices like your language and dashboard settings to personalise your experience.'],
+  ['Analytics cookies', 'Help us understand how the platform is used so we can improve performance and features. This data is aggregated.'],
+  ['Managing cookies', 'You can control or delete cookies through your browser settings. Blocking essential cookies may affect how UGCad.io works.'],
+];
+
+type Section = { heading: string; blocks: LegalBlock[] };
 
 type Doc = {
   title: string;
-  intro: string;
+  intro: string[];
   updated: string;
   sections: Section[];
 };
 
-/** Same copy as the website's Settings > Legal documents. */
+const fromContent = (doc: LegalContentDoc): Doc => ({
+  title: doc.name,
+  intro: doc.intro,
+  updated: doc.updated,
+  sections: doc.sections.map(sec => ({ heading: sec.h, blocks: sec.blocks })),
+});
+
+/** Same text as the website (src/legalContent.ts is generated from the owner's legal Google Doc). */
 const DOCS: Record<LegalDocId, Doc> = {
-  '/privacy-policy': {
-    title: 'Privacy Policy',
-    intro: 'How we collect, use and protect your data',
-    updated: 'July 2026',
-    sections: [
-      {
-        heading: 'Information we collect',
-        body: 'We collect the details you provide when you create an account and build your profile - name, contact details, payment information, portfolio content and the campaigns you take part in. We also collect basic usage data such as device, browser and pages visited.',
-      },
-      {
-        heading: 'How we use your information',
-        body: 'Your information is used to match you with relevant brand campaigns, process payments and payouts, personalise your dashboard, keep the platform secure, and send important updates about your account and deals.',
-      },
-      {
-        heading: 'Sharing your information',
-        body: 'We share only what is needed to complete a deal - for example, your profile and submitted content with the brand you are working with. We never sell your personal data. Trusted service providers (payments, hosting, analytics) process data on our behalf under strict agreements.',
-      },
-      {
-        heading: 'Data security',
-        body: 'We use encryption, access controls and secure infrastructure to protect your data. Payments are handled by PCI-compliant partners and funds are held in escrow until work is approved.',
-      },
-      {
-        heading: 'Your rights',
-        body: 'You can access, update or delete your information at any time from Settings. You may deactivate or permanently delete your account, and request a copy of your data by contacting us.',
-      },
-      {
-        heading: 'Contact',
-        body: 'Questions about your privacy? Email us at privacy@ugcad.io.',
-      },
-    ],
-  },
-  '/terms': {
-    title: 'Terms and Conditions',
-    intro: 'The rules for using the UGCad.io platform',
-    updated: 'July 2026',
-    sections: [
-      {
-        heading: 'Acceptance of terms',
-        body: 'By creating an account or using UGCad.io you agree to these Terms. If you do not agree, please do not use the platform.',
-      },
-      {
-        heading: 'Eligibility',
-        body: 'You must be at least 18 years old (or the age of majority in your region) and able to enter into a binding contract to use UGCad.io.',
-      },
-      {
-        heading: 'Your account',
-        body: 'You are responsible for the accuracy of your profile, keeping your login secure, and all activity under your account. You may not operate multiple accounts to abuse the platform.',
-      },
-      {
-        heading: 'Payments and escrow',
-        body: 'Brand payments are held in escrow and released to creators once work is approved or auto-approved per the deal timeline. Platform commission and applicable taxes (such as TDS) are deducted as shown at checkout.',
-      },
-      {
-        heading: 'Content and licensing',
-        body: 'You retain ownership of the content you create. By delivering approved content you grant the brand the usage rights agreed in the brief. You confirm your content is original and does not infringe third-party rights.',
-      },
-      {
-        heading: 'Prohibited conduct',
-        body: 'No fraud, fake engagement, harassment, off-platform payment circumvention, or uploading unlawful or infringing material. Violations may lead to suspension or removal.',
-      },
-      {
-        heading: 'Termination',
-        body: 'You may close your account anytime. We may suspend or terminate accounts that breach these Terms, with pending payouts settled per policy.',
-      },
-      {
-        heading: 'Limitation of liability',
-        body: 'The platform is provided on an as-available basis. To the extent permitted by law, we are not liable for indirect or consequential losses arising from use of the platform.',
-      },
-    ],
-  },
-  '/community-guidelines': {
-    title: 'Community Guidelines',
-    intro: 'Standards for creators and brands',
-    updated: 'July 2026',
-    sections: [
-      {
-        heading: 'Be authentic',
-        body: 'Represent yourself honestly. Use real profile details and only showcase work you actually created.',
-      },
-      {
-        heading: 'Deliver quality, on time',
-        body: 'Follow the brief, meet deadlines, and communicate early if something changes. Great delivery builds your level and reputation.',
-      },
-      {
-        heading: 'Respect everyone',
-        body: 'Keep messages professional. Harassment, hate speech, or discrimination of any kind is not tolerated.',
-      },
-      {
-        heading: 'No spam or fraud',
-        body: 'No fake reviews, bots, inflated metrics, or attempts to move deals and payments off-platform.',
-      },
-      {
-        heading: 'Keep it safe and legal',
-        body: 'Do not post content that is unlawful, infringing, sexually explicit, or harmful. Follow all applicable advertising and disclosure rules.',
-      },
-      {
-        heading: 'Reporting',
-        body: 'See something that breaks these guidelines? Report it in-app or email trust@ugcad.io. We review every report.',
-      },
-    ],
-  },
+  '/privacy-policy': fromContent(LEGAL_CONTENT.privacy),
+  '/terms': fromContent(LEGAL_CONTENT.terms),
+  '/creator-brand-agreement': fromContent(LEGAL_CONTENT.agreement),
+  '/community-guidelines': fromContent(LEGAL_CONTENT.guidelines),
+  // The cookie policy was not part of the owner's Google Doc, so it keeps its short copy.
   '/cookie-policy': {
     title: 'Cookie Policy',
-    intro: 'How cookies and tracking are used',
+    intro: ['How cookies and tracking are used'],
     updated: 'July 2026',
-    sections: [
-      {
-        heading: 'What are cookies',
-        body: 'Cookies are small text files stored on your device that help websites work and remember your preferences.',
-      },
-      {
-        heading: 'Essential cookies',
-        body: 'Required for the platform to function - keeping you signed in, securing your session and enabling core features. These cannot be turned off.',
-      },
-      {
-        heading: 'Preference cookies',
-        body: 'Remember choices like your language and dashboard settings to personalise your experience.',
-      },
-      {
-        heading: 'Analytics cookies',
-        body: 'Help us understand how the platform is used so we can improve performance and features. This data is aggregated.',
-      },
-      {
-        heading: 'Managing cookies',
-        body: 'You can control or delete cookies through your browser settings. Blocking essential cookies may affect how UGCad.io works.',
-      },
-    ],
+    sections: COOKIE_SECTIONS.map(([heading, text]) => ({ heading, blocks: [{ t: 'p', text }] })),
   },
-};
-
-/**
- * The only legal page the website actually serves: public/privacy/index.html,
- * published at /privacy. The site is a React SPA with no /terms,
- * /community-guidelines or /cookie-policy route (they would just render the
- * app shell), so those documents link nowhere.
- */
-const WEB_ORIGIN = 'https://www.ugcad.io';
-const WEB_PAGES: Partial<Record<LegalDocId, string>> = {
-  '/privacy-policy': '/privacy',
 };
 
 function Icon({
@@ -201,16 +88,40 @@ function Icon({
   return (
     <Svg width={scale(size)} height={scale(size)} viewBox="0 0 24 24" fill="none">
       {name === 'back' && <Path d="m14.5 5-6 7 6 7" {...line} />}
-      {name === 'external' && (
-        <>
-          <Path d="M14 4.5h5.5V10" {...line} />
-          <Path
-            d="M19.5 4.5 11 13M18 13.5v5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6h5"
-            {...line}
-          />
-        </>
-      )}
     </Svg>
+  );
+}
+
+function Block({ block }: { block: LegalBlock }) {
+  if (block.t === 'p') return <Text style={styles.body}>{block.text}</Text>;
+  if (block.t === 'h') return <Text style={styles.subHeading}>{block.text}</Text>;
+  if (block.t === 'ul') {
+    return (
+      <View style={styles.list}>
+        {block.items.map((item, i) => (
+          <View key={i} style={styles.listRow}>
+            <Text style={styles.bullet}>{'•'}</Text>
+            <Text style={[styles.body, styles.listText]}>{item}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  // A phone is too narrow for a real table: each row becomes a small labelled block.
+  return (
+    <View>
+      {block.rows.map((row, i) => (
+        <View key={i} style={styles.tableRow}>
+          <Text style={styles.tableTitle}>{row[0]}</Text>
+          {row.slice(1).map((cell, j) => (
+            <Text key={j} style={styles.tableCell}>
+              <Text style={styles.tableLabel}>{block.head[j + 1]}: </Text>
+              {cell}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -238,36 +149,21 @@ function LegalDocument({ docId, onBack }: Props) {
         contentContainerStyle={[styles.content, CONTENT_COLUMN]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.intro}>{doc.intro}</Text>
+        {doc.intro.map((text, i) => (
+          <Text key={i} style={styles.intro}>
+            {text}
+          </Text>
+        ))}
         <Text style={styles.updated}>Last updated {doc.updated}</Text>
 
         {doc.sections.map(section => (
           <View key={section.heading} style={styles.card}>
             <Text style={styles.heading}>{section.heading}</Text>
-            <Text style={styles.body}>{section.body}</Text>
+            {section.blocks.map((block, i) => (
+              <Block key={i} block={block} />
+            ))}
           </View>
         ))}
-
-        {!!WEB_PAGES[docId] && (
-          <>
-            <TouchableOpacity
-              style={styles.linkBtn}
-              onPress={() =>
-                Linking.openURL(`${WEB_ORIGIN}${WEB_PAGES[docId]}`).catch(
-                  () => {},
-                )
-              }
-              accessibilityRole="button"
-            >
-              <Text style={styles.linkText}>Read the full privacy policy</Text>
-              <Icon name="external" color="#4C5BF3" size={15} />
-            </TouchableOpacity>
-
-            <Text style={styles.footer}>
-              The full text on ugcad.io is the binding version.
-            </Text>
-          </>
-        )}
       </ScrollView>
     </View>
   );
@@ -330,33 +226,36 @@ const styles = StyleSheet.create({
     color: '#4A4E6B',
   },
 
-  linkBtn: {
-    marginTop: scale(8),
-    minHeight: 46,
-    height: scale(46),
-    borderRadius: scale(12),
-    borderWidth: 1,
-    borderColor: '#D9DCF0',
-    backgroundColor: '#FFFFFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: scale(7),
-  },
-  linkText: {
-    fontSize: fontScale(14),
-    fontFamily: 'Inter-ExtraBold',
+  subHeading: {
+    marginTop: scale(10),
+    fontSize: fontScale(13.5),
+    fontFamily: 'ReadexPro-SemiBold',
     fontWeight: '800',
-    color: '#4C5BF3',
+    color: '#15163F',
   },
-
-  footer: {
-    marginTop: scale(14),
-    fontSize: fontScale(12),
-    lineHeight: fontScale(17),
-    color: '#9498B0',
-    textAlign: 'center',
+  list: { marginTop: scale(7), gap: scale(5) },
+  listRow: { flexDirection: 'row', gap: scale(7) },
+  bullet: { fontSize: fontScale(14), lineHeight: fontScale(21), color: '#4A4E6B' },
+  listText: { flex: 1, marginTop: 0 },
+  tableRow: {
+    marginTop: scale(8),
+    padding: scale(10),
+    borderRadius: scale(10),
+    backgroundColor: '#F7F7FD',
   },
+  tableTitle: {
+    fontSize: fontScale(13.5),
+    fontFamily: 'ReadexPro-SemiBold',
+    fontWeight: '800',
+    color: '#15163F',
+  },
+  tableCell: {
+    marginTop: scale(3),
+    fontSize: fontScale(13.5),
+    lineHeight: fontScale(19),
+    color: '#4A4E6B',
+  },
+  tableLabel: { fontWeight: '700', color: '#15163F' },
 });
 
 export default LegalDocument;

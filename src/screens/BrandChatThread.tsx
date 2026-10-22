@@ -14,7 +14,6 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -28,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { SkeletonBlock } from '../components/Skeleton';
 import ChoiceSheet from '../components/ChoiceSheet';
+import { useMediaOpener } from '../components/MediaViewer';
 import { MB, afterSheetCloses, pickDocuments } from '../documentPicker';
 import BottomSheet from '../components/BottomSheet';
 import { ToastBar, useToast } from '../components/Toast';
@@ -988,9 +988,12 @@ function BrandChatThread({
     { label: 'Report user', tone: 'destructive' as const, onPress: openReport },
   ];
 
+  // Attachments open in the app: pictures full-screen, videos in the player, PDFs and
+  // other files in the document viewer (Android saves them to Downloads).
+  const media = useMediaOpener();
   const openUrl = (url: string) => {
     const uri = photoUrl(url);
-    if (uri) Linking.openURL(uri).catch(() => setError('Could not open that file.'));
+    if (uri) media.open(uri, isImageUrl(url) ? 'image' : undefined);
   };
 
   return (
@@ -1201,7 +1204,7 @@ function BrandChatThread({
                       const uri = photoUrl(url);
                       if (!uri) return null;
                       // Images show inline; PDFs, videos and anything else are a
-                      // named file that opens outside the app.
+                      // named file that opens in the app.
                       return isImageUrl(url) ? (
                         <TouchableOpacity
                           key={`${item.id}-${index}`}
@@ -1696,6 +1699,7 @@ function BrandChatThread({
       />
 
       <ToastBar message={toast} />
+      {media.node}
     </View>
   );
 }

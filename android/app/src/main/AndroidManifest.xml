@@ -1,6 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Saving a downloaded video to Downloads. Android 10+ needs no permission;
+         this only covers Android 9 and below (react-native-webview's download
+         manager asks for it there). -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!--
       Creator uploads need NO media permissions.

@@ -1,5 +1,5 @@
 import { Alert } from '../components/AppAlert';
-/** "Welcome back" screen: email + password, Google alternative. */
+/** "Welcome back" screen: email or phone number + password, Google alternative. */
 import React, { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../components/Text';
@@ -51,7 +51,7 @@ export function LoginForm({
     if (loading) return;
     // Saying nothing on an empty form read as a dead button.
     if (!email.trim() || !password) {
-      Alert.alert('Enter your details', 'Enter your email and password to log in.');
+      Alert.alert('Enter your details', 'Enter your email or phone number and password to log in.');
       return;
     }
     // No length rule here: the website only checks length at sign-up, and an
@@ -67,11 +67,15 @@ export function LoginForm({
   return (
     <>
       <AuthInput
-        label="Email"
+        label="Email or phone number"
         icon="mail"
-        placeholder="your@email.com"
+        placeholder="Email or phone number"
         keyboardType="email-address"
-        textContentType="emailAddress"
+        // 'username' (not 'emailAddress') is what makes iOS Passwords offer the
+        // saved login, whichever of email / phone it was saved under; with
+        // 'emailAddress' it only suggested the phone from the contact card.
+        textContentType="username"
+        autoComplete="username"
         value={email}
         onChangeText={setEmail}
       />

@@ -28,6 +28,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
   onLogout?: () => void;
 };
 
@@ -364,6 +366,7 @@ function AppProfileMenu({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
   onLogout,
 }: Props) {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -393,6 +396,7 @@ function AppProfileMenu({
         title="Profile"
         onNotifications={onNotifications}
         onMessages={onMessages}
+        unreadMessages={unread}
       />
       <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
         <View style={styles.profileCard}>

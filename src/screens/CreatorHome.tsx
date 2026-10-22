@@ -1,7 +1,6 @@
 import { useLiveEffect } from "../liveUpdates";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Image,
   RefreshControl,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
+import { Alert } from '../components/AppAlert';
 import type {
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -67,6 +67,8 @@ type Props = {
   onOpenNotifications: () => void;
   /** Opens Messages from the header icon (replaced the profile avatar). */
   onOpenMessages: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
   /** Opens the Profile tab from the header's top-left button. */
   onOpenProfile: () => void;
   /** The hero stat rows: Total Earnings opens Earnings, Deals opens My Deals. */
@@ -180,6 +182,7 @@ function CreatorHome({
   onBrowse,
   onOpenNotifications,
   onOpenMessages,
+  unread = 0,
   onOpenProfile,
   onOpenEarnings,
   onOpenDeals,
@@ -440,6 +443,7 @@ function CreatorHome({
         profilePhoto={photoUrl(profile.profile_photo)}
         onNotifications={onOpenNotifications}
         onMessages={onOpenMessages}
+        unreadMessages={unread}
         notificationCount={notifications}
       />
 

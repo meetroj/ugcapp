@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from '../components/Text';
+import { isOwnStorageUrl, useMediaOpener } from '../components/MediaViewer';
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -287,6 +288,8 @@ function WebShell({
   onLogout?: () => void;
 }): React.JSX.Element {
   const webRef = useRef<WebView>(null);
+  // Our own files (a PDF, a picture, a video) open in the app, not the phone's browser.
+  const media = useMediaOpener();
   const canGoBack = useRef(false);
   // Set while a back navigation is in flight. onNavigationStateChange fires for
   // the page we are returning *to*, and without this flag it would push that
@@ -444,6 +447,7 @@ function WebShell({
   const LEGAL_PATHS: LegalDocId[] = [
     '/privacy-policy',
     '/terms',
+    '/creator-brand-agreement',
     '/community-guidelines',
     '/cookie-policy',
   ];
@@ -550,7 +554,8 @@ function WebShell({
       // to a path; anything else belongs to the system browser, not the shell.
       if (/^https?:\/\//i.test(target)) {
         if (!isInternal(target)) {
-          Linking.openURL(target).catch(() => {});
+          if (isOwnStorageUrl(target)) media.open(target);
+          else Linking.openURL(target).catch(() => {});
           return;
         }
         target = target.replace(/^https?:\/\/[^/]*/i, '') || '/';
@@ -574,7 +579,7 @@ function WebShell({
       setCurrentPath(path);
       setWebPath(path);
     },
-    [session.role],
+    [session.role, media.open],
   );
 
   /** Opens a chat thread, remembering the name the list already knows. */
@@ -751,9 +756,10 @@ function WebShell({
       return true;
     }
 
-    Linking.openURL(url).catch(() => {});
+    if (isOwnStorageUrl(url)) media.open(url);
+    else Linking.openURL(url).catch(() => {});
     return false;
-  }, [onLogout, mobileDashboard]);
+  }, [onLogout, mobileDashboard, media.open]);
 
   const onLoadEnd = useCallback(() => {
     setLoading(false);
@@ -783,6 +789,7 @@ function WebShell({
         <CreatorHome
           token={token}
           session={session}
+          unread={unread}
           onBrowse={() => navigateTo('/browse-briefs')}
           onOpenNotifications={() => setFeedOpen(true)}
           onOpenMessages={() => navigateTo('/messages')}
@@ -857,6 +864,7 @@ function WebShell({
       ) : showingPrivacy ? (
         <PrivacySecurity
           token={token}
+          role={session.role}
           onBack={backTo('/app/profile')}
           onNavigate={navigateTo}
           unread={unread}
@@ -890,6 +898,7 @@ function WebShell({
       ) : showingBrandCampaigns ? (
         <BrandCampaigns
           token={token}
+          unread={unread}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
@@ -897,6 +906,7 @@ function WebShell({
       ) : showingBrandCreators ? (
         <BrandCreators
           token={token}
+          unread={unread}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
@@ -931,6 +941,7 @@ function WebShell({
       ) : showingBrandWallet ? (
         <BrandWallet
           token={token}
+          unread={unread}
           initialView={walletView}
           prefill={{
             name: String(session.nickname || session.full_name || ''),
@@ -944,6 +955,7 @@ function WebShell({
       ) : showingBrandBids ? (
         <BrandBids
           token={token}
+          unread={unread}
           onBack={backTo('/dashboard/business/all-campaigns')}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
@@ -961,6 +973,7 @@ function WebShell({
       ) : showingBrandShipments ? (
         <BrandShipments
           token={token}
+          unread={unread}
           onBack={backTo('/dashboard/business/all-campaigns')}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
@@ -1083,6 +1096,7 @@ function WebShell({
       ) : showingProfileMenu ? (
         <AppProfileMenu
           session={session}
+          unread={unread}
           onNavigate={navigateTo}
           onNotifications={() => setFeedOpen(true)}
           onMessages={() => navigateTo('/messages')}
@@ -1161,6 +1175,8 @@ function WebShell({
           <ActivityIndicator size="large" color={THEME_COLOR} />
         </View>
       )}
+
+      {media.node}
 
       <NotificationFeed
         token={token}

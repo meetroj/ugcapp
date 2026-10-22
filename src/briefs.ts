@@ -32,8 +32,12 @@ export const slotsLeft = (campaign: Record<string, any> | null | undefined) =>
  * Biddable: active and with a creator slot left. A brief with no `status` is
  * accepted because the list request already asks the server for status=active.
  */
+export const isPrivateBrief = (campaign: Record<string, any> | null | undefined) =>
+  campaign?.visibility === 'private';
+
+/** A private brief is sent to one creator: never listed in Browse, never biddable. */
 export const isOpenForBids = (campaign: Record<string, any> | null | undefined) =>
-  (campaign?.status == null || campaign.status === 'active') && slotsLeft(campaign) > 0;
+  (campaign?.status == null || campaign.status === 'active') && slotsLeft(campaign) > 0 && !isPrivateBrief(campaign);
 
 /** Briefs the creator can still bid on: open, and not already hired on. */
 export const biddable = (list: Brief[], creatorId: unknown) =>
@@ -473,7 +477,7 @@ export const moodImagesOf = (c: Record<string, any>, base: string): string[] =>
     .filter((u: unknown): u is string => typeof u === 'string' && (u.startsWith('http') || u.startsWith('/')))
     .map((u: string) => (u.startsWith('http') ? u : `${base}${u}`));
 
-/** Reference videos: uploaded clips and pasted links, both opened outside the app. */
+/** Reference videos: uploaded clips and pasted links, both opened inside the app. */
 export const referenceVideosOf = (c: Record<string, any>, base: string): string[] =>
   (Array.isArray(c.reference_videos) ? c.reference_videos : [])
     .filter((u: unknown): u is string => typeof u === 'string' && !!u.trim())

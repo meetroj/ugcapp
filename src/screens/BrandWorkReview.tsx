@@ -18,7 +18,6 @@ import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
-  Linking,
   Modal,
   RefreshControl,
   ScrollView,
@@ -31,6 +30,8 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import ChoiceSheet from '../components/ChoiceSheet';
 import RateCreatorSheet from '../components/RateCreatorSheet';
 import ReviewPlayer from '../components/ReviewPlayer';
+import { ToastBar, useToast } from '../components/Toast';
+import { useMediaDownload } from '../mediaDownload';
 import { SkeletonList } from '../components/Skeleton';
 import WorkRevisionRequest from './WorkRevisionRequest';
 import {
@@ -230,6 +231,8 @@ function BrandWorkReview({
   const [durations, setDurations] = useState<Record<string, number>>({});
   // Row id being downloaded, to block a double tap.
   const [downloading, setDownloading] = useState<string | null>(null);
+  const { message: toast, show: showToast } = useToast();
+  const { start: startDownload, node: downloadNode } = useMediaDownload(showToast);
 
   const load = useCallback(async () => {
     try {
@@ -356,14 +359,15 @@ function BrandWorkReview({
         const link = await getWorkDownloadLink(token, String(row.id), kind);
         const url = mediaUrl(link?.url);
         if (!url) throw new Error('The download link is unavailable.');
-        await Linking.openURL(url);
+        // In the app: Android's download manager / the iOS share sheet, never the browser.
+        await startDownload(url);
       } catch (err: any) {
         Alert.alert('Download failed', errorMessage(err, 'Download failed'));
       } finally {
         setDownloading(null);
       }
     },
-    [downloading, token],
+    [downloading, startDownload, token],
   );
 
   const pendingShown = tab === 'all' || tab === 'pending_review' ? items : [];
@@ -934,6 +938,8 @@ function BrandWorkReview({
         }}
         onClose={() => setPreviewing(null)}
       />
+      {downloadNode}
+      <ToastBar message={toast} />
     </View>
   );
 }

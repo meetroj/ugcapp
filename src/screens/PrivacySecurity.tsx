@@ -272,11 +272,14 @@ function PrivacySecurity({
   onBack,
   onNavigate,
   unread = 0,
+  role,
 }: {
   token: string;
   onBack: () => void;
   onNavigate: (path: string) => void;
   unread?: number;
+  /** Earnings are a creator thing: a brand account never sees "Show Earnings". */
+  role?: string;
 }) {
   const [privacy, setPrivacy] = useState<PrivacyPrefs>({});
   // The switches stay disabled until the saved block has loaded. Letting them
@@ -411,17 +414,19 @@ function PrivacySecurity({
             on={privacy.public_profile !== false}
             onToggle={next => setPref('public_profile', next)}
           />
-          <Row
-            icon="rupee"
-            iconTint="#F79009"
-            iconBg="#FEF4E6"
-            label="Show Earnings"
-            hint={'Display total earned on\nyour public profile'}
-            toggle
-            disabled={prefsState !== 'ready'}
-            on={!!privacy.show_earnings}
-            onToggle={next => setPref('show_earnings', next)}
-          />
+          {role !== 'business' && (
+            <Row
+              icon="rupee"
+              iconTint="#F79009"
+              iconBg="#FEF4E6"
+              label="Show Earnings"
+              hint={'Display total earned on\nyour public profile'}
+              toggle
+              disabled={prefsState !== 'ready'}
+              on={!!privacy.show_earnings}
+              onToggle={next => setPref('show_earnings', next)}
+            />
+          )}
           <Row
             icon="chat"
             iconTint="#5B5CF6"
@@ -453,6 +458,14 @@ function PrivacySecurity({
             label="Terms and Conditions"
             hint="The rules for using the UGCad.io platform"
             onPress={() => onNavigate('/terms')}
+          />
+          <Row
+            icon="terms"
+            iconTint="#5B5CF6"
+            iconBg="#EEEFFF"
+            label="Creator & Brand Agreement"
+            hint="Deal-level terms for creators and brands"
+            onPress={() => onNavigate('/creator-brand-agreement')}
           />
           <Row
             icon="community"

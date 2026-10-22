@@ -8,7 +8,7 @@ import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
 import { TouchableOpacity } from 'react-native';
 import Reviews from '../src/screens/Reviews';
-import { getCampaign, getMe, getPublicProfile, getReviews } from '../src/api';
+import { getBusinessReviews, getCampaign, getMe, getMyDeals, getPublicProfile, getReviews } from '../src/api';
 
 jest.mock('../src/api', () => ({
   BACKEND_URL: 'https://api.example.com',
@@ -16,6 +16,9 @@ jest.mock('../src/api', () => ({
   getMe: jest.fn(),
   getPublicProfile: jest.fn(),
   getCampaign: jest.fn(),
+  getMyDeals: jest.fn(),
+  getBusinessReviews: jest.fn(),
+  postReview: jest.fn(),
 }));
 
 let tree: any;
@@ -43,6 +46,8 @@ beforeEach(() => {
   (getReviews as jest.Mock).mockResolvedValue(reviews);
   (getMe as jest.Mock).mockResolvedValue({ average_rating: 4.5, total_reviews: 2 });
   (getCampaign as jest.Mock).mockResolvedValue({ id: 'c1', title: 'Summer Launch' });
+  (getMyDeals as jest.Mock).mockResolvedValue([]);
+  (getBusinessReviews as jest.Mock).mockResolvedValue([]);
 });
 afterEach(async () => {
   if (tree) await act(async () => tree.unmount());
@@ -87,6 +92,57 @@ test('a creator gets no profile link on a review', async () => {
   (getPublicProfile as jest.Mock).mockResolvedValue({ business_name: 'Acme Foods' });
   await mount('creator', { onNavigate: jest.fn() });
   expect(tree.root.findAllByType(TouchableOpacity).filter((n: any) => /^View .*profile$/.test(n.props.accessibilityLabel || ''))).toHaveLength(0);
+});
+
+const paid = (id: string, business: string, brand: string) => ({
+  deal_id: `DEAL-${id}`,
+  current_state: 'Paid - Complete',
+  campaign: { id, business_id: business, title: `Campaign ${id}` },
+  brand: { id: business, name: brand },
+});
+
+test('a creator is offered every completed deal whose brand they have not rated', async () => {
+  (getReviews as jest.Mock).mockResolvedValue([]);
+  (getMyDeals as jest.Mock).mockResolvedValue([
+    paid('c1', 'b1', 'Acme Foods'),
+    paid('c2', 'b1', 'Acme Foods'),
+    paid('c3', 'b2', 'Zed Labs'),
+    { ...paid('c4', 'b2', 'Zed Labs'), current_state: 'In Progress' },
+  ]);
+  // The creator ('me') already rated Acme for c1; someone else's review does not count.
+  (getBusinessReviews as jest.Mock).mockImplementation(async (_t: string, id: string) =>
+    id === 'b1'
+      ? [{ campaign_id: 'c1', reviewer_id: 'me' }, { campaign_id: 'c2', reviewer_id: 'other' }]
+      : [],
+  );
+  await mount('creator');
+  const t = all();
+  expect(t).toContain('Rate your brands');
+  expect(t).toContain('Campaign c2');
+  expect(t).toContain('Campaign c3');
+  expect(t).not.toContain('Campaign c1');
+  expect(t).not.toContain('Campaign c4');
+  // The empty state says what shows here, and where to rate.
+  expect(t).toContain('Brands rate you after each completed deal');
+
+  await act(async () => { touch('Rate Zed Labs')!.props.onPress(); });
+  expect(all()).toContain('How was working with Zed Labs?');
+});
+
+test('a brand whose reviews cannot be read is not offered a blind rating', async () => {
+  (getMyDeals as jest.Mock).mockResolvedValue([paid('c1', 'b1', 'Acme Foods')]);
+  (getBusinessReviews as jest.Mock).mockRejectedValue(new Error('down'));
+  await mount('creator');
+  expect(all()).not.toContain('Rate your brands');
+});
+
+test('a brand is never asked to rate brands, and its empty state names creators', async () => {
+  (getReviews as jest.Mock).mockResolvedValue([]);
+  (getMyDeals as jest.Mock).mockResolvedValue([paid('c1', 'b1', 'Acme Foods')]);
+  await mount('business');
+  expect(getMyDeals).not.toHaveBeenCalled();
+  expect(all()).not.toContain('Rate your brands');
+  expect(all()).toContain('Creators rate your brand after each completed deal');
 });
 
 test('no reviews: the average shows a dash, not 0.0', async () => {

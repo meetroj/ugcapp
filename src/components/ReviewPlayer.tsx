@@ -57,6 +57,7 @@ export default function ReviewPlayer({
             controls
             paused={false}
             repeat={false}
+            ignoreSilentSwitch="ignore"
             onLoad={meta => {
               if (meta?.duration > 0) onDuration?.(meta.duration);
             }}

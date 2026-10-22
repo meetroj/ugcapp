@@ -29,12 +29,15 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { launchImageLibrary } from 'react-native-image-picker';
 import UploadProgressBar from '../components/UploadProgressBar';
+import { ToastBar, useToast } from '../components/Toast';
+import { asAttachmentUrl, useMediaDownload } from '../mediaDownload';
 import {
   addDealEvidence,
   archiveDeal,
   getBusinessReviews,
   getCampaign,
   getMyDeals,
+  getWorkDownloadLink,
   BACKEND_URL,
   escalateDeal,
   reportDealDamage,
@@ -369,6 +372,9 @@ function DealDetails({
   const [deal, setDeal] = useState(initialDeal);
   const [refreshing, setRefreshing] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+  // Downloads stay in the app: Android's download manager / the iOS share sheet.
+  const { message: toast, show: showToast } = useToast();
+  const { start: startDownload, node: downloadNode } = useMediaDownload(showToast);
   const mounted = useRef(false);
   const refreshingDeal = useRef(false);
   useEffect(() => { setDeal(initialDeal); }, [initialDeal]);
@@ -1050,11 +1056,25 @@ function DealDetails({
                     <TouchableOpacity
                       style={[styles.softBtn, styles.flex]}
                       disabled={!version.raw_footage_url && !version.video_url}
-                      onPress={() => {
-                        const url = mediaUrl(
+                      onPress={async () => {
+                        const stored = mediaUrl(
                           version.raw_footage_url || version.video_url,
                         );
-                        if (url) Linking.openURL(url).catch(() => {});
+                        if (!stored) return;
+                        // The server's "save as" link first (it forces a download on S3);
+                        // the stored file only if it cannot be had.
+                        let url: string | null = null;
+                        try {
+                          const link = await getWorkDownloadLink(
+                            token as string,
+                            campaignId,
+                            version.raw_footage_url ? 'raw' : undefined,
+                          );
+                          url = typeof link?.url === 'string' && link.url ? link.url : null;
+                        } catch {
+                          url = null;
+                        }
+                        await startDownload(url || asAttachmentUrl(stored));
                       }}
                       accessibilityRole="button"
                     >
@@ -1277,6 +1297,8 @@ function DealDetails({
             })}
           </ScrollView>
       <VideoPreview uri={previewUri} onClose={() => setPreviewUri(null)} />
+      {downloadNode}
+      <ToastBar message={toast} />
         </View>
 
         {/* A direct booking is not real work until the creator answers it. */}

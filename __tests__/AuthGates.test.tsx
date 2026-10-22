@@ -393,28 +393,26 @@ describe('legal documents', () => {
     return tree;
   };
 
-  it('links only the privacy policy, which is the one page that exists', () => {
+  it('shows the full text in the app and never sends the user to the website', () => {
     const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined as never);
-    const privacy = render('/privacy-policy');
-    expect(textsOf(privacy)).toEqual(
-      expect.arrayContaining(['Read the full privacy policy']),
-    );
-    act(() => {
-      pressable(privacy, 'Read the full privacy policy').props.onPress();
-    });
-    expect(open).toHaveBeenCalledWith('https://www.ugcad.io/privacy');
-
-    for (const id of ['/terms', '/community-guidelines', '/cookie-policy']) {
+    for (const id of ['/privacy-policy', '/terms', '/creator-brand-agreement', '/community-guidelines']) {
       const t = render(id);
       expect(textsOf(t).join(' ')).not.toContain('Read the full');
-      expect(textsOf(t)).toEqual(expect.arrayContaining(['Last updated July 2026']));
+      expect(textsOf(t)).toEqual(expect.arrayContaining(['Last updated 28 September 2026']));
     }
+    expect(textsOf(render('/cookie-policy'))).toEqual(expect.arrayContaining(['Last updated July 2026']));
+    expect(open).not.toHaveBeenCalled();
   });
 
-  it('uses the website copy', () => {
-    expect(textsOf(render('/terms'))).toEqual(
-      expect.arrayContaining(['Acceptance of terms', 'Limitation of liability']),
-    );
+  it('uses the website copy, including lists and tables, without drafting notes', () => {
+    const terms = textsOf(render('/terms'));
+    expect(terms).toEqual(expect.arrayContaining(['1. Definitions', '20. Limitation of Liability']));
+    const agreement = textsOf(render('/creator-brand-agreement')).join(' ');
+    expect(agreement).toContain('A - Platform fault');
+    expect(agreement).toContain('₹3,000');
+    const everything = ['/privacy-policy', '/terms', '/creator-brand-agreement', '/community-guidelines']
+      .map(id => textsOf(render(id)).join(' ')).join(' ');
+    expect(everything).not.toMatch(/\[Insert|counsel|Regulatory note/);
   });
 });
 

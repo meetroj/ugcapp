@@ -1947,15 +1947,15 @@ export async function getCategories(
 }
 
 /**
- * Total unread chat messages (and unread action cards), summed server-side by
- * `GET /api/chat/unread-count` (server.py).
+ * Unread chat badge, summed from the SAME conversations list the Messages
+ * screen shows (`GET /api/chat/conversations`, each row's `unread_count`).
+ * `GET /api/chat/unread-count` counts every unread message in the database,
+ * including ones whose thread never appears in that list, so the header badge
+ * (8) disagreed with a list showing three threads and no unread dots.
  */
 export async function getChatUnreadCount(token: string): Promise<number> {
-  const data = await get<{ unread_count?: number }>(
-    token,
-    '/api/chat/unread-count',
-  );
-  return Number(data?.unread_count || 0);
+  const rows = await getConversations(token);
+  return rows.reduce((sum, row) => sum + (Number(row.unread_count) || 0), 0);
 }
 
 /**

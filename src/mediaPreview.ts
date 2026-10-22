@@ -39,3 +39,15 @@ export const playableVideoUrl = (uri: string): string => {
   if (/\/video\/upload\/f_mp4,vc_h264,/i.test(uri)) return uri;
   return uri.replace('/video/upload/', '/video/upload/f_mp4,vc_h264,q_auto:good/');
 };
+
+/**
+ * Identity of a stored clip, so the same video reached through two URLs (the
+ * Cloudinary copy and the bucket copy, a signed link and a plain one, a
+ * different cloudinary version) counts once. Host, version, transform,
+ * extension and query are dropped; the path is what names the file.
+ */
+export const clipKey = (uri: string): string => {
+  const cloud = /^https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/(?:[^/]*,[^/]*\/)?(?:v\d+\/)?(.+)$/i.exec(uri);
+  const path = cloud ? cloud[1] : uri.replace(/^https?:\/\/[^/]+\//i, '');
+  return path.replace(/^\//, '').replace(/[?#].*$/, '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/^previews\//i, '').toLowerCase();
+};

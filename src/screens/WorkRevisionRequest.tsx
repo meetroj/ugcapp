@@ -454,6 +454,7 @@ function WorkRevisionRequest({ token, work, onClose, onDone }: Props) {
               paused={!playing}
               resizeMode="cover"
               repeat
+              ignoreSilentSwitch="ignore"
               onLoad={meta => {
                 setVideoError(false);
                 setLength(meta?.duration || 0);

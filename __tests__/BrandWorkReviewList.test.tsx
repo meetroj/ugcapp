@@ -1,6 +1,7 @@
 import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
-import { Linking, TouchableOpacity } from 'react-native';
+import { Linking, Platform, Share, TouchableOpacity } from 'react-native';
+import { WebView } from 'react-native-webview';
 import BrandWorkReview from '../src/screens/BrandWorkReview';
 import RateCreatorSheet from '../src/components/RateCreatorSheet';
 import { Alert } from '../src/components/AppAlert';
@@ -132,12 +133,40 @@ test('approved work downloads raw and edited through the server link', async () 
     },
   ]);
   (getWorkDownloadLink as jest.Mock).mockResolvedValue({ url: 'https://s3.example.com/signed' });
+  // The file stays in the app: never the browser, whichever platform.
   const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as any);
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction } as any);
   await render();
   expect(button('Download Edited video')).toBeTruthy();
   await act(async () => { await button('Download Raw video').props.onPress(); });
   expect(getWorkDownloadLink).toHaveBeenCalledWith('t', 'c1', 'raw');
-  expect(open).toHaveBeenCalledWith('https://s3.example.com/signed');
+  // iOS: the share sheet with the signed link.
+  expect(share).toHaveBeenCalledWith({ url: 'https://s3.example.com/signed' });
+  expect(open).not.toHaveBeenCalled();
+});
+
+test('on Android the download goes to the download manager through an in-app webview, not the browser', async () => {
+  jest.replaceProperty(Platform, 'OS', 'android');
+  (getPendingWork as jest.Mock).mockResolvedValue([]);
+  (getWorkReview as jest.Mock).mockResolvedValue([
+    {
+      id: 'c1', campaignId: 'c1', creatorId: 'u1', title: 'Launch', creator: 'Arushi', status: 'approved',
+      files: ['https://cdn.example.com/a.mp4'],
+      labeledFiles: [
+        { kind: 'edited', label: 'Edited video', url: 'https://cdn.example.com/a.mp4' },
+        { kind: 'raw', label: 'Raw video', url: 'https://cdn.example.com/r.mp4' },
+      ],
+    },
+  ]);
+  (getWorkDownloadLink as jest.Mock).mockResolvedValue({ url: 'https://s3.example.com/signed' });
+  const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as any);
+  await render();
+  await act(async () => { await button('Download Raw video').props.onPress(); });
+  const loader = tree.root.findAllByType(WebView);
+  expect(loader).toHaveLength(1);
+  expect(loader[0].props.source).toEqual({ uri: 'https://s3.example.com/signed' });
+  expect(content(tree.toJSON())).toContain('Downloading');
+  expect(open).not.toHaveBeenCalled();
 });
 
 test('a refused download shows the server reason', async () => {

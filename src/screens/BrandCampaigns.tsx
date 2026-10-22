@@ -29,6 +29,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
 };
 
 type Campaign = Record<string, any> & { id: string };
@@ -254,6 +256,7 @@ function BrandCampaigns({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
 }: Props) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   // All is the website's default tab; paused / rejected briefs only show there
@@ -371,6 +374,7 @@ function BrandCampaigns({
           title="Campaigns"
           onNotifications={onNotifications}
           onMessages={onMessages}
+        unreadMessages={unread}
         />
       </View>
       <View style={styles.sheet}>

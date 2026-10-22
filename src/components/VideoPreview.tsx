@@ -12,7 +12,7 @@ export default function VideoPreview({ uri, onClose }: { uri: string | null; onC
       supportedOrientations={['portrait', 'landscape']} onRequestClose={onClose}>
       <View style={styles.screen}>
         {!!uri && <Video source={{ uri }} style={styles.video} resizeMode="contain"
-          controls paused={false} repeat={false} />}
+          controls paused={false} repeat={false} ignoreSilentSwitch="ignore" />}
         <TouchableOpacity style={[styles.close, { top: insets.top + scale(12) }]}
           accessibilityRole="button" accessibilityLabel="Close full-screen video" onPress={onClose}>
           <Text style={styles.label}>Close</Text>

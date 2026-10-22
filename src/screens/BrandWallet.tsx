@@ -32,6 +32,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge. */
+  unread?: number;
   /** Settings > Billing links here with ?view=history|recharge: scroll to that section. */
   initialView?: 'history' | 'recharge';
   /** Razorpay checkout prefill, same fields the website sends. */
@@ -162,6 +164,7 @@ function BrandWallet({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
   initialView,
   prefill,
 }: Props) {
@@ -279,6 +282,7 @@ function BrandWallet({
           title="Wallet"
           onNotifications={onNotifications}
           onMessages={onMessages}
+        unreadMessages={unread}
         />
       </View>
 

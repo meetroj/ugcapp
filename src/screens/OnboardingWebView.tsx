@@ -19,6 +19,7 @@ import {
   KeyboardAvoidingView,
   Linking,
   Platform,
+  StatusBar,
   StyleSheet,
   TouchableOpacity,
   View,
@@ -29,6 +30,7 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { verifySession, type AuthUser } from '../api';
 import { SITE_ORIGIN, isSiteUrl } from '../deepLink';
+import { isOwnStorageUrl, useMediaOpener } from '../components/MediaViewer';
 import { scale, fontScale } from '../theme';
 
 /**
@@ -73,6 +75,12 @@ export default function OnboardingWebView({
   // This screen is mounted straight under the SafeAreaProvider (no
   // SafeAreaView), so the notch / status bar / home bar are cleared here.
   const insets = useSafeAreaInsets();
+  // Edge-to-edge Android can report a 0 inset; fall back to the measured
+  // status-bar height so Log out / Done never sit under the clock.
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
+  );
   const path =
     session.role === 'creator'
       ? '/profile-setup/creator'
@@ -82,6 +90,7 @@ export default function OnboardingWebView({
   const [attempt, setAttempt] = useState(0);
   const doneRef = useRef(false);
   const webRef = useRef<WebView>(null);
+  const media = useMediaOpener();
   const canGoBack = useRef(false);
 
   const finish = useCallback(() => {
@@ -149,13 +158,15 @@ export default function OnboardingWebView({
       style={[
         styles.screen,
         {
-          paddingTop: insets.top,
+          paddingTop: topInset,
           paddingBottom: insets.bottom,
           paddingLeft: insets.left,
           paddingRight: insets.right,
         },
       ]}
     >
+      {/* The bar is dark navy: light clock/battery glyphs stay readable on it. */}
+      <StatusBar barStyle="light-content" />
       <View style={styles.bar}>
         {reopened && onCancel ? (
           <TouchableOpacity
@@ -246,12 +257,18 @@ export default function OnboardingWebView({
           // form, so a tap never replaces the half-filled page.
           onShouldStartLoadWithRequest={req => {
             if (isSiteUrl(req.url)) return true;
+            // Our own documents and pictures open in the app's viewer.
+            if (isOwnStorageUrl(req.url)) {
+              media.open(req.url);
+              return false;
+            }
             Linking.openURL(req.url).catch(() => {});
             return false;
           }}
         />
         </KeyboardAvoidingView>
       )}
+      {media.node}
     </View>
   );
 }

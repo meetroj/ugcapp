@@ -48,7 +48,7 @@ import {
   type DirectoryCreator,
 } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
-import { playableVideoUrl } from '../mediaPreview';
+import { clipKey, playableVideoUrl } from '../mediaPreview';
 import { scale, fontScale, CONTENT_MAX_WIDTH } from '../theme';
 
 type Props = {
@@ -216,8 +216,11 @@ export function mergePortfolio(
       };
     })
     .filter(clip => {
-      if (!clip.url || clip.url.startsWith('blob:') || seen.has(clip.url)) return false;
-      seen.add(clip.url);
+      // By file identity, not the raw string: the same clip reached through two
+      // URLs (cloudinary + bucket copy, signed + plain) showed up twice.
+      const key = clipKey(clip.url);
+      if (!clip.url || clip.url.startsWith('blob:') || seen.has(key)) return false;
+      seen.add(key);
       return true;
     })
     .slice(0, 5);

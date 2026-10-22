@@ -38,7 +38,7 @@ import ChoiceSheet from '../components/ChoiceSheet';
 import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, NetworkError, getCreatorDirectory, getSavedCreators, saveCreator, unsaveCreator } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
-import { playableVideoUrl, previewOf } from '../mediaPreview';
+import { clipKey, playableVideoUrl, previewOf } from '../mediaPreview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NAV_CLEARANCE, scale, fontScale } from '../theme';
 
@@ -47,6 +47,8 @@ type Props = {
   onNavigate: (path: string) => void;
   onNotifications?: () => void;
   onMessages?: () => void;
+  /** Unread chat count for the header badge (same source as the other tabs). */
+  unread?: number;
   /**
    * Opens the full-screen public profile. The directory record is handed over
    * rather than an id: this tab already loaded every field that page shows, so
@@ -82,6 +84,12 @@ export const priceTextOf = (creator: Creator): string => {
       '',
   ).trim();
   if (raw) {
+    // A bare numeric range ("1500-3000") still reads as money.
+    const range = /^(\d[\d,]*)\s*[-\u2013]\s*(\d[\d,]*)$/.exec(raw);
+    if (range) {
+      const money = (digits: string) => Number(digits.replace(/,/g, '')).toLocaleString('en-IN');
+      return `Rs. ${money(range[1])} - ${money(range[2])} / video`;
+    }
     if (/[a-zA-Z\u20B9]/.test(raw) || raw.includes('-')) return raw;
     const num = raw.replace(/[^0-9]/g, '');
     if (num) return `Rs. ${Number(num).toLocaleString('en-IN')} / video`;
@@ -161,6 +169,17 @@ const creatorVideoUrl = (creator: Creator): string | null => {
     if (isVideo(url)) return url;
   }
   return null;
+};
+
+// The same clip can arrive under two URLs (cloudinary + bucket copy): keep one.
+const uniqueClips = (urls: string[]): string[] => {
+  const seen = new Set<string>();
+  return urls.filter(url => {
+    const key = clipKey(url);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
 const cloudinaryVideoPoster = (uri: string | null): string => {
@@ -268,6 +287,12 @@ function Icon({
       {name === 'bookmarkFilled' && (
         <Path d="M6.5 3.5h11v17l-5.5-4-5.5 4v-17Z" {...line} fill={color} />
       )}
+      {name === 'sound' && (
+        <>
+          <Path d="M11 5 6.5 8.5H3.5v7h3L11 19V5Z" {...line} />
+          <Path d="M15 9.2a4 4 0 0 1 0 5.6M17.8 6.6a8 8 0 0 1 0 10.8" {...line} />
+        </>
+      )}
       {name === 'muted' && (
         <>
           <Path d="M11 5 6.5 8.5H3.5v7h3L11 19V5Z" {...line} />
@@ -294,6 +319,8 @@ const ReelTile = React.memo(function ReelTileContent({
   index,
   play,
   allowOriginal,
+  soundOn,
+  onSound,
 }: {
   creator: Creator;
   onOpen: (creator: Creator) => void;
@@ -307,6 +334,10 @@ const ReelTile = React.memo(function ReelTileContent({
   allowOriginal: boolean;
   /** True for the few tiles currently in the middle of the screen. */
   play: boolean;
+  /** This tile's preview is unmuted. Only one tile at a time has sound. */
+  soundOn: boolean;
+  /** Takes the sound for this creator's id, or gives it up with null. */
+  onSound: (id: string | null) => void;
 }) {
   // Upstream's lookup finds a clip anywhere in the portfolio, not just the preview.
   const videoUrl = creatorVideoUrl(creator);
@@ -342,6 +373,8 @@ const ReelTile = React.memo(function ReelTileContent({
     setReady(false);
   }, [media]);
   useEffect(() => { setReady(false); }, [showClip, playbackUrl]);
+  // The clip stopped (scrolled away, a sheet opened): give the sound back.
+  useEffect(() => { if (soundOn && !showClip) onSound(null); }, [soundOn, showClip, onSound]);
 
   return (
     <TouchableOpacity
@@ -375,7 +408,8 @@ const ReelTile = React.memo(function ReelTileContent({
             style={[styles.reelClip, ready ? styles.clipReady : styles.clipLoading]}
             resizeMode="cover"
             repeat
-            muted
+            // Muted until the brand taps the speaker; one tile at a time.
+            muted={!soundOn}
             // Texture view, because a surface view ignores opacity and would
             // flash black over the picture until the first frame.
             viewType={ViewType.TEXTURE}
@@ -384,7 +418,9 @@ const ReelTile = React.memo(function ReelTileContent({
             reportBandwidth={false}
             playInBackground={false}
             playWhenInactive={false}
-            disableFocus
+            // A silent preview must not steal the phone's audio focus; the
+            // one with sound does (Android). iOS plays through the silent switch.
+            disableFocus={!soundOn}
             ignoreSilentSwitch="ignore"
             onReadyForDisplay={() => setReady(true)}
             onError={() => useSmall ? setClipFailed(true) : setVideoFailed(true)}
@@ -421,6 +457,17 @@ const ReelTile = React.memo(function ReelTileContent({
             </Text>
           </View>
         )}
+        {showClip && ready && (
+          <TouchableOpacity style={styles.mutedPill}
+            accessibilityRole="button"
+            accessibilityLabel={soundOn ? `Mute ${name}'s preview` : `Unmute ${name}'s preview`}
+            accessibilityState={{ selected: soundOn }}
+            testID={`creator-sound-${creator.id}`}
+            hitSlop={scale(10)}
+            onPress={event => { event.stopPropagation(); onSound(soundOn ? null : creator.id); }}>
+            <Icon name={soundOn ? 'sound' : 'muted'} color="#FFFFFF" size={14} />
+          </TouchableOpacity>
+        )}
         {video && !(showClip && ready) && (
           <TouchableOpacity style={styles.reelPlay}
             accessibilityRole="button" accessibilityLabel={`Play ${name}'s preview`}
@@ -443,14 +490,14 @@ const ReelTile = React.memo(function ReelTileContent({
         </View>
         <View style={styles.tileCopy}>
           <View style={styles.nameRow}>
-            <Text style={styles.tileName} numberOfLines={1}>
+            <Text style={styles.tileName} numberOfLines={2}>
               {name}
             </Text>
             {!!creator.kyc_verified && (
               <Icon name="verified" color="#1FA971" size={13} />
             )}
           </View>
-          <Text style={styles.tileRate} numberOfLines={1}>
+          <Text style={styles.tileRate} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
             {rate}
           </Text>
         </View>
@@ -472,7 +519,7 @@ const ReelTile = React.memo(function ReelTileContent({
 
 
 /** Swipeable, virtualized row. Scrolling releases the decoder until settling. */
-const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen, onMessage, savedIds, savingIds, onToggleSave }: {
+const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivate, onOpen, onMessage, savedIds, savingIds, onToggleSave, soundId, onSound }: {
   creators: Creator[];
   active: boolean;
   onActivate: () => void;
@@ -481,6 +528,9 @@ const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivat
   savedIds: Set<string>;
   savingIds: Set<string>;
   onToggleSave: (creator: Creator) => void;
+  /** The one creator whose preview currently has sound. */
+  soundId: string | null;
+  onSound: (id: string | null) => void;
 }) {
   const [scrolling, setScrolling] = useState(false);
   const [playingSlot, setPlayingSlot] = useState<number | null>(null);
@@ -522,12 +572,13 @@ const ReelRow = React.memo(function ReelRowContent({ creators, active, onActivat
   const renderItem = useCallback(({ item, index }: { item: Creator; index: number }) => (
     <ReelTile creator={item} index={index} onOpen={onOpen} onMessage={onMessage} onRequestPlay={requestPlay}
       onToggleSave={onToggleSave} saved={savedIds.has(item.id)} saving={savingIds.has(item.id)}
-      play={active && !scrolling && playingSlot === index} allowOriginal={requestedSlot === index} />
-  ), [active, scrolling, playingSlot, requestedSlot, onOpen, onMessage, requestPlay, onToggleSave, savedIds, savingIds]);
+      play={active && !scrolling && playingSlot === index} allowOriginal={requestedSlot === index}
+      soundOn={soundId === item.id} onSound={onSound} />
+  ), [active, scrolling, playingSlot, requestedSlot, onOpen, onMessage, requestPlay, onToggleSave, savedIds, savingIds, soundId, onSound]);
   if (!creators.length) return null;
   return <FlatList horizontal data={creators} renderItem={renderItem}
     keyExtractor={creator => creator.id}
-    extraData={`${active}-${scrolling}-${playingSlot}-${requestedSlot}-${saveKey}`}
+    extraData={`${active}-${scrolling}-${playingSlot}-${requestedSlot}-${saveKey}-${soundId}`}
     initialNumToRender={3} maxToRenderPerBatch={3} windowSize={3}
     getItemLayout={(_, index) => ({ length: TILE_STRIDE, offset: ROW_PADDING + index * TILE_STRIDE, index })}
     viewabilityConfig={viewabilityConfig} onViewableItemsChanged={onViewableItemsChanged}
@@ -612,8 +663,7 @@ function CreatorPeekSheet({
   const delivered = Number(creator.deliverables_completed) || 0;
   const location = locationOf(creator);
   const peekCats = categoriesOf(creator);
-  const clips = Array.from(
-    new Set(
+  const clips = uniqueClips(
       [
         creatorVideoUrl(creator),
         ...(Array.isArray(creator.portfolio) ? creator.portfolio : []).map(item =>
@@ -628,7 +678,6 @@ function CreatorPeekSheet({
             : '',
         ),
       ].filter((url): url is string => !!url),
-    ),
   )
     .map(photoUrl)
     .filter(Boolean)
@@ -838,6 +887,7 @@ function BrandCreators({
   onNavigate,
   onNotifications,
   onMessages,
+  unread = 0,
   onOpenCreator,
 }: Props) {
   const [creators, setCreators] = useState<Creator[]>([]);
@@ -1030,6 +1080,10 @@ function BrandCreators({
     load();
   }, [load]);
   const playbackAllowed = foreground && !peek && !searchFocused && !verticalScrolling && query === deferredQuery;
+  // The creator whose preview has sound (one at a time). Any pause of playback
+  // (backgrounded, sheet open, scrolling) or a new list gives the sound back.
+  const [soundId, setSoundId] = useState<string | null>(null);
+  useEffect(() => { setSoundId(null); }, [playbackAllowed, query, category, approvedOnly, savedOnly]);
 
   return (
     <View style={styles.screen}>
@@ -1037,6 +1091,7 @@ function BrandCreators({
         title="Creators"
         onNotifications={onNotifications}
         onMessages={onMessages}
+        unreadMessages={unread}
       />
 
       <View style={styles.sheet}>
@@ -1102,14 +1157,14 @@ function BrandCreators({
               <Icon name="back" color="#4C4DD6" size={15} />
               <Text style={styles.approvedBackText}>Back to All Creators</Text>
             </TouchableOpacity>
-            <Text style={styles.approvedTitle}>Creators Approved by Our UGCAD Team</Text>
-            <Text style={styles.approvedSub}>Every creator here has been reviewed and approved by the UGCAD team.</Text>
+            <Text style={styles.approvedTitle}>Preferred Creators by the UGCAD Team</Text>
+            <Text style={styles.approvedSub}>Every creator on UGCAD is team approved. These are the ones our team prefers most.</Text>
           </View>
         ) : (
           <TouchableOpacity style={styles.approvedLink} onPress={() => setApprovedOnly(true)}
             accessibilityRole="button">
             <Icon name="verified" color="#1FA971" size={17} />
-            <Text style={styles.approvedLinkText} numberOfLines={1}>Meet Creators Approved by Our UGCAD Team</Text>
+            <Text style={styles.approvedLinkText} numberOfLines={1}>Meet Our Preferred Creators</Text>
             <Icon name="chevron" color="#4C4DD6" size={15} />
           </TouchableOpacity>
         )}
@@ -1173,7 +1228,7 @@ function BrandCreators({
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>
                   {savedOnly && savedStatus === 'ready' && !savedIds.size ? 'No saved creators yet'
-                    : approvedOnly ? 'No approved creators to show' : 'No creators found'}
+                    : approvedOnly ? 'No preferred creators to show' : 'No creators found'}
                 </Text>
                 <Text style={styles.emptyText}>
                   {savedOnly && savedStatus === 'ready' && !savedIds.size
@@ -1186,8 +1241,8 @@ function BrandCreators({
                     ? `No creators in ${categoryLabel(category)}${query ? ' match your search' : ''}. Try another category or clear the filter.`
                     : approvedOnly
                     ? query
-                      ? 'None of the UGCAD approved creators match your search.'
-                      : 'The UGCAD team has not approved any creators for this collection yet. Check back soon.'
+                      ? 'None of the preferred creators match your search.'
+                      : 'The UGCAD team has not picked any preferred creators yet. Check back soon.'
                     : query
                     ? 'Try a different search term.'
                     : 'The directory is empty right now.'}
@@ -1209,12 +1264,14 @@ function BrandCreators({
                 <View testID="creator-directory-row-0" onLayout={event => { rowLayouts.current[0] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[0]} active={playbackAllowed && activeRow === 0}
                     onActivate={activateFirst} onOpen={setPeek} onMessage={messageCreator}
-                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave} />
+                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave}
+                    soundId={soundId} onSound={setSoundId} />
                 </View>
                 <View testID="creator-directory-row-1" onLayout={event => { rowLayouts.current[1] = event.nativeEvent.layout; chooseVisibleRow(); }}>
                   <ReelRow creators={rows[1]} active={playbackAllowed && activeRow === 1}
                     onActivate={activateSecond} onOpen={setPeek} onMessage={messageCreator}
-                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave} />
+                    savedIds={savedIds} savingIds={savingIds} onToggleSave={toggleSave}
+                    soundId={soundId} onSound={setSoundId} />
                 </View>
               </View>
             )}
@@ -1338,7 +1395,7 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
 
-  // "Meet Creators Approved by Our UGCAD Team" link and the collection's heading.
+  // "Meet Our Preferred Creators" link and the collection's heading.
   approvedLink: {
     marginHorizontal: scale(16),
     marginBottom: scale(12),
@@ -1460,7 +1517,7 @@ const styles = StyleSheet.create({
   },
   mutedPill: {
     position: 'absolute',
-    left: scale(8),
+    right: scale(8),
     bottom: scale(8),
     width: scale(24),
     height: scale(24),
@@ -1471,7 +1528,8 @@ const styles = StyleSheet.create({
   },
 
   tileFooter: {
-    height: FOOTER_HEIGHT,
+    // minHeight: a long name wraps to a second line instead of being cut.
+    minHeight: FOOTER_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     paddingTop: scale(8),

@@ -246,3 +246,23 @@ test('appleAuth omits the name on later sign-ins, when Apple sends none', async 
   expect('full_name' in body).toBe(false);
   expect(body.role).toBe('creator');
 });
+
+test('the header unread badge is summed from the conversations list it sits beside', async () => {
+  // /chat/unread-count counted every unread row in the database (8) while the
+  // Messages list showed three threads, so the two numbers disagreed.
+  const fetchMock = jest.fn(async (_url: string, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => [
+      {user_id: 'a', unread_count: 2},
+      {user_id: 'b', unread_count: 0},
+      {user_id: 'c', unread_count: 1},
+    ],
+  }));
+  g.fetch = fetchMock as unknown as typeof fetch;
+
+  const {getChatUnreadCount} = require('../src/api');
+  expect(await getChatUnreadCount('token')).toBe(3);
+  const urls = fetchMock.mock.calls.map(call => String(call[0]));
+  expect(urls).toEqual([expect.stringContaining('/api/chat/conversations')]);
+});
