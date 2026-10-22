@@ -15,6 +15,7 @@ import BrandChatThread from '../src/screens/BrandChatThread';
 import {
   getMessages,
   getConversations,
+  getCampaign,
   sendActionCard,
   respondToActionCard,
   sendMessage,
@@ -29,6 +30,7 @@ jest.mock('../src/api', () => ({
   BACKEND_URL: 'http://api.test',
   getMessages: jest.fn(),
   getConversations: jest.fn(),
+  getCampaign: jest.fn(),
   sendActionCard: jest.fn(),
   respondToActionCard: jest.fn(),
   sendMessage: jest.fn(),
@@ -333,6 +335,25 @@ test('after accepting an invitation the creator can ask for the brief', async ()
     "I've accepted the invitation - please share the full brief so I can get started.",
     [],
   );
+});
+
+test('View details on a private brief opens its details in the chat, not another deal', async () => {
+  (getConversations as jest.Mock).mockResolvedValue([{ user_id: 'other-1', role: 'business', associated_campaign_id: 'RUNNING-DEAL' }]);
+  (getCampaign as jest.Mock).mockResolvedValue({ id: 'camp-1', title: 'Love is in the air tee', brand_name: 'Sleek soul', per_video_budget: 2000, free_revisions: 2, brief_text: 'Show the tee.' });
+  (getMessages as jest.Mock).mockResolvedValue([{
+    id: 'inv', item_type: 'action_card', type: 'private_invitation', sender_id: 'other-1', status: 'open', deal_id: 'camp-1',
+    available_actions: ['accept', 'reject', 'counter'], fields: { campaign_name: 'Love is in the air tee', deliverable_summary: '1 x Reel', budget: 2000 },
+    created_at: '2026-10-20T10:00:00Z',
+  }]);
+  const { tree, onNavigate } = await mount(creator, { title: 'Sleek soul' });
+  await press(byText(tree, 'View details'));
+  expect(onNavigate).not.toHaveBeenCalled();
+  expect(getCampaign).toHaveBeenCalledWith('t', 'camp-1');
+  const text = allText(tree);
+  expect(text).toContain('Love is in the air tee');
+  expect(text).toContain('Sleek soul');
+  expect(text).toContain('₹2,000');
+  expect(text).toContain('Show the tee.');
 });
 
 test('View details takes a creator to the deal room', async () => {

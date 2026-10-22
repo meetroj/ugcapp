@@ -30,6 +30,7 @@ import ChoiceSheet from '../components/ChoiceSheet';
 import { useMediaOpener } from '../components/MediaViewer';
 import { MB, afterSheetCloses, pickDocuments } from '../documentPicker';
 import BottomSheet from '../components/BottomSheet';
+import PrivateBriefSheet from '../components/PrivateBriefSheet';
 import { ToastBar, useToast } from '../components/Toast';
 import { RateBrandSheet } from './DealSheets';
 import { findContactInfo } from '../brandHiring';
@@ -545,6 +546,7 @@ function BrandChatThread({
 
   /** The received card being declined, which needs a structured reason. */
   const [declineId, setDeclineId] = useState<string | null>(null);
+  const [briefCard, setBriefCard] = useState<Record<string, any> | null>(null);
   const [declineReason, setDeclineReason] = useState('');
   const [declineNote, setDeclineNote] = useState('');
   /** Card id currently awaiting a respond() round-trip. */
@@ -1170,7 +1172,15 @@ function BrandChatThread({
                     onNeedBrief={session.role === 'creator' ? requestBrief : undefined}
                     needBriefBusy={requestingBrief}
                     dealLabel={session.role === 'creator' ? 'View details' : 'Open the campaign'}
-                    onOpenDeal={dealPath ? () => onNavigate(dealPath) : undefined}
+                    // A creator's private brief opens its details right here; every other
+                    // card still goes to its deal.
+                    onOpenDeal={
+                      session.role === 'creator' && item.type === 'private_invitation' && item.deal_id
+                        ? () => setBriefCard(item)
+                        : dealPath
+                        ? () => onNavigate(dealPath)
+                        : undefined
+                    }
                   />
                 );
               }
@@ -1630,6 +1640,8 @@ function BrandChatThread({
         options={menuOptions}
         onClose={() => setMenuOpen(false)}
       />
+
+      <PrivateBriefSheet visible={!!briefCard} token={token} card={briefCard} onClose={() => setBriefCard(null)} />
 
       <BottomSheet
         visible={reportOpen}
