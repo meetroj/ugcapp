@@ -2,7 +2,7 @@ import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
 import { AppState, FlatList, Text } from 'react-native';
 import BrandCreators, { categoriesOf } from '../src/screens/BrandCreators';
-import ChoiceSheet from '../src/components/ChoiceSheet';
+import BottomSheet from '../src/components/BottomSheet';
 
 let tree: Renderer.ReactTestRenderer;
 const directory = [
@@ -18,7 +18,10 @@ afterEach(() => { if (tree) act(() => tree.unmount()); jest.restoreAllMocks(); }
 
 const byId = (testID: string) => tree.root.findAll(node => node.props.testID === testID && typeof node.props.onPress === 'function')[0];
 const shown = () => tree.root.findAllByType(FlatList).flatMap(row => row.props.data.map((creator: any) => creator.name)).sort();
-const sheet = () => tree.root.findByType(ChoiceSheet);
+const sheet = () => tree.root.findByType(BottomSheet);
+const option = (value: string) => byId(`creator-filter-option-${value}`);
+const textOf = (node: Renderer.ReactTestInstance): string =>
+  node.children.map(child => (typeof child === 'string' ? child : textOf(child))).join('');
 
 test('categories come from every category a creator picked, like the website', () => {
   expect(categoriesOf({ id: '1', categories: ['Beauty', ' Fashion '] })).toEqual(['beauty', 'fashion']);
@@ -32,10 +35,13 @@ test('Filter lists categories with counts, filters the directory, and clearing r
 
   act(() => byId('creator-filter-button').props.onPress());
   expect(sheet().props.visible).toBe(true);
-  const labels = sheet().props.options.map((option: any) => option.label);
-  expect(labels).toEqual(['✓ All categories', 'Fashion (2)', 'Beauty (1)', 'Food (1)']);
+  expect(sheet().props.title).toBe('Filter by category');
+  // One row per category, a count pill on each, and the chosen row is selected.
+  expect(['all', 'fashion', 'beauty', 'food'].map(v => textOf(option(v)))).toEqual(['All categories3', 'Fashion2', 'Beauty1', 'Food1']);
+  expect(option('all').props.accessibilityState.selected).toBe(true);
 
-  act(() => sheet().props.options.find((option: any) => option.label === 'Fashion (2)').onPress());
+  act(() => option('fashion').props.onPress());
+  expect(sheet().props.visible).toBe(false); // picking closes the sheet
   expect(shown()).toEqual(['Asha', 'Chandni']); // Asha's second category counts too
   expect(tree.root.findAllByType(Text).some(node => node.props.children === 'Fashion')).toBe(true); // active chip
 
@@ -47,6 +53,6 @@ test('an empty category result explains itself', async () => {
   directory.splice(0, directory.length, { id: 'b', name: 'Bilal', primary_category: 'food' });
   await act(async () => { tree = Renderer.create(<BrandCreators token="t" onNavigate={() => {}} />); });
   act(() => byId('creator-filter-button').props.onPress());
-  act(() => sheet().props.options[1].onPress()); // Food
+  act(() => option('food').props.onPress());
   expect(shown()).toEqual(['Bilal']);
 });

@@ -34,7 +34,7 @@ import { Text, TextInput } from '../components/Text';
 import Svg, { Circle, Path } from 'react-native-svg';
 import Video, { ViewType } from 'react-native-video';
 import AppHeader from '../components/AppHeader';
-import ChoiceSheet from '../components/ChoiceSheet';
+import BottomSheet from '../components/BottomSheet';
 import { SkeletonReelRow } from '../components/Skeleton';
 import { BACKEND_URL, NetworkError, getCreatorDirectory, getSavedCreators, saveCreator, unsaveCreator } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
@@ -1258,18 +1258,29 @@ function BrandCreators({
         )}
       </View>
 
-      <ChoiceSheet
-        visible={filterOpen}
-        title="Filter by category"
-        options={[
-          { label: `${category === 'all' ? '✓ ' : ''}All categories`, onPress: () => setCategory('all') },
-          ...categoryOptions.map(([value, count]) => ({
-            label: `${category === value ? '✓ ' : ''}${categoryLabel(value)} (${count})`,
-            onPress: () => setCategory(value),
-          })),
-        ]}
-        onClose={() => setFilterOpen(false)}
-      />
+      <BottomSheet visible={filterOpen} title="Filter by category" onClose={() => setFilterOpen(false)}>
+        {([['all', creators.length], ...categoryOptions] as [string, number][]).map(([value, count]) => {
+          const on = category === value;
+          return (
+            <TouchableOpacity
+              key={value}
+              testID={`creator-filter-option-${value}`}
+              style={[styles.catRow, on && styles.catRowOn]}
+              onPress={() => { setCategory(value); setFilterOpen(false); }}
+              accessibilityRole="button"
+              accessibilityState={{ selected: on }}
+            >
+              <View style={styles.catCheck}>{on && <Icon name="check" color="#4C4DD6" size={17} />}</View>
+              <Text style={[styles.catLabel, on && styles.catLabelOn]} numberOfLines={1}>
+                {value === 'all' ? 'All categories' : categoryLabel(value)}
+              </Text>
+              <View style={[styles.catCount, on && styles.catCountOn]}>
+                <Text style={[styles.catCountText, on && styles.catLabelOn]}>{count}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </BottomSheet>
 
       <CreatorPeekSheet
         creator={peek}
@@ -1401,6 +1412,29 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
+  // Category filter sheet: left-aligned rows, a tick on the chosen one, the count in a pill.
+  catRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(10),
+    paddingHorizontal: scale(12),
+    borderRadius: scale(12),
+  },
+  catRowOn: { backgroundColor: '#F0F1FF' },
+  catCheck: { width: scale(20), alignItems: 'center' },
+  catLabel: { flex: 1, fontSize: fontScale(15), fontFamily: 'Inter-Medium', fontWeight: '500', color: '#15163F' },
+  catLabelOn: { fontFamily: 'Inter-Bold', fontWeight: '700', color: '#4C4DD6' },
+  catCount: {
+    minWidth: scale(34),
+    paddingHorizontal: scale(9),
+    paddingVertical: scale(3),
+    borderRadius: scale(10),
+    backgroundColor: '#F2F3F8',
+    alignItems: 'center',
+  },
+  catCountOn: { backgroundColor: '#E3E5FF' },
+  catCountText: { fontSize: fontScale(12.5), fontFamily: 'Inter-Bold', fontWeight: '700', color: '#5C6180' },
   approvedHead: { marginHorizontal: scale(16), marginBottom: scale(14) },
   approvedBack: { flexDirection: 'row', alignItems: 'center', gap: scale(4), alignSelf: 'flex-start' },
   approvedBackText: {
