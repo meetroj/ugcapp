@@ -36,3 +36,32 @@ test('back and save hug the top of the banner (the safe area is not counted twic
   expect(top('Go back')).toBe(scale(10));
   expect(top('Save creator')).toBe(top('Go back') - scale(4));
 });
+
+test('categories are one swipeable line, not a truncated two-line label', async () => {
+  (globalThis as any).fetch = jest.fn(async (url: string) => {
+    if (url.includes('/saved-creators')) return { ok: true, status: 200, json: async () => ({ creator_ids: [] }) };
+    if (url.includes('/reviews/')) return { ok: true, status: 200, json: async () => [] };
+    return { ok: true, status: 200, json: async () => ({ id: 'c1', full_name: 'Arushi', profile: { categories: ['Fashion', 'Beauty', 'Home', 'Education', 'Entertainment'] } }) };
+  });
+  await mount();
+  const row = tree.root.findAll(n => n.props.testID === 'profile-categories')[0];
+  expect(row.props.horizontal).toBe(true);
+  const text = row.findAll(n => typeof n.props.numberOfLines === 'number')[0];
+  expect(text.props.numberOfLines).toBe(1);
+});
+
+test('Save is tappable even while the saved list is still loading (never greyed out)', async () => {
+  (globalThis as any).fetch = jest.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes('/saved-creators')) {
+      if ((init?.method || 'GET') === 'GET') return new Promise(() => {}); // never answers
+      return { ok: true, status: 200, json: async () => ({ saved: true }) };
+    }
+    if (url.includes('/reviews/')) return { ok: true, status: 200, json: async () => [] };
+    return { ok: true, status: 200, json: async () => ({ id: 'c1', full_name: 'Arushi', profile: {} }) };
+  });
+  await mount();
+  const btn = () => tree.root.findAll(n => n.props.testID === 'profile-save' && typeof n.props.onPress === 'function')[0];
+  expect(btn().props.disabled).toBeFalsy();
+  await act(async () => { btn().props.onPress(); });
+  expect(btn().props.accessibilityLabel).toBe('Remove from saved creators');
+});

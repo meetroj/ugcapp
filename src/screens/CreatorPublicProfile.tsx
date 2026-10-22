@@ -489,6 +489,7 @@ function CreatorPublicProfile({
   const [saved, setSaved] = useState(false);
   const [savedStatus, setSavedStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
+  const touchedRef = useRef(false);
   const savingRef = useRef(false);   // blocks a double tap while the request runs
   const mountedRef = useRef(true);
   const toast = useToast();
@@ -549,7 +550,8 @@ function CreatorPublicProfile({
     try {
       const ids = await getSavedCreators(token);
       if (!mountedRef.current) return;
-      setSaved(ids.includes(String(creatorId)));
+      // The creator was tapped while this was loading: that tap is newer than this answer.
+      if (!touchedRef.current) setSaved(ids.includes(String(creatorId)));
       setSavedStatus('ready');
     } catch {
       if (mountedRef.current) setSavedStatus('error');
@@ -560,7 +562,9 @@ function CreatorPublicProfile({
   // Optimistic: flips at once, rolls back with a toast if the call fails.
   const toggleSave = useCallback(async () => {
     if (savingRef.current) return;
-    if (savedStatus === 'error') { loadSaved(); return; }
+    // A slow or failed "which creators are saved" lookup must not lock the button: the tap
+    // itself tells the truth (it saves, or says why it could not).
+    touchedRef.current = true;
     const was = saved;
     savingRef.current = true;
     setSaving(true);
@@ -792,11 +796,11 @@ function CreatorPublicProfile({
           </TouchableOpacity>
           {/* Save to the shortlist, top-right (44px target). */}
           <TouchableOpacity
-            style={[styles.saveHit, { top: buttonsTop - scale(4) }, (saving || savedStatus === 'loading') && styles.saveBusy]}
+            style={[styles.saveHit, { top: buttonsTop - scale(4) }, saving && styles.saveBusy]}
             onPress={toggleSave}
-            disabled={saving || savedStatus === 'loading'}
+            disabled={saving}
             accessibilityRole="button"
-            accessibilityLabel={savedStatus === 'error' ? 'Saved list could not load. Tap to retry' : saved ? 'Remove from saved creators' : 'Save creator'}
+            accessibilityLabel={saved ? 'Remove from saved creators' : 'Save creator'}
             accessibilityState={{ selected: saved, busy: saving }}
             testID="profile-save"
           >
@@ -858,13 +862,22 @@ function CreatorPublicProfile({
 
           {/* Category / Price / Delivery highlight strip. */}
           <View style={styles.highlights}>
-            <View style={styles.highlight}>
+            <View style={[styles.highlight, styles.highlightWide]}>
               <Text style={styles.fieldLabel}>
                 {categories.length > 1 ? 'CATEGORIES' : 'CATEGORY'}
               </Text>
-              <Text style={styles.highlightValue} numberOfLines={2}>
-                {categories.join(', ')}
-              </Text>
+              {/* One line you can swipe sideways, instead of "Fashion, Beauty, Hom…". */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                nestedScrollEnabled
+                testID="profile-categories"
+                contentContainerStyle={styles.categoriesRow}
+              >
+                <Text style={styles.highlightValue} numberOfLines={1}>
+                  {categories.join(', ')}
+                </Text>
+              </ScrollView>
             </View>
             <View style={styles.highlight}>
               <Text style={styles.fieldLabel}>PRICE / VIDEO</Text>
@@ -1401,6 +1414,8 @@ const styles = StyleSheet.create({
     gap: scale(10),
   },
   highlight: { flex: 1, minWidth: 0 },
+  highlightWide: { flex: 1.5 },
+  categoriesRow: { paddingRight: scale(8) },
   highlightValue: {
     marginTop: scale(5),
     fontSize: fontScale(14),
