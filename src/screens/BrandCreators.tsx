@@ -1129,27 +1129,6 @@ function BrandCreators({
           </View>
         )}
 
-        {/* "Saved" filter: only the creators this brand bookmarked. If the list could
-            not be loaded the chip says so and a tap retries. */}
-        <View style={styles.savedRow}>
-          <TouchableOpacity
-            testID="creator-saved-chip"
-            style={[styles.savedChip, savedOnly && styles.savedChipOn]}
-            onPress={() => {
-              if (savedStatus === 'error') { loadSaved(); return; }
-              setSavedOnly(on => !on);
-            }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: savedOnly }}
-            accessibilityLabel={savedStatus === 'error' ? 'Saved creators could not load. Tap to retry' : 'Show only saved creators'}
-          >
-            <Icon name={savedOnly ? 'bookmarkFilled' : 'bookmark'} color={savedOnly ? '#FFFFFF' : '#4C4DD6'} size={14} />
-            <Text style={[styles.savedChipText, savedOnly && styles.savedChipTextOn]}>
-              {savedStatus === 'error' ? 'Saved (tap to retry)' : savedStatus === 'ready' ? `Saved (${savedIds.size})` : 'Saved'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
         {approvedOnly ? (
           <View style={styles.approvedHead}>
             <TouchableOpacity style={styles.approvedBack} onPress={() => setApprovedOnly(false)}
