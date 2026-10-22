@@ -210,7 +210,8 @@ const videoPoster = (uri: string | null): string => {
     const rest = m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg');
     return `${m[1]}so_0/${rest}`;
   }
-  return ''; // unknown host — no cheap poster
+  // Our own bucket keeps a poster still next to each preview clip.
+  return previewOf(uri)?.poster ?? '';
 };
 
 function Icon({

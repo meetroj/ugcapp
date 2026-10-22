@@ -48,7 +48,7 @@ import {
   type DirectoryCreator,
 } from '../api';
 import { ToastBar, useToast } from '../components/Toast';
-import { clipKey, playableVideoUrl } from '../mediaPreview';
+import { clipKey, playableVideoUrl, previewOf } from '../mediaPreview';
 import { scale, fontScale, CONTENT_MAX_WIDTH } from '../theme';
 
 type Props = {
@@ -92,7 +92,8 @@ const videoPoster = (uri: string | null): string => {
   if (!isVideo(uri)) return uri;
   const m = uri.match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\/)(.*)$/i);
   if (m) return `${m[1]}so_0/${m[2].replace(/\.(mp4|mov|webm|m4v)(\?.*)?$/i, '.jpg')}`;
-  return '';
+  // Videos on our own bucket have a poster still next to the preview clip.
+  return previewOf(uri)?.poster ?? '';
 };
 
 /** ₹ with Indian digit grouping, matching the web page's `inr()`. */
@@ -494,6 +495,8 @@ function CreatorPublicProfile({
   useEffect(() => () => { mountedRef.current = false; }, []);
   // The player Modal escapes WebShell's SafeAreaView, so it clears the notch itself.
   const insets = useSafeAreaInsets();
+  // Back and save sit just under the status bar (not a fixed 44px down the banner).
+  const buttonsTop = Math.max(insets.top, scale(24)) + scale(6);
   // Tablet: the page is a centred column; the pinned footer lines up with it.
   const { width: winWidth } = useWindowDimensions();
   const footerGutter = Math.max(scale(16), (winWidth - CONTENT_MAX_WIDTH) / 2);
@@ -778,7 +781,7 @@ function CreatorPublicProfile({
             <View style={styles.bannerFallback} />
           )}
           <TouchableOpacity
-            style={styles.backBtn}
+            style={[styles.backBtn, { top: buttonsTop }]}
             onPress={onBack}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             accessibilityRole="button"
@@ -788,7 +791,7 @@ function CreatorPublicProfile({
           </TouchableOpacity>
           {/* Save to the shortlist, top-right (44px target). */}
           <TouchableOpacity
-            style={[styles.saveHit, (saving || savedStatus === 'loading') && styles.saveBusy]}
+            style={[styles.saveHit, { top: buttonsTop - scale(4) }, (saving || savedStatus === 'loading') && styles.saveBusy]}
             onPress={toggleSave}
             disabled={saving || savedStatus === 'loading'}
             accessibilityRole="button"
