@@ -85,8 +85,6 @@ yarn-error.log
 *.keystore
 *.jks
 android/gradle.properties
-.env
-.env.*
 
 # ---- Build outputs ----
 android/app/build/
@@ -102,6 +100,4 @@ ios/*.xcworkspace
 
 # ---- Store assets are generated from assests/logo ----
 store-assets/
-branch_structure.json
-temp_auto_push.bat
-temp_interactive_push.bat
+config.bat
